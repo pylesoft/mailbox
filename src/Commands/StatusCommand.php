@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Commands;
 
 use Illuminate\Console\Command;
-use function Laravel\Prompts\info;
-use function Laravel\Prompts\table;
 use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MonitoredMailbox;
+
+use function Laravel\Prompts\info;
+use function Laravel\Prompts\table;
 
 class StatusCommand extends Command
 {

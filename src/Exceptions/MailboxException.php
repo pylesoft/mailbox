@@ -6,6 +6,4 @@ namespace Pyle\Mailbox\Exceptions;
 
 use RuntimeException;
 
-class MailboxException extends RuntimeException
-{
-}
+class MailboxException extends RuntimeException {}

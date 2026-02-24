@@ -12,7 +12,8 @@ it('downloads and dedups attachments', function (): void {
     config()->set('mailbox.attachment_disk', 'local');
     config()->set('mailbox.attachment_path', 'mailbox-attachments');
 
-    $client = new class extends GraphClient {
+    $client = new class extends GraphClient
+    {
         public function __construct() {}
 
         public function get(string $endpoint, array $query = [], ?string $mailbox = null): array

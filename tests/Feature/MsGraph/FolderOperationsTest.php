@@ -6,7 +6,8 @@ use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphFolderQuery;
 
 it('builds folder tree', function (): void {
-    $client = new class extends GraphClient {
+    $client = new class extends GraphClient
+    {
         public function __construct() {}
 
         public function get(string $endpoint, array $query = [], ?string $mailbox = null): array

@@ -7,11 +7,11 @@ namespace Pyle\Mailbox\Traits;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneThrough;
-use RuntimeException;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MonitoredMailbox;
+use RuntimeException;
 
 /**
  * @property-read MonitoredMailbox|null $monitoredMailbox
@@ -50,7 +50,7 @@ trait HasMailbox
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeForMailbox(Builder $query, MonitoredMailbox $mailbox): Builder
     {
@@ -58,7 +58,7 @@ trait HasMailbox
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeForConnection(Builder $query, MailboxConnection $connection): Builder
     {

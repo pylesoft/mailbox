@@ -10,12 +10,12 @@ use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
 /** @implements Arrayable<string, mixed> */
-final readonly class FolderDto implements JsonSerializable, Arrayable
+final readonly class FolderDto implements Arrayable, JsonSerializable
 {
     use ArraySerializable;
 
     /**
-     * @param array<FolderDto> $children
+     * @param  array<FolderDto>  $children
      */
     public function __construct(
         public string $id,

@@ -15,7 +15,8 @@ class RateLimiter
 
     /**
      * @template T
-     * @param callable():T $callback
+     *
+     * @param  callable():T  $callback
      * @return T
      */
     public function forMailbox(string $mailbox, callable $callback): mixed

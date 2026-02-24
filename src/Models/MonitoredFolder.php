@@ -56,7 +56,7 @@ class MonitoredFolder extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeActive(Builder $query): Builder
     {
@@ -64,7 +64,7 @@ class MonitoredFolder extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeSyncing(Builder $query): Builder
     {
@@ -72,7 +72,7 @@ class MonitoredFolder extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeWithErrors(Builder $query): Builder
     {
@@ -80,7 +80,7 @@ class MonitoredFolder extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeNeedsSync(Builder $query, int $minutes = 15): Builder
     {
@@ -90,7 +90,7 @@ class MonitoredFolder extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeForWellKnown(Builder $query, WellKnownFolder $folder): Builder
     {

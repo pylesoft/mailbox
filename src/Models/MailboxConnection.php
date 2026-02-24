@@ -65,7 +65,7 @@ class MailboxConnection extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeActive(Builder $query): Builder
     {
@@ -73,7 +73,7 @@ class MailboxConnection extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeForDriver(Builder $query, string $driver): Builder
     {
@@ -81,7 +81,7 @@ class MailboxConnection extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeWithError(Builder $query): Builder
     {
@@ -89,7 +89,7 @@ class MailboxConnection extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeConnectedSince(Builder $query, Carbon $since): Builder
     {

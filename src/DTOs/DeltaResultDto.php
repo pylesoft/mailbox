@@ -10,14 +10,14 @@ use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 
 /** @implements Arrayable<string, mixed> */
-final readonly class DeltaResultDto implements JsonSerializable, Arrayable
+final readonly class DeltaResultDto implements Arrayable, JsonSerializable
 {
     use ArraySerializable;
 
     /**
-     * @param Collection<int, MessageDto> $created
-     * @param Collection<int, MessageDto> $updated
-     * @param Collection<int, string> $deleted
+     * @param  Collection<int, MessageDto>  $created
+     * @param  Collection<int, MessageDto>  $updated
+     * @param  Collection<int, string>  $deleted
      */
     public function __construct(
         public Collection $created,

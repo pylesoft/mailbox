@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Commands;
 
 use Illuminate\Console\Command;
-use function Laravel\Prompts\info;
-use function Laravel\Prompts\table;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\Facades\Mailbox;
+
+use function Laravel\Prompts\info;
+use function Laravel\Prompts\table;
 
 class ListFoldersCommand extends Command
 {
@@ -44,15 +45,15 @@ class ListFoldersCommand extends Command
         }
 
         table(
-                ['ID', 'Name', 'Path', 'Unread', 'Total'],
-                $folders->map(fn (FolderDto $folder): array => [
-                    $folder->id,
-                    $folder->displayName,
-                    $folder->path ?? '',
-                    (string) $folder->unreadItemCount,
-                    (string) $folder->totalItemCount,
-                ])->all(),
-            );
+            ['ID', 'Name', 'Path', 'Unread', 'Total'],
+            $folders->map(fn (FolderDto $folder): array => [
+                $folder->id,
+                $folder->displayName,
+                $folder->path ?? '',
+                (string) $folder->unreadItemCount,
+                (string) $folder->totalItemCount,
+            ])->all(),
+        );
 
         return self::SUCCESS;
     }

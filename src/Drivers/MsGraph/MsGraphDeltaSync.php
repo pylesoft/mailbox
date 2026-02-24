@@ -44,6 +44,7 @@ class MsGraphDeltaSync
 
                     if (isset($item['@removed'])) {
                         $deleted->push((string) ($item['id'] ?? ''));
+
                         continue;
                     }
 

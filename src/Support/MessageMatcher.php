@@ -33,8 +33,8 @@ class MessageMatcher
     }
 
     /**
-     * @param array<string, mixed> $group
-     * @param Collection<int, AttachmentDto> $attachments
+     * @param  array<string, mixed>  $group
+     * @param  Collection<int, AttachmentDto>  $attachments
      */
     private function evaluateGroup(array $group, MessageDto $message, Collection $attachments): bool
     {
@@ -54,6 +54,7 @@ class MessageMatcher
 
             if (isset($condition['conditions']) && is_array($condition['conditions'])) {
                 $results[] = $this->evaluateGroup($condition, $message, $attachments);
+
                 continue;
             }
 
@@ -66,8 +67,8 @@ class MessageMatcher
     }
 
     /**
-     * @param array<string, mixed> $condition
-     * @param Collection<int, AttachmentDto> $attachments
+     * @param  array<string, mixed>  $condition
+     * @param  Collection<int, AttachmentDto>  $attachments
      */
     private function evaluateCondition(array $condition, MessageDto $message, Collection $attachments): bool
     {

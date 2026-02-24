@@ -7,7 +7,7 @@ namespace Pyle\Mailbox\Exceptions;
 final class DriverNotConfiguredException extends MailboxException
 {
     /**
-     * @param array<string> $available
+     * @param  array<string>  $available
      */
     public static function forDriver(string $driver, array $available, ?\Throwable $previous = null): self
     {

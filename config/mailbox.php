@@ -24,6 +24,9 @@ return [
     'retry_backoff_base' => 2,
     'max_concurrent_per_mailbox' => 4,
     'concurrency_lock_timeout' => 30,
+    // 'release' avoids blocking queue workers by releasing active jobs on retryable responses.
+    // 'sleep' performs inline sleep-based retries.
+    'queue_retry_strategy' => env('MAILBOX_QUEUE_RETRY_STRATEGY', 'release'),
 
     'default_page_size' => 50,
     'default_select' => [

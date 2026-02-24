@@ -11,15 +11,15 @@ use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 use Pyle\Mailbox\Enums\Importance;
 
 /** @implements Arrayable<string, mixed> */
-final readonly class MessageDto implements JsonSerializable, Arrayable
+final readonly class MessageDto implements Arrayable, JsonSerializable
 {
     use ArraySerializable;
 
     /**
-     * @param array<EmailAddressDto> $toRecipients
-     * @param array<EmailAddressDto> $ccRecipients
-     * @param array<EmailAddressDto> $bccRecipients
-     * @param array<string, mixed> $raw
+     * @param  array<EmailAddressDto>  $toRecipients
+     * @param  array<EmailAddressDto>  $ccRecipients
+     * @param  array<EmailAddressDto>  $bccRecipients
+     * @param  array<string, mixed>  $raw
      */
     public function __construct(
         public string $id,
@@ -96,7 +96,7 @@ final readonly class MessageDto implements JsonSerializable, Arrayable
     }
 
     /** @param array<int, mixed> $addresses
-     *  @return array<EmailAddressDto>
+     * @return array<EmailAddressDto>
      */
     private static function mapAddresses(array $addresses): array
     {

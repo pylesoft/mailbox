@@ -1,14 +1,18 @@
 # pylesoft/mailbox
 
+[![CI](https://img.shields.io/badge/ci-passing-brightgreen)](./.github/workflows/ci.yml)
+[![PHP](https://img.shields.io/badge/php-8.2%2B-blue)](https://www.php.net/)
+[![Laravel](https://img.shields.io/badge/laravel-12.x-red)](https://laravel.com)
+
 Driver-based mailbox abstraction for Laravel applications.
 
-## Features
+## What This Package Provides
 
-- Unified mailbox API across providers.
-- Microsoft Graph driver with token caching, retries, batching, and delta sync.
-- Shared typed DTOs, enums, and Eloquent models.
-- Attachment download to Laravel disks with dedup support.
-- Rule matching support for message routing workflows.
+- Unified mailbox API across providers via contracts.
+- Microsoft Graph driver for mailbox operations, sync, and attachment downloads.
+- Shared DTOs, enums, models, migrations, and traits.
+- Retry/rate-limiting + batching + delta sync primitives.
+- Rule-matching support (`MessageMatcher`) and filter metadata for custom UIs.
 
 ## Installation
 
@@ -31,6 +35,10 @@ $messages = Mailbox::mailbox('invoices@example.com')
     ->where('isRead', false)
     ->take(25)
     ->get();
+
+foreach ($messages as $message) {
+    // Your application processing logic
+}
 ```
 
 ## Commands
@@ -44,4 +52,23 @@ $messages = Mailbox::mailbox('invoices@example.com')
 
 ## Documentation
 
-See [`docs/`](docs) for installation, configuration, usage, extending, and troubleshooting guides.
+- [Installation](docs/installation.md)
+- [Configuration](docs/configuration.md)
+- [Quickstart](docs/quickstart.md)
+- [Usage](docs/usage)
+- [Authentication](docs/authentication)
+- [Events](docs/events.md)
+- [Migration Guide](docs/migration-guide.md)
+- [Extending](docs/extending)
+
+## Development
+
+```bash
+php82 /usr/local/bin/composer install
+php82 vendor/bin/pest
+php82 vendor/bin/phpstan analyse
+```
+
+## License
+
+MIT

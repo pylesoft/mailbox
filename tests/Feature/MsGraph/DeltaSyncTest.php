@@ -7,7 +7,8 @@ use Pyle\Mailbox\Drivers\MsGraph\MsGraphDeltaSync;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 it('performs initial delta sync', function (): void {
-    $client = new class extends GraphClient {
+    $client = new class extends GraphClient
+    {
         public function __construct() {}
 
         public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
@@ -31,7 +32,8 @@ it('performs initial delta sync', function (): void {
 });
 
 it('handles expired delta token', function (): void {
-    $client = new class extends GraphClient {
+    $client = new class extends GraphClient
+    {
         public function __construct() {}
 
         public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
@@ -45,4 +47,42 @@ it('handles expired delta token', function (): void {
 
     expect($result->fullSyncRequired)->toBeTrue();
     expect($result->deltaLink)->toBeNull();
+});
+
+it('handles incremental delta pages with updated and deleted messages', function (): void {
+    $client = new class extends GraphClient
+    {
+        private int $calls = 0;
+
+        public function __construct() {}
+
+        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            $this->calls++;
+
+            if ($this->calls === 1) {
+                return [
+                    'value' => [
+                        ['id' => '100', 'subject' => 'Updated', 'lastModifiedDateTime' => '2026-01-01T00:00:00Z'],
+                        ['id' => '200', '@removed' => ['reason' => 'deleted']],
+                    ],
+                    '@odata.nextLink' => 'next-page-token',
+                ];
+            }
+
+            return [
+                'value' => [],
+                '@odata.deltaLink' => 'final-delta-token',
+            ];
+        }
+    };
+
+    $sync = new MsGraphDeltaSync($client);
+    $result = $sync->syncFolder('test@example.com', 'inbox', 'existing-delta');
+
+    expect($result->updated)->toHaveCount(1);
+    expect($result->deleted)->toHaveCount(1);
+    expect($result->deleted->first())->toBe('200');
+    expect($result->deltaLink)->toBe('final-delta-token');
+    expect($result->fullSyncRequired)->toBeFalse();
 });

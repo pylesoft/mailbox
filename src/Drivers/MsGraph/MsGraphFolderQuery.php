@@ -81,6 +81,7 @@ class MsGraphFolderQuery implements FolderQueryBuilder
 
             if ($existing !== null) {
                 $parent = $existing->id;
+
                 continue;
             }
 
@@ -128,7 +129,7 @@ class MsGraphFolderQuery implements FolderQueryBuilder
     }
 
     /** @param Collection<int, FolderDto> $folders
-     *  @return Collection<int, FolderDto>
+     * @return Collection<int, FolderDto>
      */
     private function flatten(Collection $folders): Collection
     {

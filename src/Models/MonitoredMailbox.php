@@ -59,7 +59,7 @@ class MonitoredMailbox extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeActive(Builder $query): Builder
     {
@@ -67,7 +67,7 @@ class MonitoredMailbox extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeForEmail(Builder $query, string $email): Builder
     {
@@ -75,7 +75,7 @@ class MonitoredMailbox extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeStale(Builder $query, int $minutes = 30): Builder
     {
@@ -85,7 +85,7 @@ class MonitoredMailbox extends Model
     }
 
     /** @param Builder<self> $query
-     *  @return Builder<self>
+     * @return Builder<self>
      */
     public function scopeNeverSynced(Builder $query): Builder
     {

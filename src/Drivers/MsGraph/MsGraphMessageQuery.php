@@ -40,7 +40,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder
         /** @var array<string> $defaultSelect */
         $defaultSelect = (array) config('mailbox.default_select', ['id', 'subject']);
         $this->selectFields = $defaultSelect;
-        $this->compiler = new ODataFilterCompiler();
+        $this->compiler = new ODataFilterCompiler;
     }
 
     public function inFolder(string|WellKnownFolder $folder): static
@@ -201,7 +201,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder
     }
 
     /** @param Collection<int, MessageDto> $messages
-     *  @return Collection<int, MessageDto>
+     * @return Collection<int, MessageDto>
      */
     private function applyClientFilters(Collection $messages): Collection
     {
@@ -260,8 +260,8 @@ class MsGraphMessageQuery implements MessageQueryBuilder
     }
 
     /**
-     * @param array<string> $messageIds
-     * @param array<string, mixed> $body
+     * @param  array<string>  $messageIds
+     * @param  array<string, mixed>  $body
      * @return array<int, array<string, mixed>>
      */
     private function buildPatchRequests(array $messageIds, array $body): array

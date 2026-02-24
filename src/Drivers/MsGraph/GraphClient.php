@@ -6,6 +6,7 @@ namespace Pyle\Mailbox\Drivers\MsGraph;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
+use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Psr\Http\Message\ResponseInterface;
@@ -45,7 +46,7 @@ class GraphClient
     }
 
     /**
-     * @param array<string, mixed> $query
+     * @param  array<string, mixed>  $query
      * @return array<string, mixed>
      */
     public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
@@ -54,7 +55,7 @@ class GraphClient
     }
 
     /**
-     * @param array<string, mixed> $payload
+     * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
     public function post(string $endpoint, array $payload = [], ?string $mailbox = null): array
@@ -63,7 +64,7 @@ class GraphClient
     }
 
     /**
-     * @param array<string, mixed> $payload
+     * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
     public function patch(string $endpoint, array $payload = [], ?string $mailbox = null): array
@@ -84,7 +85,7 @@ class GraphClient
     }
 
     /**
-     * @param array<string, mixed> $options
+     * @param  array<string, mixed>  $options
      * @return array<string, mixed>
      */
     public function request(string $method, string $endpoint, array $options = [], ?string $mailbox = null): array
@@ -149,6 +150,7 @@ class GraphClient
                     if ($status === 401 && $reauthAttempted === false) {
                         $this->tokenManager->invalidateToken();
                         $reauthAttempted = true;
+
                         continue;
                     }
 
@@ -160,12 +162,32 @@ class GraphClient
                             endpoint: $endpoint,
                         ));
 
+                        if ($this->handleQueueRetry($retryAfter, '429 rate limit')) {
+                            throw new RateLimitException(
+                                retryAfter: $retryAfter,
+                                mailbox: (string) $mailbox,
+                                message: sprintf("Rate limited for mailbox '%s'. Queue job released for retry.", $mailbox),
+                            );
+                        }
+
                         sleep($retryAfter);
+
                         continue;
                     }
 
                     if ($status !== null && $status >= 500 && $attempt <= $this->maxRetries) {
-                        sleep($this->backoffSeconds($attempt));
+                        $backoff = $this->backoffSeconds($attempt);
+
+                        if ($this->handleQueueRetry($backoff, sprintf('%d server error', $status))) {
+                            throw new ProviderServerException(
+                                statusCode: $status,
+                                attemptsExhausted: $attempt,
+                                message: sprintf('Microsoft Graph returned %d. Queue job released for retry in %d seconds.', $status, $backoff),
+                            );
+                        }
+
+                        sleep($backoff);
+
                         continue;
                     }
 
@@ -266,6 +288,30 @@ class GraphClient
     private function backoffSeconds(int $attempt): int
     {
         return (int) max(1, pow($this->retryBackoffBase, max(0, $attempt - 1)));
+    }
+
+    private function handleQueueRetry(int $delaySeconds, string $reason): bool
+    {
+        $strategy = (string) ($this->config['queue_retry_strategy'] ?? config('mailbox.queue_retry_strategy', 'release'));
+
+        if ($strategy !== 'release' || ! app()->bound('queue.job')) {
+            return false;
+        }
+
+        $job = app('queue.job');
+
+        if (! $job instanceof QueueJobContract) {
+            return false;
+        }
+
+        $this->logDebug('Releasing queue job for retry', [
+            'delay_seconds' => $delaySeconds,
+            'reason' => $reason,
+        ]);
+
+        $job->release($delaySeconds);
+
+        return true;
     }
 
     /** @param array<string, mixed> $context */

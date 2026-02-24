@@ -9,7 +9,7 @@ use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 
 /** @implements Arrayable<string, mixed> */
-final readonly class AttachmentDto implements JsonSerializable, Arrayable
+final readonly class AttachmentDto implements Arrayable, JsonSerializable
 {
     use ArraySerializable;
 

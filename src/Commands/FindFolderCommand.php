@@ -5,9 +5,10 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Commands;
 
 use Illuminate\Console\Command;
+use Pyle\Mailbox\Facades\Mailbox;
+
 use function Laravel\Prompts\error;
 use function Laravel\Prompts\info;
-use Pyle\Mailbox\Facades\Mailbox;
 
 class FindFolderCommand extends Command
 {

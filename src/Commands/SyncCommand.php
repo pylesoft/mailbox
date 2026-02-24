@@ -6,13 +6,14 @@ namespace Pyle\Mailbox\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Str;
-use function Laravel\Prompts\error;
-use function Laravel\Prompts\info;
-use function Laravel\Prompts\spin;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Models\MonitoredFolder;
 use Pyle\Mailbox\Models\MonitoredMailbox;
+
+use function Laravel\Prompts\error;
+use function Laravel\Prompts\info;
+use function Laravel\Prompts\spin;
 
 class SyncCommand extends Command
 {
