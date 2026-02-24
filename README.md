@@ -52,14 +52,16 @@ foreach ($messages as $message) {
 
 ## Documentation
 
+- [Docs Index](docs/index.md)
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
 - [Quickstart](docs/quickstart.md)
-- [Usage](docs/usage)
-- [Authentication](docs/authentication)
+- [Usage](docs/usage/index.md)
+- [Authentication](docs/authentication/index.md)
+- [MS Graph Setup Guide](docs/authentication/ms-graph.md)
 - [Events](docs/events.md)
 - [Migration Guide](docs/migration-guide.md)
-- [Extending](docs/extending)
+- [Extending](docs/extending/index.md)
 
 ## Development
 
