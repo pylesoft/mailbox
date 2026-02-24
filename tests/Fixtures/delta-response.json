@@ -1,0 +1,6 @@
+{
+  "value": [
+    {"id": "1", "subject": "New"}
+  ],
+  "@odata.deltaLink": "delta-token"
+}

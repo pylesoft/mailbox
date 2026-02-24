@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Mailbox\Drivers;
+
+use Illuminate\Support\Collection;
+use Pyle\Mailbox\Contracts\FolderResource;
+use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\DTOs\DeltaResultDto;
+use Pyle\Mailbox\DTOs\FolderDto;
+
+class {{ class }}FolderResource implements FolderResource
+{
+    public function get(): FolderDto {}
+
+    /** @return Collection<int, FolderDto> */
+    public function children(): Collection { return collect(); }
+
+    public function messages(): MessageQueryBuilder {}
+    public function delta(?string $deltaToken = null): DeltaResultDto {}
+    public function delete(): void {}
+    public function moveTo(string $destinationParentId): FolderDto {}
+}

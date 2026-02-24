@@ -1,0 +1,31 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Mailbox\Drivers;
+
+use Illuminate\Support\Collection;
+use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\WellKnownFolder;
+
+class {{ class }}MessageQuery implements MessageQueryBuilder
+{
+    public function inFolder(string|WellKnownFolder $folder): static { return $this; }
+    public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static { return $this; }
+    public function search(string $query): static { return $this; }
+    public function select(array $fields): static { return $this; }
+    public function orderBy(string $field, string $direction = 'desc'): static { return $this; }
+    public function take(int $limit): static { return $this; }
+    public function pageSize(int $size): static { return $this; }
+
+    /** @return Collection<int, MessageDto> */
+    public function get(): Collection { return collect(); }
+
+    public function count(): int { return $this->get()->count(); }
+    public function first(): ?MessageDto { return $this->get()->first(); }
+    public function markAsRead(array $messageIds): void {}
+    public function markAsUnread(array $messageIds): void {}
+    public function moveTo(string|WellKnownFolder $folder, array $messageIds): void {}
+}

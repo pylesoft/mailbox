@@ -1,0 +1,11 @@
+includes:
+  - vendor/larastan/larastan/extension.neon
+
+parameters:
+  level: 8
+  paths:
+    - src
+  checkMissingCallableSignature: true
+  ignoreErrors:
+    - identifier: trait.unused
+      path: src/Traits/HasMailbox.php

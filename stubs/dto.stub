@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Mailbox\DTOs;
+
+use Illuminate\Contracts\Support\Arrayable;
+use JsonSerializable;
+
+final readonly class {{ class }}Dto implements Arrayable, JsonSerializable
+{
+    public function __construct(
+        public string $id,
+    ) {}
+
+    public function toArray(): array
+    {
+        return ['id' => $this->id];
+    }
+
+    public function jsonSerialize(): array
+    {
+        return $this->toArray();
+    }
+}

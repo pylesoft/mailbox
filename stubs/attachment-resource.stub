@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Mailbox\Drivers;
+
+use Psr\Http\Message\StreamInterface;
+use Pyle\Mailbox\Contracts\AttachmentResource;
+use Pyle\Mailbox\DTOs\AttachmentDto;
+use Pyle\Mailbox\DTOs\AttachmentFileDto;
+
+class {{ class }}AttachmentResource implements AttachmentResource
+{
+    public function metadata(): AttachmentDto {}
+    public function download(): AttachmentFileDto {}
+    public function stream(): StreamInterface {}
+}

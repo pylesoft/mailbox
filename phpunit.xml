@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="vendor/autoload.php" colors="true">
+  <testsuites>
+    <testsuite name="Unit">
+      <directory>tests/Unit</directory>
+    </testsuite>
+    <testsuite name="Feature">
+      <directory>tests/Feature</directory>
+    </testsuite>
+    <testsuite name="Arch">
+      <directory>tests/Arch</directory>
+    </testsuite>
+  </testsuites>
+  <php>
+    <server name="APP_ENV" value="testing"/>
+    <server name="DB_CONNECTION" value="sqlite"/>
+    <server name="DB_DATABASE" value=":memory:"/>
+    <server name="CACHE_DRIVER" value="array"/>
+  </php>
+</phpunit>

@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Mailbox\Drivers;
+
+use Pyle\Mailbox\Contracts\MailboxDriver;
+use Pyle\Mailbox\Contracts\MailboxResource;
+use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\HealthCheckResult;
+
+class {{ class }}Driver implements MailboxDriver
+{
+    /** @param array<string, mixed> $config */
+    public function __construct(
+        private readonly array $config,
+    ) {}
+
+    public function mailbox(string $emailAddress): MailboxResource
+    {
+        // TODO: Return a MailboxResource implementation.
+    }
+
+    public function testConnection(?string $emailAddress = null): ConnectionTestResult
+    {
+        // TODO: Verify auth and mailbox access.
+    }
+
+    public function healthCheck(): HealthCheckResult
+    {
+        // TODO: Return token/api health data.
+    }
+}

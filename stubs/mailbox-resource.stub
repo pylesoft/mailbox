@@ -1,0 +1,35 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Mailbox\Drivers;
+
+use Pyle\Mailbox\Contracts\FolderQueryBuilder;
+use Pyle\Mailbox\Contracts\FolderResource;
+use Pyle\Mailbox\Contracts\MailboxResource;
+use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Enums\WellKnownFolder;
+
+class {{ class }}MailboxResource implements MailboxResource
+{
+    public function messages(): MessageQueryBuilder
+    {
+        // TODO
+    }
+
+    public function message(string $messageId): MessageResource
+    {
+        // TODO
+    }
+
+    public function folders(): FolderQueryBuilder
+    {
+        // TODO
+    }
+
+    public function folder(string|WellKnownFolder $folderId): FolderResource
+    {
+        // TODO
+    }
+}

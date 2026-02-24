@@ -1,0 +1,67 @@
+{
+  "name": "pylesoft/mailbox",
+  "description": "Multi-provider mailbox abstraction for Laravel",
+  "type": "library",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Pyle\\Mailbox\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Pyle\\Mailbox\\Tests\\": "tests/"
+    },
+    "files": [
+      "tests/Helpers.php"
+    ]
+  },
+  "require": {
+    "php": "^8.2",
+    "illuminate/cache": "^12.0",
+    "illuminate/console": "^12.0",
+    "illuminate/contracts": "^12.0",
+    "illuminate/database": "^12.0",
+    "illuminate/filesystem": "^12.0",
+    "laravel/prompts": "^0.3",
+    "illuminate/support": "^12.0",
+    "illuminate/http": "^12.0",
+    "guzzlehttp/guzzle": "^7.0",
+    "psr/http-message": "^2.0"
+  },
+  "require-dev": {
+    "orchestra/testbench": "^10.0",
+    "pestphp/pest": "^3.0",
+    "pestphp/pest-plugin-laravel": "^3.0",
+    "pestphp/pest-plugin-type-coverage": "^3.0",
+    "pestphp/pest-plugin-arch": "^3.0",
+    "larastan/larastan": "^3.0",
+    "laravel/pint": "^1.20"
+  },
+  "scripts": {
+    "test": "pest",
+    "analyse": "phpstan analyse",
+    "format": "pint",
+    "ci": [
+      "@test",
+      "@analyse"
+    ]
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Pyle\\Mailbox\\MailboxServiceProvider"
+      ],
+      "aliases": {
+        "Mailbox": "Pyle\\Mailbox\\Facades\\Mailbox"
+      }
+    }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "config": {
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  }
+}

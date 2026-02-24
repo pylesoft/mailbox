@@ -1,0 +1,5 @@
+{
+  "value": [
+    {"id": "att1", "name": "invoice.pdf", "contentType": "application/pdf", "size": 100, "isInline": false}
+  ]
+}
