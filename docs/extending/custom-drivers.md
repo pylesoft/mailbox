@@ -1,12 +1,33 @@
 # Custom Drivers
 
-Custom providers can be added without modifying core package code.
+Add new providers by implementing package contracts.
 
-## Steps
+## Implementation Checklist
 
-1. Implement package contracts (`MailboxDriver`, `MailboxResource`, message/folder/attachment contracts).
-2. Register the driver via `Mailbox::extend('name', fn () => new YourDriver(...))`.
-3. Add driver config under `mailbox.drivers`.
-4. Use `Mailbox::driver('name')` in app code.
+1. Implement `MailboxDriver`.
+2. Implement resource/query contracts.
+3. Map provider payloads to package DTOs.
+4. Register driver with `Mailbox::extend(...)`.
+5. Add driver config in `mailbox.drivers`.
 
-Keep DTO return shapes consistent with package contracts so consuming application code remains provider-agnostic.
+## Registration Example
+
+```php
+use Pyle\Mailbox\Facades\Mailbox;
+
+Mailbox::extend('my-provider', fn ($app) => new MyProviderDriver(
+    config('mailbox.drivers.my-provider')
+));
+```
+
+## Validation Checklist
+
+- query and action parity
+- delta sync behavior
+- attachment write and dedup behavior
+- exception mapping and logging
+
+## Next
+
+- [Stubs](stubs.md)
+- [Testing](../testing.md)

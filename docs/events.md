@@ -1,23 +1,41 @@
 # Events
 
-The package dispatches events for connection lifecycle, errors, sync, and attachments.
+The package emits events for observability and operational hooks.
 
-## Connection Events
+## Connection Lifecycle
 
 - `TokenAcquired`
 - `TokenRefreshFailed`
 - `SecretExpirationWarning`
 - `ConnectionTestCompleted`
 
-## Runtime Events
+## API and Rate Limiting
 
 - `RateLimitHit`
 - `AccessDenied`
 - `ApiError`
+
+## Sync Lifecycle
+
 - `DeltaSyncStarted`
 - `DeltaSyncCompleted`
 - `DeltaTokenExpired`
+
+## Attachment Lifecycle
+
 - `AttachmentDownloaded`
 - `AttachmentSkipped`
 
-Consume these events in your application listeners for alerting and observability.
+## Example Listener Mapping
+
+Use listeners for:
+
+- alerting on auth failures
+- rate-limit monitoring
+- sync throughput metrics
+- attachment processing analytics
+
+## Next
+
+- [Logging](logging.md)
+- [Troubleshooting](troubleshooting.md)

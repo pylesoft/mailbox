@@ -1,20 +1,41 @@
 # Models and Traits
 
-The package includes three core models:
+The package includes three models and one integration trait.
+
+## Models
 
 - `MailboxConnection`
 - `MonitoredMailbox`
 - `MonitoredFolder`
 
-`HasMailbox` can be added to application models that reference `monitored_mailbox_id`.
-
-## Trait Helpers
-
-- `mailboxResource()` returns a driver-scoped mailbox resource.
-- Query scopes for mailbox and connection filtering are included.
-
 ## Relationships
 
-- Connection has many monitored mailboxes.
-- Mailbox has many monitored folders.
-- Folder belongs to a monitored mailbox.
+- connection -> many mailboxes
+- mailbox -> many folders
+- folder -> belongs to mailbox
+
+## `HasMailbox` Trait
+
+Use this trait on your app model if it stores `monitored_mailbox_id`.
+
+It provides:
+
+- `mailboxResource()` for runtime operations
+- `scopeForMailbox(...)`
+- `scopeForConnection(...)`
+
+## Practical Example
+
+```php
+class EmailInbox extends Model
+{
+    use \Pyle\Mailbox\Traits\HasMailbox;
+}
+
+$resource = EmailInbox::find($id)->mailboxResource();
+```
+
+## Next
+
+- [Usage: Mailboxes](usage/mailboxes.md)
+- [Usage: Delta Sync](usage/delta-sync.md)

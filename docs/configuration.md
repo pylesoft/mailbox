@@ -1,32 +1,45 @@
 # Configuration
 
-The package configuration is published to `config/mailbox.php`.
+Package config lives in `config/mailbox.php`.
 
-## Driver Selection
+## Required Settings
 
-- `mailbox.default`: default driver name (`ms-graph` by default).
-- `mailbox.drivers`: driver-specific configuration arrays.
+- `mailbox.default`
+- `mailbox.drivers.ms-graph.tenant_id`
+- `mailbox.drivers.ms-graph.client_id`
+- `mailbox.drivers.ms-graph.client_secret`
 
-## Microsoft Graph Settings
+## Important Runtime Options
 
-- `MS365_TENANT_ID`
-- `MS365_CLIENT_ID`
-- `MS365_CLIENT_SECRET`
-- Optional timeout and API version settings.
+- `token_refresh_buffer`: refresh token before expiry
+- `max_retries`: retry count for transient API failures
+- `retry_backoff_base`: exponential backoff base
+- `queue_retry_strategy`: `release` or `sleep`
+- `prefer_immutable_ids`: use immutable Graph message IDs
 
-## Runtime Behavior
+## Attachment Storage
 
-- `token_refresh_buffer`: refresh token before expiry.
-- `max_retries` + `retry_backoff_base`: retry behavior for transient failures.
-- `queue_retry_strategy`: `release` (queue-friendly) or `sleep`.
-- `prefer_immutable_ids`: enables immutable ID preference on Graph calls.
-
-## Attachments
-
-- `attachment_disk`: Laravel filesystem disk.
-- `attachment_path`: base directory for downloaded attachments.
+- `attachment_disk`: Laravel filesystem disk
+- `attachment_path`: base folder path on disk
 
 ## Logging
 
-- `log_channel`: package log channel name (defaults to `mailbox`).
-- `log_level`: defaults based on `app.debug` unless explicitly set.
+- `log_channel`: defaults to `mailbox`
+- `log_level`: defaults by `app.debug` if unset
+
+## Example `.env`
+
+```env
+MAILBOX_DRIVER=ms-graph
+MS365_TENANT_ID=...
+MS365_CLIENT_ID=...
+MS365_CLIENT_SECRET=...
+MAILBOX_QUEUE_RETRY_STRATEGY=release
+MAILBOX_ATTACHMENT_DISK=local
+MAILBOX_ATTACHMENT_PATH=mailbox-attachments
+```
+
+## Next
+
+- [Quickstart](quickstart.md)
+- [Authentication](authentication/index.md)

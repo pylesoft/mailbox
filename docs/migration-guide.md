@@ -1,26 +1,32 @@
 # Migration Guide
 
-This guide maps common direct-Graph workflows to package APIs.
+This guide helps migrate direct provider code to package abstractions.
 
-## Replace Legacy Actions
+## API Mapping
 
-| Previous Pattern | Package API |
+| Legacy Pattern | Package API |
 | --- | --- |
-| Find mailbox folder | `Mailbox::mailbox($addr)->folders()->find(...)` |
-| List emails | `Mailbox::mailbox($addr)->messages()->inFolder(...)->where(...)->get()` |
-| Get email by ID | `Mailbox::mailbox($addr)->message($id)->get()` |
+| Find folder | `Mailbox::mailbox($addr)->folders()->find(...)` |
+| List emails | `Mailbox::mailbox($addr)->messages()->...->get()` |
+| Get email | `Mailbox::mailbox($addr)->message($id)->get()` |
 | Download attachments | `Mailbox::mailbox($addr)->message($id)->downloadAttachments()` |
 | Move message | `Mailbox::mailbox($addr)->message($id)->moveTo($folderId)` |
 
-## Data Model Alignment
+## Data Migration Notes
 
-- Store mailbox connection metadata in `mailbox_connections`.
-- Store monitored addresses in `monitored_mailboxes`.
-- Store folder sync tokens in `monitored_folders.delta_token`.
+- keep connection records in `mailbox_connections`
+- map watched addresses to `monitored_mailboxes`
+- persist sync state in `monitored_folders.delta_token`
 
-## Rollout Strategy
+## Suggested Cutover Plan
 
-1. Introduce package and run migrations.
-2. Create monitored mailbox/folder rows for currently watched addresses.
-3. Switch ingestion jobs to `Mailbox::forFolder($folder)->delta(...)`.
-4. Remove direct provider SDK usage after parity validation.
+1. deploy package + migrations
+2. run connection and access checks
+3. backfill monitored mailbox/folder records
+4. switch ingestion jobs to package APIs
+5. remove legacy direct-provider code after parity validation
+
+## Next
+
+- [Testing](testing.md)
+- [Troubleshooting](troubleshooting.md)

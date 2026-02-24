@@ -1,21 +1,25 @@
 # Rule Matching
 
-`MessageMatcher` evaluates rule payloads against `MessageDto` objects.
+`MessageMatcher` evaluates rule trees against `MessageDto` and optional attachments.
 
-## Supported Features
+## Supported Logic
 
-- Nested `AND` / `OR` groups
-- String operators (`contains`, `starts_with`, regex, etc.)
-- Numeric and datetime operators (`greater_than`, `between`, etc.)
-- Attachment-aware conditions (`attachmentCount`, `attachmentName`, `attachmentSize`)
+- nested `AND` and `OR`
+- string operators (`contains`, `starts_with`, `matches_regex`, etc.)
+- numeric/date operators (`greater_than`, `less_than`, `between`, `before`, `after`)
+- attachment predicates (`attachmentCount`, `attachmentName`, `attachmentSize`)
 
 ## Example
 
 ```php
-$matcher = new MessageMatcher($rules);
-$matches = $matcher->matches($messageDto, $attachmentDtos);
+$matcher = new \Pyle\Mailbox\Support\MessageMatcher($rules);
+$isMatch = $matcher->matches($messageDto, $attachmentDtos);
 ```
 
-## Filter Metadata
+## UI Metadata
 
-Use `Mailbox::filterableFields()` to drive a rule-builder UI.
+Use `Mailbox::filterableFields()` to populate field/operator selectors in your app UI.
+
+## Next
+
+- [Usage: Messages](usage/messages.md)

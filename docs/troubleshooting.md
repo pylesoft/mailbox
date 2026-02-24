@@ -1,26 +1,38 @@
 # Troubleshooting
 
-## Authentication Failures
+## `invalid_client`
 
-- Verify `MS365_TENANT_ID`, `MS365_CLIENT_ID`, `MS365_CLIENT_SECRET`.
-- Rotate secret if expired.
+- verify `MS365_CLIENT_ID` and `MS365_CLIENT_SECRET`
+- rotate secret if expired
 
-## Access Denied (403)
+## `insufficient privileges`
 
-- Verify Exchange Application Access Policy includes the mailbox.
-- Allow policy propagation time.
+- confirm Graph app permission (`Mail.ReadWrite` application)
+- confirm admin consent granted
 
-## Rate Limiting (429)
+## `403 Access denied`
 
-- Reduce polling intensity and page size.
-- Stagger sync jobs.
-- Use `queue_retry_strategy=release` to avoid blocking workers.
+- mailbox is not allowed by Exchange app access policy
+- verify policy scope and mailbox membership
 
-## Delta Token Expired
+## Frequent `429`
 
-- On `fullSyncRequired`, rerun folder sync with no delta token.
+- reduce sync burst size and page size
+- stagger jobs
+- use `queue_retry_strategy=release`
 
-## Attachment Path/Storage Issues
+## `fullSyncRequired=true`
 
-- Confirm disk exists in `filesystems.php`.
-- Verify write permissions and configured `attachment_path`.
+- delta token expired
+- rerun delta with `null` token and store new `deltaLink`
+
+## Attachment Write Failures
+
+- confirm filesystem disk exists
+- confirm write permissions
+- confirm configured `attachment_path`
+
+## Next
+
+- [Microsoft Graph Setup](authentication/ms-graph.md)
+- [Configuration](configuration.md)

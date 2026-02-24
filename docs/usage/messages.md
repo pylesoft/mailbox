@@ -1,8 +1,8 @@
 # Messages
 
-Use `messages()` for list queries and bulk operations.
+Use `messages()` for list queries and bulk actions.
 
-## Query Builder
+## Query Example
 
 ```php
 $messages = Mailbox::mailbox($email)
@@ -32,4 +32,9 @@ $body = Mailbox::mailbox($email)->message($messageId)->body();
 
 ## Bulk Actions
 
-Bulk operations use Graph batch requests with chunking.
+Bulk read/move operations are sent through Graph batch requests and chunked automatically.
+
+## Next
+
+- [Attachments](attachments.md)
+- [Folders](folders.md)

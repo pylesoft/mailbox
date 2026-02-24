@@ -1,15 +1,12 @@
 # Connections
 
-`MailboxConnection` stores provider connection metadata and state.
+`MailboxConnection` stores driver credentials metadata and health state.
 
-## Core Fields
+## Typical Lifecycle
 
-- `name`
-- `driver`
-- `status`
-- `config` (encrypted array cast)
-- `last_connected_at`
-- `last_error`
+1. create row for provider config
+2. mark status pending/connected/error
+3. link monitored mailboxes to this connection
 
 ## Useful Scopes
 
@@ -18,8 +15,13 @@
 - `withError()`
 - `connectedSince($since)`
 
-## Driver Resolution
+## Runtime Bridge
 
 ```php
 $driver = $connection->resolveDriver();
 ```
+
+## Next
+
+- [Mailboxes](mailboxes.md)
+- [Configuration](../configuration.md)

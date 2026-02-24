@@ -1,17 +1,27 @@
 # Logging
 
-A dedicated `mailbox` channel is registered by the service provider if missing.
+A dedicated `mailbox` channel is registered if it does not exist.
 
-Default channel settings:
+## Default Channel
 
-- `daily` driver
-- `storage/logs/mailbox.log`
-- 14-day retention
-- Level derived from `mailbox.log_level` (falls back to debug when `app.debug=true`)
+- driver: `daily`
+- path: `storage/logs/mailbox.log`
+- retention: 14 days
+- level: `mailbox.log_level` (falls back to debug if `app.debug=true`)
 
-## Logged Operations
+## What Gets Logged
 
 - Graph request lifecycle
-- Retry and rate-limit handling
-- Token operations
-- Sync and attachment activity
+- retry and backoff behavior
+- rate-limit handling
+- token acquisition and failures
+- sync and attachment operations
+
+## Operational Tip
+
+Keep mailbox logs separate from app logs in production so mailbox incidents are easy to triage.
+
+## Next
+
+- [Events](events.md)
+- [Testing](testing.md)

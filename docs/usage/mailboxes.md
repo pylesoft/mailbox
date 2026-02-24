@@ -1,8 +1,8 @@
 # Mailboxes
 
-`MonitoredMailbox` links a mailbox email address to a connection.
+`MonitoredMailbox` links an email address to a connection.
 
-## Core Fields
+## Typical Fields
 
 - `mailbox_connection_id`
 - `email_address`
@@ -17,10 +17,15 @@
 - `stale($minutes)`
 - `neverSynced()`
 
-## Bridge to Runtime APIs
+## Runtime Usage
 
 ```php
 use Pyle\Mailbox\Facades\Mailbox;
 
 $resource = Mailbox::forMailbox($monitoredMailbox);
 ```
+
+## Next
+
+- [Messages](messages.md)
+- [Delta Sync](delta-sync.md)

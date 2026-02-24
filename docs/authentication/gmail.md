@@ -1,11 +1,17 @@
 # Gmail Authentication (Planned)
 
-Gmail support is intentionally out-of-scope for v1.0 implementation.
+Gmail implementation is intentionally out of scope for v1.0.
 
-The package contracts already support future Gmail integration via a dedicated driver.
+## Planned Model
 
-Planned authentication model:
+- service account
+- domain-wide delegation
+- mailbox operations mapped to package contracts
 
-- Service account
-- Domain-wide delegation
-- Mailbox-scoped operations mapped to package contracts and DTOs
+## Why This Matters
+
+The package contracts are already provider-agnostic, so Gmail support can be added without changing consuming application code.
+
+## Next
+
+- [Custom Drivers](../extending/custom-drivers.md)

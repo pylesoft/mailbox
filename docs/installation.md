@@ -1,18 +1,18 @@
 # Installation
 
-## Requirements
+## Prerequisites
 
 - PHP 8.2+
 - Laravel 12+
-- Microsoft 365 app registration with Graph API application permissions
+- A Microsoft 365 tenant if using `ms-graph`
 
-## Install Package
+## Install
 
 ```bash
 composer require pylesoft/mailbox
 ```
 
-## Publish Assets
+## Publish Package Files
 
 ```bash
 php artisan vendor:publish --tag=mailbox-config
@@ -20,14 +20,21 @@ php artisan vendor:publish --tag=mailbox-migrations
 php artisan vendor:publish --tag=mailbox-stubs
 ```
 
-## Run Migrations
+## Run Database Migrations
 
 ```bash
 php artisan migrate
 ```
 
-## Next Steps
+## Smoke Test
 
-1. Configure `config/mailbox.php` and environment variables.
-2. Validate access with `php artisan mailbox:test-access`.
-3. Run a health check with `php artisan mailbox:health`.
+```bash
+php artisan mailbox:health --driver=ms-graph
+```
+
+If this fails, complete [Microsoft Graph setup](authentication/ms-graph.md) first.
+
+## Next
+
+- [Configuration](configuration.md)
+- [Quickstart](quickstart.md)

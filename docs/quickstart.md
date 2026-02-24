@@ -1,11 +1,19 @@
 # Quickstart
 
+## 1) Get a Mailbox Resource
+
 ```php
-use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Facades\Mailbox;
 
-$messages = Mailbox::mailbox('invoices@example.com')
-    ->messages()
+$mailbox = Mailbox::mailbox('invoices@example.com');
+```
+
+## 2) Read Messages
+
+```php
+use Pyle\Mailbox\Enums\WellKnownFolder;
+
+$messages = $mailbox->messages()
     ->inFolder(WellKnownFolder::INBOX)
     ->where('isRead', false)
     ->search('invoice')
@@ -13,18 +21,22 @@ $messages = Mailbox::mailbox('invoices@example.com')
     ->get();
 ```
 
-## Single Message Operations
+## 3) Process One Message
 
 ```php
-$message = Mailbox::mailbox('invoices@example.com')->message($id)->get();
-Mailbox::mailbox('invoices@example.com')->message($id)->markAsRead();
-Mailbox::mailbox('invoices@example.com')->message($id)->moveTo(WellKnownFolder::ARCHIVE);
+$message = $mailbox->message($messageId)->get();
+$mailbox->message($messageId)->markAsRead();
 ```
 
-## Sync a Folder
+## 4) Sync Incrementally
 
 ```php
-$result = Mailbox::mailbox('invoices@example.com')
-    ->folder(WellKnownFolder::INBOX)
-    ->delta($storedToken);
+$result = $mailbox->folder(WellKnownFolder::INBOX)->delta($storedDeltaToken);
 ```
+
+Persist `deltaLink` from `$result` for the next sync run.
+
+## Next
+
+- [Messages Usage](usage/messages.md)
+- [Delta Sync](usage/delta-sync.md)

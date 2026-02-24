@@ -1,18 +1,18 @@
 # Folders
 
-Use folder query APIs to browse or create folders and folder paths.
+Use folders APIs for discovery and organization.
 
-## List + Tree
+## Discover Folders
 
 ```php
 $folders = Mailbox::mailbox($email)->folders()->get();
 $tree = Mailbox::mailbox($email)->folders()->tree(maxDepth: 5);
 ```
 
-## Find + Create
+## Find and Create
 
 ```php
-$folder = Mailbox::mailbox($email)->folders()->find('Processed');
+$found = Mailbox::mailbox($email)->folders()->find('Processed');
 $created = Mailbox::mailbox($email)->folders()->create('Processed');
 $path = Mailbox::mailbox($email)->folders()->createPath('Inbox/Finance/Processed');
 ```
@@ -23,3 +23,8 @@ $path = Mailbox::mailbox($email)->folders()->createPath('Inbox/Finance/Processed
 $folder = Mailbox::mailbox($email)->folder('inbox')->get();
 $children = Mailbox::mailbox($email)->folder('inbox')->children();
 ```
+
+## Next
+
+- [Messages](messages.md)
+- [Delta Sync](delta-sync.md)

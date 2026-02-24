@@ -1,25 +1,31 @@
 # Attachments
 
-Attachment metadata and download operations are available from message resources.
-
-## Metadata
+## Read Metadata
 
 ```php
 $attachments = Mailbox::mailbox($email)->message($messageId)->attachments();
 ```
 
-## Download
+## Download a Single Attachment
 
 ```php
-$file = Mailbox::mailbox($email)->message($messageId)->attachment($attachmentId)->download();
+$file = Mailbox::mailbox($email)
+    ->message($messageId)
+    ->attachment($attachmentId)
+    ->download();
 ```
 
-`AttachmentFileDto` includes:
+## Download All Message Attachments
 
-- `disk`
-- `path`
-- `alreadyExisted`
+```php
+$files = Mailbox::mailbox($email)->message($messageId)->downloadAttachments();
+```
 
 ## Dedup Behavior
 
-If the same attachment file path already exists, download is skipped and `alreadyExisted=true`.
+If target path already exists, download is skipped and `alreadyExisted` is `true`.
+
+## Next
+
+- [Messages](messages.md)
+- [Configuration](../configuration.md)

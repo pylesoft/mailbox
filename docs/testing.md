@@ -1,24 +1,27 @@
 # Testing
 
-This package uses Pest with unit, feature, and architecture suites.
-
-## Run Tests
+## Run Full Suite
 
 ```bash
 php82 vendor/bin/pest
-```
-
-## Static Analysis
-
-```bash
 php82 vendor/bin/phpstan analyse
+php82 vendor/bin/pint --test
 ```
 
-## Coverage Focus
+## Test Categories
 
-- Driver resolution and contract behavior
-- Token caching and Graph retries
-- Batching and rate-limiting
-- Attachment dedup and delta sync
-- Command execution and model scopes
-- Architecture constraints and strict typing
+- Unit: DTO mapping, enums, matcher, filter compiler
+- Feature: driver behavior, commands, sync, attachments, batching
+- Architecture: contract and structural guardrails
+
+## Recommended CI Gate
+
+Fail PRs unless all three pass:
+
+1. `pest`
+2. `phpstan`
+3. `pint --test`
+
+## Next
+
+- [Troubleshooting](troubleshooting.md)
