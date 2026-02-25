@@ -8,6 +8,7 @@ use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
+use RuntimeException;
 
 class {{ class }}Driver implements MailboxDriver
 {
@@ -19,15 +20,18 @@ class {{ class }}Driver implements MailboxDriver
     public function mailbox(string $emailAddress): MailboxResource
     {
         // TODO: Return a MailboxResource implementation.
+        throw new RuntimeException('Not implemented: mailbox().');
     }
 
     public function testConnection(?string $emailAddress = null): ConnectionTestResult
     {
         // TODO: Verify auth and mailbox access.
+        throw new RuntimeException('Not implemented: testConnection().');
     }
 
     public function healthCheck(): HealthCheckResult
     {
         // TODO: Return token/api health data.
+        throw new RuntimeException('Not implemented: healthCheck().');
     }
 }

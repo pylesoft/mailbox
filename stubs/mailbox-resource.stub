@@ -10,26 +10,31 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use RuntimeException;
 
 class {{ class }}MailboxResource implements MailboxResource
 {
     public function messages(): MessageQueryBuilder
     {
-        // TODO
+        // TODO: Return a message query builder scoped to this mailbox.
+        throw new RuntimeException('Not implemented: messages().');
     }
 
     public function message(string $messageId): MessageResource
     {
-        // TODO
+        // TODO: Return a message resource for a provider message ID.
+        throw new RuntimeException('Not implemented: message().');
     }
 
     public function folders(): FolderQueryBuilder
     {
-        // TODO
+        // TODO: Return a folder query builder scoped to this mailbox.
+        throw new RuntimeException('Not implemented: folders().');
     }
 
     public function folder(string|WellKnownFolder $folderId): FolderResource
     {
-        // TODO
+        // TODO: Return a folder resource for the given provider ID or well-known folder.
+        throw new RuntimeException('Not implemented: folder().');
     }
 }

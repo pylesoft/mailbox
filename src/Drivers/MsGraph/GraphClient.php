@@ -110,12 +110,13 @@ class GraphClient
     {
         $mailboxKey = $mailbox ?? 'global';
 
-        return $this->rateLimiter->forMailbox($mailboxKey, function () use ($method, $endpoint, $options, $mailbox): ResponseInterface {
+        return $this->rateLimiter->forMailbox('ms-graph', $mailboxKey, function () use ($method, $endpoint, $options, $mailbox): ResponseInterface {
             $attempt = 0;
             $reauthAttempted = false;
 
             while (true) {
                 $attempt++;
+                $startedAt = microtime(true);
 
                 try {
                     $headers = [
@@ -140,16 +141,27 @@ class GraphClient
                         'endpoint' => $endpoint,
                         'status' => $response->getStatusCode(),
                         'attempt' => $attempt,
+                        'mailbox' => $mailbox,
+                        'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
                     ]);
 
                     return $response;
                 } catch (RequestException $e) {
                     $status = $e->getResponse()?->getStatusCode();
                     $retryAfter = $this->retryAfterSeconds($e);
+                    $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
 
                     if ($status === 401 && $reauthAttempted === false) {
                         $this->tokenManager->invalidateToken();
                         $reauthAttempted = true;
+
+                        $this->logInfo('Graph request unauthorized; invalidating token and retrying once', [
+                            'method' => $method,
+                            'endpoint' => $endpoint,
+                            'mailbox' => $mailbox,
+                            'attempt' => $attempt,
+                            'duration_ms' => $durationMs,
+                        ]);
 
                         continue;
                     }
@@ -161,6 +173,15 @@ class GraphClient
                             retryAfter: $retryAfter,
                             endpoint: $endpoint,
                         ));
+
+                        $this->logInfo('Graph rate limit hit; scheduling retry', [
+                            'method' => $method,
+                            'endpoint' => $endpoint,
+                            'mailbox' => $mailbox,
+                            'attempt' => $attempt,
+                            'retry_after_seconds' => $retryAfter,
+                            'duration_ms' => $durationMs,
+                        ]);
 
                         if ($this->handleQueueRetry($retryAfter, '429 rate limit')) {
                             throw new RateLimitException(
@@ -178,6 +199,16 @@ class GraphClient
                     if ($status !== null && $status >= 500 && $attempt <= $this->maxRetries) {
                         $backoff = $this->backoffSeconds($attempt);
 
+                        $this->logDebug('Graph server error; applying retry backoff', [
+                            'method' => $method,
+                            'endpoint' => $endpoint,
+                            'mailbox' => $mailbox,
+                            'attempt' => $attempt,
+                            'status' => $status,
+                            'backoff_seconds' => $backoff,
+                            'duration_ms' => $durationMs,
+                        ]);
+
                         if ($this->handleQueueRetry($backoff, sprintf('%d server error', $status))) {
                             throw new ProviderServerException(
                                 statusCode: $status,
@@ -191,8 +222,25 @@ class GraphClient
                         continue;
                     }
 
+                    $this->logInfo('Graph request failed without retry', [
+                        'method' => $method,
+                        'endpoint' => $endpoint,
+                        'mailbox' => $mailbox,
+                        'attempt' => $attempt,
+                        'status' => $status,
+                        'duration_ms' => $durationMs,
+                    ]);
+
                     $this->throwMappedException($e, $mailbox, $endpoint, $attempt);
                 } catch (\Throwable $e) {
+                    $this->logInfo('Graph request failed with unexpected throwable', [
+                        'method' => $method,
+                        'endpoint' => $endpoint,
+                        'mailbox' => $mailbox,
+                        'attempt' => $attempt,
+                        'error' => $e->getMessage(),
+                    ]);
+
                     throw new ApiRequestException(
                         message: sprintf('Graph request failed for endpoint %s: %s', $endpoint, $e->getMessage()),
                         endpoint: $endpoint,
@@ -210,6 +258,13 @@ class GraphClient
         if ($status === 403) {
             Event::dispatch(new AccessDenied(driver: 'ms-graph', mailbox: (string) $mailbox, endpoint: $endpoint));
 
+            $this->logInfo('Graph access denied response', [
+                'endpoint' => $endpoint,
+                'mailbox' => $mailbox,
+                'status' => $status,
+                'attempt' => $attempt,
+            ]);
+
             throw new MailboxAccessDeniedException(
                 mailbox: (string) $mailbox,
                 message: sprintf(
@@ -222,6 +277,13 @@ class GraphClient
         }
 
         if ($status === 404) {
+            $this->logInfo('Graph resource not found response', [
+                'endpoint' => $endpoint,
+                'mailbox' => $mailbox,
+                'status' => $status,
+                'attempt' => $attempt,
+            ]);
+
             throw new ResourceNotFoundException(
                 resourceType: 'resource',
                 resourceId: $endpoint,
@@ -231,6 +293,13 @@ class GraphClient
         }
 
         if ($status === 401) {
+            $this->logInfo('Graph authentication failed after retry', [
+                'endpoint' => $endpoint,
+                'mailbox' => $mailbox,
+                'status' => $status,
+                'attempt' => $attempt,
+            ]);
+
             throw new AuthenticationException(
                 'Authentication with Microsoft Graph failed after token refresh attempt.',
                 'Check credentials and tenant configuration.',
@@ -241,6 +310,14 @@ class GraphClient
         if ($status === 429) {
             $retryAfter = $this->retryAfterSeconds($e);
 
+            $this->logInfo('Graph request exhausted rate limit retries', [
+                'endpoint' => $endpoint,
+                'mailbox' => $mailbox,
+                'status' => $status,
+                'attempt' => $attempt,
+                'retry_after_seconds' => $retryAfter,
+            ]);
+
             throw new RateLimitException(
                 retryAfter: $retryAfter,
                 mailbox: (string) $mailbox,
@@ -250,6 +327,13 @@ class GraphClient
         }
 
         if ($status !== null && $status >= 500) {
+            $this->logInfo('Graph request exhausted server error retries', [
+                'endpoint' => $endpoint,
+                'mailbox' => $mailbox,
+                'status' => $status,
+                'attempt' => $attempt,
+            ]);
+
             throw new ProviderServerException(
                 statusCode: $status,
                 attemptsExhausted: $attempt,
@@ -320,5 +404,13 @@ class GraphClient
         $channel = (string) config('mailbox.log_channel', 'stack');
 
         Log::channel($channel)->debug($message, $context);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function logInfo(string $message, array $context = []): void
+    {
+        $channel = (string) config('mailbox.log_channel', 'stack');
+
+        Log::channel($channel)->info($message, $context);
     }
 }

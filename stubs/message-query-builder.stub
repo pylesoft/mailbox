@@ -9,23 +9,84 @@ use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use RuntimeException;
 
 class {{ class }}MessageQuery implements MessageQueryBuilder
 {
-    public function inFolder(string|WellKnownFolder $folder): static { return $this; }
-    public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static { return $this; }
-    public function search(string $query): static { return $this; }
-    public function select(array $fields): static { return $this; }
-    public function orderBy(string $field, string $direction = 'desc'): static { return $this; }
-    public function take(int $limit): static { return $this; }
-    public function pageSize(int $size): static { return $this; }
+    public function inFolder(string|WellKnownFolder $folder): static
+    {
+        // TODO: Persist folder scope on this query builder.
+        return $this;
+    }
+
+    public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static
+    {
+        // TODO: Add provider-specific filter expression state.
+        return $this;
+    }
+
+    public function search(string $query): static
+    {
+        // TODO: Add provider full-text search expression state.
+        return $this;
+    }
+
+    public function select(array $fields): static
+    {
+        // TODO: Persist selected fields.
+        return $this;
+    }
+
+    public function orderBy(string $field, string $direction = 'desc'): static
+    {
+        // TODO: Persist ordering constraints.
+        return $this;
+    }
+
+    public function take(int $limit): static
+    {
+        // TODO: Persist hard result limit.
+        return $this;
+    }
+
+    public function pageSize(int $size): static
+    {
+        // TODO: Persist provider page size.
+        return $this;
+    }
 
     /** @return Collection<int, MessageDto> */
-    public function get(): Collection { return collect(); }
+    public function get(): Collection
+    {
+        // TODO: Execute query against provider and map MessageDto instances.
+        throw new RuntimeException('Not implemented: get().');
+    }
 
-    public function count(): int { return $this->get()->count(); }
-    public function first(): ?MessageDto { return $this->get()->first(); }
-    public function markAsRead(array $messageIds): void {}
-    public function markAsUnread(array $messageIds): void {}
-    public function moveTo(string|WellKnownFolder $folder, array $messageIds): void {}
+    public function count(): int
+    {
+        return $this->get()->count();
+    }
+
+    public function first(): ?MessageDto
+    {
+        return $this->get()->first();
+    }
+
+    public function markAsRead(array $messageIds): void
+    {
+        // TODO: Implement bulk mark-as-read operation.
+        throw new RuntimeException('Not implemented: markAsRead().');
+    }
+
+    public function markAsUnread(array $messageIds): void
+    {
+        // TODO: Implement bulk mark-as-unread operation.
+        throw new RuntimeException('Not implemented: markAsUnread().');
+    }
+
+    public function moveTo(string|WellKnownFolder $folder, array $messageIds): void
+    {
+        // TODO: Implement bulk move operation.
+        throw new RuntimeException('Not implemented: moveTo().');
+    }
 }

@@ -6,6 +6,7 @@ namespace Pyle\Mailbox\Drivers\MsGraph;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Events\DeltaSyncCompleted;
@@ -21,7 +22,14 @@ class MsGraphDeltaSync
 
     public function syncFolder(string $mailbox, string $folderId, ?string $deltaToken = null): DeltaResultDto
     {
+        $startedAt = microtime(true);
+
         Event::dispatch(new DeltaSyncStarted('ms-graph', $mailbox, $folderId));
+        $this->logDebug('MS Graph delta sync started', [
+            'mailbox' => $mailbox,
+            'folder' => $folderId,
+            'has_delta_token' => $deltaToken !== null,
+        ]);
 
         $created = collect();
         $updated = collect();
@@ -43,7 +51,15 @@ class MsGraphDeltaSync
                     }
 
                     if (isset($item['@removed'])) {
-                        $deleted->push((string) ($item['id'] ?? ''));
+                        $deletedId = (string) ($item['id'] ?? '');
+                        $deleted->push($deletedId);
+
+                        $this->logDebug('MS Graph delta change processed', [
+                            'mailbox' => $mailbox,
+                            'folder' => $folderId,
+                            'change_type' => 'deleted',
+                            'message_id' => $deletedId,
+                        ]);
 
                         continue;
                     }
@@ -52,8 +68,20 @@ class MsGraphDeltaSync
 
                     if (isset($item['@odata.etag']) || isset($item['lastModifiedDateTime'])) {
                         $updated->push($message);
+                        $this->logDebug('MS Graph delta change processed', [
+                            'mailbox' => $mailbox,
+                            'folder' => $folderId,
+                            'change_type' => 'updated',
+                            'message_id' => $message->id,
+                        ]);
                     } else {
                         $created->push($message);
+                        $this->logDebug('MS Graph delta change processed', [
+                            'mailbox' => $mailbox,
+                            'folder' => $folderId,
+                            'change_type' => 'created',
+                            'message_id' => $message->id,
+                        ]);
                     }
                 }
 
@@ -63,6 +91,11 @@ class MsGraphDeltaSync
         } catch (ApiRequestException $e) {
             if ($e->status === 410) {
                 Event::dispatch(new DeltaTokenExpired('ms-graph', $mailbox, $folderId));
+
+                $this->logInfo('MS Graph delta token expired', [
+                    'mailbox' => $mailbox,
+                    'folder' => $folderId,
+                ]);
 
                 return new DeltaResultDto(
                     created: collect(),
@@ -85,6 +118,15 @@ class MsGraphDeltaSync
             deleted: $deleted->count(),
         ));
 
+        $this->logInfo('MS Graph delta sync completed', [
+            'mailbox' => $mailbox,
+            'folder' => $folderId,
+            'created' => $created->count(),
+            'updated' => $updated->count(),
+            'deleted' => $deleted->count(),
+            'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+        ]);
+
         return new DeltaResultDto(
             created: new Collection($created->all()),
             updated: new Collection($updated->all()),
@@ -92,5 +134,17 @@ class MsGraphDeltaSync
             deltaLink: $deltaLink,
             fullSyncRequired: false,
         );
+    }
+
+    /** @param array<string, mixed> $context */
+    private function logDebug(string $message, array $context = []): void
+    {
+        Log::channel((string) config('mailbox.log_channel', 'stack'))->debug($message, $context);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function logInfo(string $message, array $context = []): void
+    {
+        Log::channel((string) config('mailbox.log_channel', 'stack'))->info($message, $context);
     }
 }

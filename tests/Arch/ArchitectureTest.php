@@ -11,6 +11,12 @@ use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\Enums\ConnectionStatus;
+use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\Importance;
+use Pyle\Mailbox\Enums\MatchOperator;
+use Pyle\Mailbox\Enums\SyncStatus;
+use Pyle\Mailbox\Enums\WellKnownFolder;
 
 arch('contracts are interfaces')
     ->expect('Pyle\\Mailbox\\Contracts')
@@ -55,3 +61,21 @@ arch('no debugging statements')
 arch('strict types everywhere')
     ->expect('Pyle\\Mailbox')
     ->toUseStrictTypes();
+
+test('enums are backed string enums', function (): void {
+    $enums = [
+        ConnectionStatus::class,
+        SyncStatus::class,
+        WellKnownFolder::class,
+        Importance::class,
+        MatchOperator::class,
+        FilterableField::class,
+    ];
+
+    foreach ($enums as $enumClass) {
+        $reflection = new ReflectionEnum($enumClass);
+
+        expect($reflection->isBacked())->toBeTrue();
+        expect($reflection->getBackingType()?->getName())->toBe('string');
+    }
+});

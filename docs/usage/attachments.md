@@ -23,7 +23,11 @@ $files = Mailbox::mailbox($email)->message($messageId)->downloadAttachments();
 
 ## Dedup Behavior
 
-If target path already exists, download is skipped and `alreadyExisted` is `true`.
+Attachment downloads use content-addressable dedup:
+
+- If the preferred path exists and content hash matches, download is skipped and `alreadyExisted` is `true`.
+- If the preferred path exists but content hash differs, the file is stored at a hash-suffixed path.
+- If that hash-suffixed path already exists with matching content, download is skipped and `alreadyExisted` is `true`.
 
 ## Next
 

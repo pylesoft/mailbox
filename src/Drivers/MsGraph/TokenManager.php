@@ -8,6 +8,7 @@ use Carbon\CarbonImmutable;
 use GuzzleHttp\Client;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Pyle\Mailbox\Events\TokenAcquired;
 use Pyle\Mailbox\Events\TokenRefreshFailed;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
@@ -34,8 +35,21 @@ class TokenManager
             if (is_array($cached) && isset($cached['access_token']) && is_string($cached['access_token'])) {
                 $this->metadata = $cached;
 
+                $this->logDebug('MS Graph token cache hit', [
+                    'cache_key' => $cacheKey,
+                    'expires_in' => $this->tokenExpiresIn(),
+                ]);
+
                 return $cached['access_token'];
             }
+
+            $this->logDebug('MS Graph token cache miss', [
+                'cache_key' => $cacheKey,
+            ]);
+        } else {
+            $this->logDebug('MS Graph token refresh forced', [
+                'cache_key' => $cacheKey,
+            ]);
         }
 
         return $this->fetchAndCacheToken($cacheKey);
@@ -45,6 +59,10 @@ class TokenManager
     {
         Cache::store($this->cacheStore())->forget($this->cacheKey());
         $this->metadata = [];
+
+        $this->logInfo('MS Graph token cache invalidated', [
+            'cache_key' => $this->cacheKey(),
+        ]);
     }
 
     public function tokenExpiresIn(): ?int
@@ -129,6 +147,10 @@ class TokenManager
                 guidance: 'Rotate secret in Entra ID if expired and update MS365_CLIENT_SECRET.',
             ));
 
+            $this->logInfo('MS Graph token refresh failed', [
+                'error' => $e->getMessage(),
+            ]);
+
             throw new AuthenticationException(
                 'Failed to authenticate with Microsoft Graph. The client secret may have expired.',
                 'Rotate secret in Entra ID and update MS365_CLIENT_SECRET.',
@@ -151,6 +173,11 @@ class TokenManager
 
         Event::dispatch(new TokenAcquired(driver: 'ms-graph', expiresIn: $expiresIn));
 
+        $this->logInfo('MS Graph token acquired', [
+            'expires_in' => $expiresIn,
+            'cache_ttl' => $ttl,
+        ]);
+
         return $accessToken;
     }
 
@@ -168,5 +195,17 @@ class TokenManager
         $client = (string) ($this->config['client_id'] ?? 'client');
 
         return sprintf('%s:%s:%s', $prefix, $tenant, $client);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function logDebug(string $message, array $context = []): void
+    {
+        Log::channel((string) config('mailbox.log_channel', 'stack'))->debug($message, $context);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function logInfo(string $message, array $context = []): void
+    {
+        Log::channel((string) config('mailbox.log_channel', 'stack'))->info($message, $context);
     }
 }

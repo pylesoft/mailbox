@@ -8,10 +8,25 @@ use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Contracts\AttachmentResource;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
+use RuntimeException;
 
 class {{ class }}AttachmentResource implements AttachmentResource
 {
-    public function metadata(): AttachmentDto {}
-    public function download(): AttachmentFileDto {}
-    public function stream(): StreamInterface {}
+    public function metadata(): AttachmentDto
+    {
+        // TODO: Return provider-specific attachment metadata.
+        throw new RuntimeException('Not implemented: metadata().');
+    }
+
+    public function download(): AttachmentFileDto
+    {
+        // TODO: Download the attachment to configured storage and return file metadata.
+        throw new RuntimeException('Not implemented: download().');
+    }
+
+    public function stream(): StreamInterface
+    {
+        // TODO: Return a readable stream for attachment content.
+        throw new RuntimeException('Not implemented: stream().');
+    }
 }

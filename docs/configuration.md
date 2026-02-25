@@ -31,6 +31,7 @@ Package config lives in `config/mailbox.php`.
 
 - `attachment_disk`: Laravel filesystem disk
 - `attachment_path`: base folder path on disk
+- dedup strategy: content-addressable (hash-based) with collision-safe hash suffix paths
 
 ## Logging
 

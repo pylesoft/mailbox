@@ -6,6 +6,11 @@
 - Laravel 12+
 - A Microsoft 365 tenant if using `ms-graph`
 
+## Dependency Model
+
+This package intentionally depends on `illuminate/*` components rather than `laravel/framework` as a single dependency.
+That keeps package-level dependency resolution predictable across Laravel app setups while still targeting Laravel 12 APIs.
+
 ## Install
 
 ```bash

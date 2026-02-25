@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Traits\HasMailbox;
 
 /**
  * @property int $id
@@ -27,6 +28,8 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
  */
 class MonitoredFolder extends Model
 {
+    use HasMailbox;
+
     protected $table = 'monitored_folders';
 
     protected $fillable = [

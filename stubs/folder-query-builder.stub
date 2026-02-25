@@ -8,16 +8,39 @@ use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use RuntimeException;
 
 class {{ class }}FolderQuery implements FolderQueryBuilder
 {
     /** @return Collection<int, FolderDto> */
-    public function get(): Collection { return collect(); }
+    public function get(): Collection
+    {
+        // TODO: Return a flat folder list from your provider.
+        throw new RuntimeException('Not implemented: get().');
+    }
 
     /** @return Collection<int, FolderDto> */
-    public function tree(int $maxDepth = 10): Collection { return collect(); }
+    public function tree(int $maxDepth = 10): Collection
+    {
+        // TODO: Return a nested folder tree.
+        throw new RuntimeException('Not implemented: tree().');
+    }
 
-    public function find(string $name, string|WellKnownFolder|null $root = null, bool $caseSensitive = true): ?FolderDto { return null; }
-    public function create(string $name, ?string $parentId = null): FolderDto {}
-    public function createPath(string $path): FolderDto {}
+    public function find(string $name, string|WellKnownFolder|null $root = null, bool $caseSensitive = true): ?FolderDto
+    {
+        // TODO: Resolve a folder by name under an optional root.
+        throw new RuntimeException('Not implemented: find().');
+    }
+
+    public function create(string $name, ?string $parentId = null): FolderDto
+    {
+        // TODO: Create a provider folder.
+        throw new RuntimeException('Not implemented: create().');
+    }
+
+    public function createPath(string $path): FolderDto
+    {
+        // TODO: Create missing folders along a path.
+        throw new RuntimeException('Not implemented: createPath().');
+    }
 }

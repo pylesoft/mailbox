@@ -19,13 +19,13 @@ use RuntimeException;
  */
 trait HasMailbox
 {
-    /** @return BelongsTo<MonitoredMailbox, self> */
+    /** @return BelongsTo<MonitoredMailbox, $this> */
     public function monitoredMailbox(): BelongsTo
     {
         return $this->belongsTo(MonitoredMailbox::class);
     }
 
-    /** @return HasOneThrough<MailboxConnection, MonitoredMailbox, self> */
+    /** @return HasOneThrough<MailboxConnection, MonitoredMailbox, $this> */
     public function mailboxConnection(): HasOneThrough
     {
         return $this->hasOneThrough(

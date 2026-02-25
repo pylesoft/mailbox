@@ -9,16 +9,44 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\DTOs\FolderDto;
+use RuntimeException;
 
 class {{ class }}FolderResource implements FolderResource
 {
-    public function get(): FolderDto {}
+    public function get(): FolderDto
+    {
+        // TODO: Return folder metadata.
+        throw new RuntimeException('Not implemented: get().');
+    }
 
     /** @return Collection<int, FolderDto> */
-    public function children(): Collection { return collect(); }
+    public function children(): Collection
+    {
+        // TODO: Return direct child folders.
+        throw new RuntimeException('Not implemented: children().');
+    }
 
-    public function messages(): MessageQueryBuilder {}
-    public function delta(?string $deltaToken = null): DeltaResultDto {}
-    public function delete(): void {}
-    public function moveTo(string $destinationParentId): FolderDto {}
+    public function messages(): MessageQueryBuilder
+    {
+        // TODO: Return a message query builder scoped to this folder.
+        throw new RuntimeException('Not implemented: messages().');
+    }
+
+    public function delta(?string $deltaToken = null): DeltaResultDto
+    {
+        // TODO: Implement incremental sync behavior.
+        throw new RuntimeException('Not implemented: delta().');
+    }
+
+    public function delete(): void
+    {
+        // TODO: Delete this folder in your provider.
+        throw new RuntimeException('Not implemented: delete().');
+    }
+
+    public function moveTo(string $destinationParentId): FolderDto
+    {
+        // TODO: Move this folder under another parent.
+        throw new RuntimeException('Not implemented: moveTo().');
+    }
 }

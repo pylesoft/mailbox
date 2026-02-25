@@ -46,7 +46,7 @@ it('retries on 429 then succeeds', function (): void {
             parent::__construct($config);
         }
 
-        public function forMailbox(string $mailbox, callable $callback): mixed
+        public function forMailbox(string $driver, string $mailbox, callable $callback): Response
         {
             return $callback();
         }
@@ -87,7 +87,7 @@ it('throws mailbox access denied for 403', function (): void {
             parent::__construct($config);
         }
 
-        public function forMailbox(string $mailbox, callable $callback): mixed
+        public function forMailbox(string $driver, string $mailbox, callable $callback): Response
         {
             return $callback();
         }
@@ -127,7 +127,7 @@ it('releases queue jobs instead of sleeping when configured', function (): void 
             parent::__construct($config);
         }
 
-        public function forMailbox(string $mailbox, callable $callback): mixed
+        public function forMailbox(string $driver, string $mailbox, callable $callback): Response
         {
             return $callback();
         }

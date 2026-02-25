@@ -42,7 +42,48 @@ it('chunks batch requests into max 20 items', function (): void {
     expect((array) $response['responses'])->toHaveCount(45);
 });
 
-it('throws when any batch subrequest fails', function (): void {
+it('retries failed batch subrequests individually', function (): void {
+    $client = new class extends GraphClient
+    {
+        /** @var array<int, string> */
+        public array $retriedEndpoints = [];
+
+        public function __construct() {}
+
+        public function post(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            if ($endpoint === '/$batch') {
+                return [
+                    'responses' => [
+                        ['id' => '1', 'status' => 200],
+                        ['id' => '2', 'status' => 400],
+                    ],
+                ];
+            }
+
+            return ['id' => 'post'];
+        }
+
+        public function patch(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            $this->retriedEndpoints[] = $endpoint;
+
+            return ['id' => 'retry'];
+        }
+    };
+
+    $batch = new BatchRequest($client);
+
+    $response = $batch->send([
+        ['id' => '1', 'method' => 'PATCH', 'url' => '/x'],
+        ['id' => '2', 'method' => 'PATCH', 'url' => '/y'],
+    ]);
+
+    expect($client->retriedEndpoints)->toBe(['/y']);
+    expect((array) $response['responses'])->toHaveCount(2);
+});
+
+it('throws when an individually retried subrequest fails', function (): void {
     $client = new class extends GraphClient
     {
         public function __construct() {}
@@ -55,6 +96,11 @@ it('throws when any batch subrequest fails', function (): void {
                     ['id' => '2', 'status' => 400],
                 ],
             ];
+        }
+
+        public function patch(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            throw new ApiRequestException('Retry failed', status: 500, endpoint: $endpoint);
         }
     };
 

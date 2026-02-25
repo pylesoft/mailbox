@@ -12,22 +12,69 @@ use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use RuntimeException;
 
 class {{ class }}MessageResource implements MessageResource
 {
-    public function get(): MessageDto {}
-    public function body(): BodyDto {}
-    public function markAsRead(): void {}
-    public function markAsUnread(): void {}
-    public function moveTo(string|WellKnownFolder $folder): MessageDto {}
-    public function copyTo(string|WellKnownFolder $folder): MessageDto {}
-    public function delete(): void {}
+    public function get(): MessageDto
+    {
+        // TODO: Return message metadata and mapped body preview fields.
+        throw new RuntimeException('Not implemented: get().');
+    }
+
+    public function body(): BodyDto
+    {
+        // TODO: Return full message body for this message.
+        throw new RuntimeException('Not implemented: body().');
+    }
+
+    public function markAsRead(): void
+    {
+        // TODO: Mark this provider message as read.
+        throw new RuntimeException('Not implemented: markAsRead().');
+    }
+
+    public function markAsUnread(): void
+    {
+        // TODO: Mark this provider message as unread.
+        throw new RuntimeException('Not implemented: markAsUnread().');
+    }
+
+    public function moveTo(string|WellKnownFolder $folder): MessageDto
+    {
+        // TODO: Move this message and return updated message metadata.
+        throw new RuntimeException('Not implemented: moveTo().');
+    }
+
+    public function copyTo(string|WellKnownFolder $folder): MessageDto
+    {
+        // TODO: Copy this message and return copied message metadata.
+        throw new RuntimeException('Not implemented: copyTo().');
+    }
+
+    public function delete(): void
+    {
+        // TODO: Delete this message from provider storage.
+        throw new RuntimeException('Not implemented: delete().');
+    }
 
     /** @return Collection<int, AttachmentDto> */
-    public function attachments(): Collection { return collect(); }
+    public function attachments(): Collection
+    {
+        // TODO: Return attachment metadata list.
+        throw new RuntimeException('Not implemented: attachments().');
+    }
 
-    public function attachment(string $attachmentId): AttachmentResource {}
+    public function attachment(string $attachmentId): AttachmentResource
+    {
+        // TODO: Return attachment resource by provider attachment ID.
+        throw new RuntimeException('Not implemented: attachment().');
+    }
 
     /** @return Collection<int, AttachmentFileDto> */
-    public function downloadAttachments(bool $includeInline = false): Collection { return collect(); }
+    public function downloadAttachments(bool $includeInline = false): Collection
+    {
+        // TODO: Download attachments and return file metadata.
+        throw new RuntimeException('Not implemented: downloadAttachments().');
+    }
 }

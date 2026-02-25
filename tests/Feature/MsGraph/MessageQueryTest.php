@@ -98,3 +98,46 @@ it('sends bulk actions in chunked batch requests', function (): void {
     expect((array) $client->batchPayloads[1]['requests'])->toHaveCount(20);
     expect((array) $client->batchPayloads[2]['requests'])->toHaveCount(4);
 });
+
+it('retries failed bulk batch items individually', function (): void {
+    $client = new class extends GraphClient
+    {
+        /** @var array<int, string> */
+        public array $retriedPatches = [];
+
+        public function __construct() {}
+
+        public function post(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            if ($endpoint === '/$batch') {
+                return [
+                    'responses' => [
+                        ['id' => '1', 'status' => 200],
+                        ['id' => '2', 'status' => 400],
+                    ],
+                ];
+            }
+
+            return [];
+        }
+
+        public function patch(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            $this->retriedPatches[] = $endpoint;
+
+            return [];
+        }
+
+        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            return ['value' => []];
+        }
+    };
+
+    $query = new MsGraphMessageQuery($client, new BatchRequest($client), 'invoices@example.com');
+
+    $query->markAsRead(['m-1', 'm-2']);
+
+    expect($client->retriedPatches)->toHaveCount(1);
+    expect($client->retriedPatches[0])->toContain('/users/invoices%40example.com/messages/m-2');
+});
