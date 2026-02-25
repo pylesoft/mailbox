@@ -12,6 +12,7 @@ Driver-based mailbox abstraction for Laravel applications.
 
 - Unified mailbox API across providers via contracts.
 - Microsoft Graph driver for mailbox operations, sync, and attachment downloads.
+- Google Workspace (Gmail API) driver with service-account delegation, history sync, and OAuth routes.
 - Shared DTOs, enums, models, migrations, and traits.
 - Retry/rate-limiting + batching + delta sync primitives.
 - Rule-matching support (`MessageMatcher`) and filter metadata for custom UIs.
@@ -57,7 +58,7 @@ foreach ($messages as $message) {
 | Driver | Status | Notes |
 | --- | --- | --- |
 | Microsoft 365 (Graph API) | ✅ Supported | Client credentials flow with mailbox scoping policies |
-| Google Workspace (Gmail API) | 🔜 Planned | Contracts are ready; driver implementation is planned for a future release |
+| Google Workspace (Gmail API) | ✅ Supported | Canonical key `gmail`, alias key `google-workspace` |
 
 ## Documentation
 
@@ -69,6 +70,7 @@ foreach ($messages as $message) {
 - [Authentication](docs/authentication/index.md)
 - [MS Graph Setup Guide](docs/authentication/ms-graph.md)
 - [MS Graph User OAuth Guide](docs/authentication/user-oauth.md)
+- [Gmail Setup Guide](docs/authentication/gmail.md)
 - [Events](docs/events.md)
 - [Migration Guide](docs/migration-guide.md)
 - [Extending](docs/extending/index.md)

@@ -16,4 +16,6 @@ it('returns expected metadata for filterable fields', function (): void {
 
     expect(FilterableField::IS_READ->isServerPushable())->toBeTrue();
     expect(FilterableField::ATTACHMENT_SIZE->isServerPushable())->toBeFalse();
+    expect(FilterableField::FROM_ADDRESS->isServerPushable('gmail'))->toBeTrue();
+    expect(FilterableField::ATTACHMENT_SIZE->isServerPushable('gmail'))->toBeFalse();
 });

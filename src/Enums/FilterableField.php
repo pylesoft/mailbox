@@ -84,18 +84,30 @@ enum FilterableField: string
 
     public function isServerPushable(string $driver = 'ms-graph'): bool
     {
-        if ($driver !== 'ms-graph') {
-            return false;
-        }
-
-        return match ($this) {
-            self::SUBJECT,
-            self::RECEIVED_AT,
-            self::IS_READ,
-            self::IS_DRAFT,
-            self::HAS_ATTACHMENTS,
-            self::IMPORTANCE,
-            self::FROM_ADDRESS => true,
+        return match (strtolower($driver)) {
+            'ms-graph' => match ($this) {
+                self::SUBJECT,
+                self::RECEIVED_AT,
+                self::IS_READ,
+                self::IS_DRAFT,
+                self::HAS_ATTACHMENTS,
+                self::IMPORTANCE,
+                self::FROM_ADDRESS => true,
+                default => false,
+            },
+            'gmail', 'google-workspace' => match ($this) {
+                self::SUBJECT,
+                self::FROM_ADDRESS,
+                self::SENDER_ADDRESS,
+                self::TO_ADDRESS,
+                self::CC_ADDRESS,
+                self::RECEIVED_AT,
+                self::IS_READ,
+                self::IS_DRAFT,
+                self::HAS_ATTACHMENTS,
+                self::IMPORTANCE => true,
+                default => false,
+            },
             default => false,
         };
     }

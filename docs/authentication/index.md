@@ -4,13 +4,13 @@
 
 - [Microsoft Graph (App-Only)](ms-graph.md)
 - [Microsoft Graph (User OAuth)](user-oauth.md)
-- [Gmail (planned)](gmail.md)
+- [Gmail (Service Account + User OAuth)](gmail.md)
 
 ## Authentication Modes
 
-- App-only mode (client credentials) is the default path for queue and server jobs.
-- User OAuth mode is optional and can be enabled when you need user consent and refresh tokens.
-- You can run both in the same application: app-only for background processing, user OAuth for user-linked features.
+- Microsoft Graph app-only mode: client credentials.
+- Gmail runtime mode: service account with domain-wide delegation.
+- User OAuth mode is optional for both providers when you need user consent and refresh tokens.
 
 ## Token Storage
 

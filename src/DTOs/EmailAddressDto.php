@@ -39,8 +39,8 @@ final readonly class EmailAddressDto implements Arrayable, JsonSerializable
 
         if (preg_match('/^(?:"?([^"]*)"?\s*)?<([^>]+)>$/', $trimmed, $matches) === 1) {
             return new self(
-                name: trim((string) ($matches[1] ?? '')),
-                address: trim((string) ($matches[2] ?? '')),
+                name: trim((string) $matches[1]),
+                address: trim((string) $matches[2]),
             );
         }
 

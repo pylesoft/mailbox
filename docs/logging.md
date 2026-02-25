@@ -11,7 +11,7 @@ A dedicated `mailbox` channel is registered if it does not exist.
 
 ## What Gets Logged
 
-- Graph request lifecycle (method, endpoint, status, attempt, duration)
+- Graph/Gmail request lifecycle (method, endpoint, status, attempt, duration)
 - retry and backoff behavior
 - rate-limit incidents and queue-release retries
 - token cache hits/misses, token acquisition, and refresh failures

@@ -8,6 +8,14 @@ Package config lives in `config/mailbox.php`.
 - `mailbox.drivers.ms-graph.tenant_id`
 - `mailbox.drivers.ms-graph.client_id`
 - `mailbox.drivers.ms-graph.client_secret`
+- `mailbox.drivers.gmail.service_account_json` or `mailbox.drivers.gmail.service_account_json_path`
+- `mailbox.drivers.gmail.subject_email` (required for health probes and optional for default test mailbox)
+
+## Driver Resolution
+
+- `driver_classes`: config map from canonical driver key to class.
+- `drivers.gmail`: canonical Google Workspace driver config.
+- `drivers.google-workspace`: optional alias overrides merged on top of `drivers.gmail`.
 
 ## Important Runtime Options
 
@@ -26,6 +34,10 @@ Package config lives in `config/mailbox.php`.
 - `oauth.default_return_url`: fallback redirect target if no `return_to` was provided
 - `oauth.ms_graph.redirect_uri`: optional explicit callback URL override
 - `oauth.ms_graph.scopes`: delegated scopes used on the authorize request
+- `oauth.gmail.client_id`: Google OAuth client ID
+- `oauth.gmail.client_secret`: Google OAuth client secret
+- `oauth.gmail.redirect_uri`: optional explicit callback URL override
+- `oauth.gmail.scopes`: delegated scopes used on the authorize request
 
 ## Attachment Storage
 
@@ -45,10 +57,17 @@ MAILBOX_DRIVER=ms-graph
 MS365_TENANT_ID=...
 MS365_CLIENT_ID=...
 MS365_CLIENT_SECRET=...
+GMAIL_SERVICE_ACCOUNT_JSON=
+GMAIL_SERVICE_ACCOUNT_JSON_PATH=
+GMAIL_SUBJECT_EMAIL=invoices@yourdomain.com
+GMAIL_SCOPES=https://www.googleapis.com/auth/gmail.modify
 MAILBOX_OAUTH_ENABLED=false
 MAILBOX_OAUTH_ROUTE_PREFIX=mailbox/oauth
 MAILBOX_OAUTH_ROUTE_MIDDLEWARE=web
 MAILBOX_OAUTH_MS_GRAPH_REDIRECT_URI=
+MAILBOX_OAUTH_GMAIL_CLIENT_ID=
+MAILBOX_OAUTH_GMAIL_CLIENT_SECRET=
+MAILBOX_OAUTH_GMAIL_REDIRECT_URI=
 MAILBOX_QUEUE_RETRY_STRATEGY=release
 MAILBOX_ATTACHMENT_DISK=local
 MAILBOX_ATTACHMENT_PATH=mailbox-attachments

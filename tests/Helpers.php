@@ -34,3 +34,34 @@ function messageDto(string $subject = 'Hello'): MessageDto
 
     return MessageDto::fromMsGraph($data);
 }
+
+function gmailMessageFixture(array $overrides = []): array
+{
+    $base = [
+        'id' => 'gmail-msg-1',
+        'threadId' => 'gmail-thread-1',
+        'labelIds' => ['INBOX', 'UNREAD'],
+        'snippet' => 'Invoice body preview',
+        'internalDate' => '1735732800000',
+        'payload' => [
+            'mimeType' => 'multipart/alternative',
+            'headers' => [
+                ['name' => 'Subject', 'value' => 'Invoice #5678'],
+                ['name' => 'From', 'value' => 'Vendor <vendor@example.com>'],
+                ['name' => 'To', 'value' => 'Finance <finance@example.com>'],
+                ['name' => 'Date', 'value' => 'Wed, 01 Jan 2026 12:00:00 +0000'],
+                ['name' => 'Message-ID', 'value' => '<gmail-5678@example.com>'],
+            ],
+            'parts' => [
+                [
+                    'mimeType' => 'text/plain',
+                    'body' => [
+                        'data' => rtrim(strtr(base64_encode('Invoice details here'), '+/', '-_'), '='),
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    return array_replace_recursive($base, $overrides);
+}

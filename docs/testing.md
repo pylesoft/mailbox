@@ -52,7 +52,7 @@ composer run test:lowest
 
 ## Reusable Mailbox Mock Helper
 
-When an app uses the raw Graph client (`Mailbox::driver('ms-graph')->raw()`), you can use the package helper instead of redefining test helpers in each project:
+When an app uses raw provider clients (`Mailbox::driver(...)->raw()`), use package helpers instead of redefining stubs in each project:
 
 ```php
 use Pyle\Mailbox\Testing\MailboxMock;
@@ -63,6 +63,13 @@ $rawClient->shouldReceive('get')
     ->once()
     ->with('users/orders@example.com/messages')
     ->andReturn(['value' => []]);
+
+$gmailRawClient = MailboxMock::mockGmailRawClient();
+
+$gmailRawClient->shouldReceive('get')
+    ->once()
+    ->with('users/me/messages')
+    ->andReturn(['messages' => []]);
 ```
 
 This helper expects `mockery/mockery` in your app's dev dependencies.

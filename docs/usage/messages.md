@@ -32,7 +32,10 @@ $body = Mailbox::mailbox($email)->message($messageId)->body();
 
 ## Bulk Actions
 
-Bulk read/move operations are sent through Graph batch requests and chunked automatically.
+Bulk read/move operations are provider-optimized and chunked automatically:
+
+- MS Graph: JSON batch requests
+- Gmail: batch modify requests
 
 ## Next
 
