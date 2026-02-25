@@ -7,8 +7,11 @@ namespace Pyle\Mailbox\Testing;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsRawClient as SupportsGmailRawClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailClient;
+use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsRawClient;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
+use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Facades\Mailbox;
 use RuntimeException;
 
@@ -23,52 +26,43 @@ final class MailboxMock
     {
         self::ensureMockeryInstalled();
 
-        /** @var \Mockery\MockInterface&MailboxDriver&SupportsRawClient $driverMock */
-        $driverMock = \Mockery::mock(MailboxDriver::class, SupportsRawClient::class);
         /** @var \Mockery\MockInterface&GraphClient $rawClientMock */
         $rawClientMock = \Mockery::mock(GraphClient::class);
 
-        /** @phpstan-ignore-next-line */
-        $driverMock->shouldReceive('raw')->andReturn($rawClientMock);
+        $driverInstance = new class ($rawClientMock) implements MailboxDriver, SupportsRawClient
+        {
+            public function __construct(private readonly GraphClient $rawClient)
+            {}
+
+            public function mailbox(string $emailAddress): MailboxResource
+            {
+                throw new RuntimeException('MailboxMock fake driver only supports raw() in tests.');
+            }
+
+            public function testConnection(?string $emailAddress = null): ConnectionTestResult
+            {
+                throw new RuntimeException('MailboxMock fake driver only supports raw() in tests.');
+            }
+
+            public function healthCheck(): HealthCheckResult
+            {
+                throw new RuntimeException('MailboxMock fake driver only supports raw() in tests.');
+            }
+
+            public function raw(): GraphClient
+            {
+                return $this->rawClient;
+            }
+        };
 
         Mailbox::shouldReceive('driver')
             ->with($driver)
-            ->andReturn($driverMock);
+            ->andReturn($driverInstance);
 
         if ($driver === (string) config('mailbox.default', 'ms-graph')) {
             Mailbox::shouldReceive('driver')
                 ->withNoArgs()
-                ->andReturn($driverMock);
-        }
-
-        return $rawClientMock;
-    }
-
-    /**
-     * Bind a mock raw Gmail client to `Mailbox::driver('gmail')`.
-     *
-     * @return \Mockery\MockInterface&GmailClient
-     */
-    public static function mockGmailRawClient(string $driver = 'gmail'): object
-    {
-        self::ensureMockeryInstalled();
-
-        /** @var \Mockery\MockInterface&MailboxDriver&SupportsGmailRawClient $driverMock */
-        $driverMock = \Mockery::mock(MailboxDriver::class, SupportsGmailRawClient::class);
-        /** @var \Mockery\MockInterface&GmailClient $rawClientMock */
-        $rawClientMock = \Mockery::mock(GmailClient::class);
-
-        /** @phpstan-ignore-next-line */
-        $driverMock->shouldReceive('raw')->andReturn($rawClientMock);
-
-        Mailbox::shouldReceive('driver')
-            ->with($driver)
-            ->andReturn($driverMock);
-
-        if ($driver === (string) config('mailbox.default', 'ms-graph')) {
-            Mailbox::shouldReceive('driver')
-                ->withNoArgs()
-                ->andReturn($driverMock);
+                ->andReturn($driverInstance);
         }
 
         return $rawClientMock;
@@ -76,7 +70,7 @@ final class MailboxMock
 
     private static function ensureMockeryInstalled(): void
     {
-        if (! class_exists(\Mockery::class)) {
+        if (!class_exists(\Mockery::class)) {
             throw new RuntimeException('MailboxMock requires mockery/mockery in your dev dependencies.');
         }
     }
