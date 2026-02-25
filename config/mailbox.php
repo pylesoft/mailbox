@@ -25,6 +25,13 @@ return [
         ), static fn (string $middleware): bool => $middleware !== '')),
         'state_ttl_seconds' => 600,
         'default_return_url' => '/',
+        'allowed_return_hosts' => array_values(array_filter(array_map(
+            static fn (string $host): string => strtolower(trim($host)),
+            explode(',', (string) env(
+                'MAILBOX_OAUTH_ALLOWED_RETURN_HOSTS',
+                (string) parse_url((string) env('APP_URL', ''), PHP_URL_HOST),
+            ))
+        ), static fn (string $host): bool => $host !== '')),
 
         'ms_graph' => [
             // Optional explicit override. If null, route() is used.

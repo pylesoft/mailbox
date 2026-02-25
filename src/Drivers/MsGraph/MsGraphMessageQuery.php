@@ -104,6 +104,9 @@ class MsGraphMessageQuery implements MessageQueryBuilder
     public function get(): Collection
     {
         $pageSize = $this->pageSizeOverride ?? (int) config('mailbox.default_page_size', 50);
+        $applyClientFiltersPerPage = $this->searchQuery !== null
+            && $this->searchQuery !== ''
+            && $this->filters !== [];
 
         $query = [
             '$select' => implode(',', $this->selectFields),
@@ -129,6 +132,10 @@ class MsGraphMessageQuery implements MessageQueryBuilder
             $messages = collect((array) ($response['value'] ?? []))
                 ->map(fn (mixed $item): MessageDto => MessageDto::fromMsGraph(is_array($item) ? $item : []));
 
+            if ($applyClientFiltersPerPage) {
+                $messages = $this->applyClientFilters($messages);
+            }
+
             $collected = $collected->concat($messages);
 
             if ($this->limit !== null && $collected->count() >= $this->limit) {
@@ -139,10 +146,6 @@ class MsGraphMessageQuery implements MessageQueryBuilder
             $endpoint = (string) ($response['@odata.nextLink'] ?? '');
             $query = [];
         } while ($endpoint !== '');
-
-        if ($this->searchQuery !== null && $this->filters !== []) {
-            $collected = $this->applyClientFilters($collected);
-        }
 
         return $collected->values();
     }

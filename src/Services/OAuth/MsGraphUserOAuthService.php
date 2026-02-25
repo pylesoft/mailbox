@@ -231,7 +231,16 @@ class MsGraphUserOAuthService
             return null;
         }
 
-        return in_array(strtolower($parts['scheme']), ['http', 'https'], true) ? $value : null;
+        if (! in_array(strtolower($parts['scheme']), ['http', 'https'], true)) {
+            return null;
+        }
+
+        $host = strtolower((string) $parts['host']);
+        if ($host === '') {
+            return null;
+        }
+
+        return in_array($host, $this->allowedReturnHosts(), true) ? $value : null;
     }
 
     /** @return array<string, mixed> */
@@ -268,5 +277,37 @@ class MsGraphUserOAuthService
     private function stringOrNull(mixed $value): ?string
     {
         return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /** @return array<int, string> */
+    private function allowedReturnHosts(): array
+    {
+        $configured = config('mailbox.oauth.allowed_return_hosts', []);
+
+        if (! is_array($configured)) {
+            return [];
+        }
+
+        $hosts = array_values(array_filter(array_map(function (mixed $host): string {
+            if (! is_string($host)) {
+                return '';
+            }
+
+            $normalized = strtolower(trim($host));
+
+            if ($normalized === '') {
+                return '';
+            }
+
+            if (str_contains($normalized, '://')) {
+                $parsedHost = parse_url($normalized, PHP_URL_HOST);
+
+                return is_string($parsedHost) ? strtolower($parsedHost) : '';
+            }
+
+            return $normalized;
+        }, $configured), static fn (string $host): bool => $host !== ''));
+
+        return array_values(array_unique($hosts));
     }
 }

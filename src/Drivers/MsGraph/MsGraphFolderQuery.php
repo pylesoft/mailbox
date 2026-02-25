@@ -19,15 +19,7 @@ class MsGraphFolderQuery implements FolderQueryBuilder
     /** @return Collection<int, FolderDto> */
     public function get(): Collection
     {
-        $response = $this->client->get(
-            sprintf('users/%s/mailFolders', rawurlencode($this->mailbox)),
-            ['$top' => 200],
-            $this->mailbox,
-        );
-
-        return collect((array) ($response['value'] ?? []))
-            ->map(fn (mixed $item): FolderDto => FolderDto::fromMsGraph(is_array($item) ? $item : []))
-            ->values();
+        return $this->fetchFolders(sprintf('users/%s/mailFolders', rawurlencode($this->mailbox)));
     }
 
     /** @return Collection<int, FolderDto> */
@@ -77,7 +69,7 @@ class MsGraphFolderQuery implements FolderQueryBuilder
 
         foreach ($segments as $segment) {
             $currentPath[] = $segment;
-            $existing = $this->find($segment, $parent, true);
+            $existing = $this->findDirectChild($segment, is_string($parent) ? $parent : null);
 
             if ($existing !== null) {
                 $parent = $existing->id;
@@ -113,19 +105,47 @@ class MsGraphFolderQuery implements FolderQueryBuilder
     /** @return Collection<int, FolderDto> */
     private function childrenOf(string $folderId, string $path, int $depth, int $maxDepth): Collection
     {
-        $response = $this->client->get(
-            sprintf('users/%s/mailFolders/%s/childFolders', rawurlencode($this->mailbox), rawurlencode($folderId)),
-            ['$top' => 200],
-            $this->mailbox,
-        );
-
-        return collect((array) ($response['value'] ?? []))
-            ->map(function (mixed $item) use ($path, $depth, $maxDepth): FolderDto {
-                $folder = FolderDto::fromMsGraph(is_array($item) ? $item : []);
-
+        return $this
+            ->fetchFolders(sprintf('users/%s/mailFolders/%s/childFolders', rawurlencode($this->mailbox), rawurlencode($folderId)))
+            ->map(function (FolderDto $folder) use ($path, $depth, $maxDepth): FolderDto {
                 return $this->withChildrenRecursive($folder, $depth, $maxDepth, trim($path.'/'.$folder->displayName, '/'));
             })
             ->values();
+    }
+
+    private function findDirectChild(string $name, ?string $parentId): ?FolderDto
+    {
+        $folders = $parentId === null
+            ? $this->get()
+            : $this->fetchFolders(sprintf(
+                'users/%s/mailFolders/%s/childFolders',
+                rawurlencode($this->mailbox),
+                rawurlencode($parentId),
+            ));
+
+        return $folders->first(static fn (FolderDto $folder): bool => $folder->displayName === $name);
+    }
+
+    /** @return Collection<int, FolderDto> */
+    private function fetchFolders(string $endpoint): Collection
+    {
+        $folders = collect();
+        $query = ['$top' => 200];
+
+        do {
+            $response = $this->client->get($endpoint, $query, $this->mailbox);
+
+            $folders = $folders->concat(
+                collect((array) ($response['value'] ?? []))
+                    ->map(fn (mixed $item): FolderDto => FolderDto::fromMsGraph(is_array($item) ? $item : []))
+                    ->values(),
+            );
+
+            $endpoint = isset($response['@odata.nextLink']) ? (string) $response['@odata.nextLink'] : '';
+            $query = [];
+        } while ($endpoint !== '');
+
+        return $folders->values();
     }
 
     /** @param Collection<int, FolderDto> $folders

@@ -14,6 +14,7 @@ use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Exceptions\DriverNotConfiguredException;
+use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MonitoredFolder;
 use Pyle\Mailbox\Models\MonitoredMailbox;
 use RuntimeException;
@@ -32,7 +33,13 @@ class MailboxManager extends Manager
 
     public function forMailbox(MonitoredMailbox $mailbox): MailboxResource
     {
-        $driver = $mailbox->connection->driver;
+        $connection = $mailbox->getRelationValue('connection');
+
+        if (! $connection instanceof MailboxConnection) {
+            throw new RuntimeException('Monitored mailbox does not have an associated connection.');
+        }
+
+        $driver = $connection->driver;
 
         return $this->driver($driver)->mailbox($mailbox->email_address);
     }
