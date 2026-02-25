@@ -50,6 +50,23 @@ composer run test:lowest
 - Feature Infrastructure: test harness boot, publish tags, OAuth route gating, workbench smoke
 - Architecture: contract and structural guardrails
 
+## Reusable Mailbox Mock Helper
+
+When an app uses the raw Graph client (`Mailbox::driver('ms-graph')->raw()`), you can use the package helper instead of redefining test helpers in each project:
+
+```php
+use Pyle\Mailbox\Testing\MailboxMock;
+
+$rawClient = MailboxMock::mockMsGraphRawClient();
+
+$rawClient->shouldReceive('get')
+    ->once()
+    ->with('users/orders@example.com/messages')
+    ->andReturn(['value' => []]);
+```
+
+This helper expects `mockery/mockery` in your app's dev dependencies.
+
 ## Recommended CI Gate
 
 Fail PRs unless all jobs pass:
