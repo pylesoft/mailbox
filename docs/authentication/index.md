@@ -2,16 +2,20 @@
 
 ## Choose a Provider
 
-- [Microsoft Graph (v1.0)](ms-graph.md)
+- [Microsoft Graph (App-Only)](ms-graph.md)
+- [Microsoft Graph (User OAuth)](user-oauth.md)
 - [Gmail (planned)](gmail.md)
 
-## Important
+## Authentication Modes
 
-`pylesoft/mailbox` v1.0 uses service-level auth, not user OAuth redirects.
+- App-only mode (client credentials) is the default path for queue and server jobs.
+- User OAuth mode is optional and can be enabled when you need user consent and refresh tokens.
+- You can run both in the same application: app-only for background processing, user OAuth for user-linked features.
 
-- no callback route
-- no redirect URI
-- no per-user token storage
+## Token Storage
+
+- App-only access tokens are cached.
+- User OAuth tokens are persisted in `mailbox_oauth_tokens` and encrypted at rest.
 
 ## Next
 

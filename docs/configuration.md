@@ -17,6 +17,16 @@ Package config lives in `config/mailbox.php`.
 - `queue_retry_strategy`: `release` or `sleep`
 - `prefer_immutable_ids`: use immutable Graph message IDs
 
+## User OAuth Options
+
+- `oauth.enabled`: enables package OAuth routes (default `false`)
+- `oauth.route_prefix`: route prefix for redirect/callback endpoints
+- `oauth.route_middleware`: middleware list (comma-separated via `MAILBOX_OAUTH_ROUTE_MIDDLEWARE`)
+- `oauth.state_ttl_seconds`: cache TTL for OAuth state
+- `oauth.default_return_url`: fallback redirect target if no `return_to` was provided
+- `oauth.ms_graph.redirect_uri`: optional explicit callback URL override
+- `oauth.ms_graph.scopes`: delegated scopes used on the authorize request
+
 ## Attachment Storage
 
 - `attachment_disk`: Laravel filesystem disk
@@ -34,6 +44,10 @@ MAILBOX_DRIVER=ms-graph
 MS365_TENANT_ID=...
 MS365_CLIENT_ID=...
 MS365_CLIENT_SECRET=...
+MAILBOX_OAUTH_ENABLED=false
+MAILBOX_OAUTH_ROUTE_PREFIX=mailbox/oauth
+MAILBOX_OAUTH_ROUTE_MIDDLEWARE=web
+MAILBOX_OAUTH_MS_GRAPH_REDIRECT_URI=
 MAILBOX_QUEUE_RETRY_STRATEGY=release
 MAILBOX_ATTACHMENT_DISK=local
 MAILBOX_ATTACHMENT_PATH=mailbox-attachments

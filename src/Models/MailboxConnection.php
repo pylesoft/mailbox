@@ -22,6 +22,7 @@ use Pyle\Mailbox\MailboxManager;
  * @property \Carbon\CarbonImmutable|null $last_connected_at
  * @property string|null $last_error
  * @property \Illuminate\Database\Eloquent\Collection<int, MonitoredMailbox> $mailboxes
+ * @property \Illuminate\Database\Eloquent\Collection<int, MailboxOAuthToken> $oauthTokens
  */
 class MailboxConnection extends Model
 {
@@ -54,6 +55,12 @@ class MailboxConnection extends Model
     public function activeMailboxes(): HasMany
     {
         return $this->mailboxes()->where('is_active', true);
+    }
+
+    /** @return HasMany<MailboxOAuthToken, $this> */
+    public function oauthTokens(): HasMany
+    {
+        return $this->hasMany(MailboxOAuthToken::class, 'mailbox_connection_id');
     }
 
     public function resolveDriver(): MailboxDriver

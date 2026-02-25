@@ -2,7 +2,9 @@
 
 This package uses OAuth 2.0 **client credentials flow** for Microsoft Graph.
 
-There is **no browser redirect route** and no callback URL required.
+This guide covers the app-only path for server/background workloads.
+
+If you need user consent redirects and per-user refresh tokens, use [Microsoft Graph User OAuth](user-oauth.md).
 
 ## What You Need
 
@@ -24,7 +26,7 @@ The package will obtain and cache access tokens automatically at runtime.
 2. Go to **Identity > Applications > App registrations > New registration**.
 3. Name your app (example: `Pyle Mailbox Production`).
 4. Supported account type: choose your tenant option.
-5. Redirect URI: leave empty (not needed for client credentials).
+5. Redirect URI: optional for this mode (not required for client credentials).
 6. Create the app.
 
 After creation, copy:
@@ -134,7 +136,7 @@ If this fails, credentials/consent are not valid yet.
 - Graph calls are made with `Authorization: Bearer <token>`.
 - On 401, the package invalidates token cache and re-authenticates.
 
-No refresh token and no user OAuth session are used.
+No refresh token is used in this mode. For refresh-token based delegated auth, see [user OAuth](user-oauth.md).
 
 ## Troubleshooting
 

@@ -59,6 +59,7 @@ foreach ($messages as $message) {
 - [Usage](docs/usage/index.md)
 - [Authentication](docs/authentication/index.md)
 - [MS Graph Setup Guide](docs/authentication/ms-graph.md)
+- [MS Graph User OAuth Guide](docs/authentication/user-oauth.md)
 - [Events](docs/events.md)
 - [Migration Guide](docs/migration-guide.md)
 - [Extending](docs/extending/index.md)

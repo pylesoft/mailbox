@@ -16,6 +16,29 @@ return [
         ],
     ],
 
+    'oauth' => [
+        'enabled' => env('MAILBOX_OAUTH_ENABLED', false),
+        'route_prefix' => env('MAILBOX_OAUTH_ROUTE_PREFIX', 'mailbox/oauth'),
+        'route_middleware' => array_values(array_filter(array_map(
+            static fn (string $middleware): string => trim($middleware),
+            explode(',', (string) env('MAILBOX_OAUTH_ROUTE_MIDDLEWARE', 'web'))
+        ), static fn (string $middleware): bool => $middleware !== '')),
+        'state_ttl_seconds' => 600,
+        'default_return_url' => '/',
+
+        'ms_graph' => [
+            // Optional explicit override. If null, route() is used.
+            'redirect_uri' => env('MAILBOX_OAUTH_MS_GRAPH_REDIRECT_URI'),
+            'scopes' => [
+                'openid',
+                'profile',
+                'email',
+                'offline_access',
+                'Mail.ReadWrite',
+            ],
+        ],
+    ],
+
     'cache_store' => env('MAILBOX_CACHE_STORE'),
     'cache_prefix' => 'mailbox_token',
     'token_refresh_buffer' => 300,

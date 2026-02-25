@@ -8,6 +8,7 @@ Use this index as the main entry point.
 2. [Configuration](configuration.md)
 3. [Quickstart](quickstart.md)
 4. [Microsoft Graph Setup](authentication/ms-graph.md)
+5. [Microsoft Graph User OAuth](authentication/user-oauth.md)
 
 ## By Task
 

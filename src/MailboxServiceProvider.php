@@ -36,6 +36,10 @@ class MailboxServiceProvider extends ServiceProvider
             ]);
         }
 
+        if ((bool) config('mailbox.oauth.enabled', false)) {
+            $this->loadRoutesFrom(__DIR__.'/../routes/web.php');
+        }
+
         if (! $this->app->runningInConsole()) {
             return;
         }
