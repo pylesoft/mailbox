@@ -49,11 +49,7 @@ class MsGraphDriver implements MailboxDriver, SupportsRawClient
         try {
             $this->tokenManager->getToken();
 
-            if ($emailAddress !== null) {
-                $this->client->get(sprintf('users/%s/mailFolders/inbox', rawurlencode($emailAddress)), mailbox: $emailAddress);
-            } else {
-                $this->client->get('users?$top=1');
-            }
+            $this->probeGraph($emailAddress);
 
             $latency = (int) round((microtime(true) - $start) * 1000);
 
@@ -91,7 +87,7 @@ class MsGraphDriver implements MailboxDriver, SupportsRawClient
             $start = microtime(true);
             $this->tokenManager->getToken();
             $tokenValid = true;
-            $this->client->get('users?$top=1');
+            $this->probeGraph();
             $apiReachable = true;
             $latency = (int) round((microtime(true) - $start) * 1000);
         } catch (\Throwable) {
@@ -127,5 +123,19 @@ class MsGraphDriver implements MailboxDriver, SupportsRawClient
     public function raw(): GraphClient
     {
         return $this->client;
+    }
+
+    private function probeGraph(?string $emailAddress = null): void
+    {
+        $mailbox = is_string($emailAddress) ? trim($emailAddress) : '';
+
+        if ($mailbox !== '') {
+            $this->client->get(sprintf('users/%s/mailFolders/inbox', rawurlencode($mailbox)), mailbox: $mailbox);
+
+            return;
+        }
+
+        // Graph service root is permission-light and validates API reachability without requiring User.Read.All.
+        $this->client->get('');
     }
 }
