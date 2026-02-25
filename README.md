@@ -68,9 +68,13 @@ foreach ($messages as $message) {
 
 ```bash
 php82 /usr/local/bin/composer install
+php82 vendor/bin/pint --test
 php82 vendor/bin/pest
-php82 vendor/bin/phpstan analyse
+php82 vendor/bin/phpstan analyse --no-progress
+php82 vendor/bin/testbench package:test --parallel --recreate-databases
 ```
+
+CI runs on PHP `8.2`, `8.3`, `8.4` (latest deps) plus a PHP `8.2` prefer-lowest lane.
 
 ## License
 

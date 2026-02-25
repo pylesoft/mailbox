@@ -20,11 +20,8 @@ class FindFolderCommand extends Command
     {
         $driverOption = $this->option('driver');
         $driver = is_string($driverOption) && $driverOption !== '' ? $driverOption : (string) config('mailbox.default', 'ms-graph');
-        $emailArg = $this->argument('email');
-        $nameArg = $this->argument('name');
-
-        $email = is_string($emailArg) ? $emailArg : '';
-        $name = is_string($nameArg) ? $nameArg : '';
+        $email = trim((string) $this->argument('email'));
+        $name = trim((string) $this->argument('name'));
 
         if ($email === '' || $name === '') {
             error('Email and folder name are required.');

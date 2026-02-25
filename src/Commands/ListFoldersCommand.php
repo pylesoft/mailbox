@@ -21,8 +21,7 @@ class ListFoldersCommand extends Command
     {
         $driverOption = $this->option('driver');
         $driver = is_string($driverOption) && $driverOption !== '' ? $driverOption : (string) config('mailbox.default', 'ms-graph');
-        $emailArg = $this->argument('email');
-        $email = is_string($emailArg) ? $emailArg : '';
+        $email = trim((string) $this->argument('email'));
 
         if ($email === '') {
             $this->error('Email argument is required.');

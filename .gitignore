@@ -29,3 +29,6 @@ Homestead.json
 .phpactor.json
 auth.json
 .DS_Store
+workbench/storage/*
+workbench/bootstrap/cache/*
+workbench/database/*.sqlite

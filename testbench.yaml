@@ -1,0 +1,28 @@
+laravel: '@testbench'
+
+providers:
+  - Pyle\Mailbox\MailboxServiceProvider
+  - Workbench\App\Providers\WorkbenchServiceProvider
+
+migrations:
+  - database/migrations
+  - workbench/database/migrations
+
+workbench:
+  start: '/workbench/health'
+  install: true
+  health: false
+  discovers:
+    web: true
+    api: true
+    commands: true
+    components: false
+    factories: false
+    views: false
+  build:
+    - create-sqlite-db
+    - migrate-fresh
+  sync:
+    - from: storage
+      to: workbench/storage
+      reverse: true
