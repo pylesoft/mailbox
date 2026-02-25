@@ -23,3 +23,14 @@ it('serializes to array and json', function (): void {
     expect($dto->toArray())->toBeArray()->toHaveKeys(['id', 'subject', 'from']);
     expect(json_decode((string) json_encode($dto), true))->toHaveKey('id');
 });
+
+it('creates a MessageDto from Gmail response', function (): void {
+    $dto = MessageDto::fromGmail(gmailMessageFixture());
+
+    expect($dto)
+        ->id->toBe('gmail-msg-1')
+        ->subject->toBe('Invoice #5678')
+        ->from->address->toBe('vendor@example.com')
+        ->isRead->toBeFalse()
+        ->internetMessageId->toBe('<gmail-5678@example.com>');
+});

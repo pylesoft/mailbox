@@ -9,6 +9,7 @@ Use this index as the main entry point.
 3. [Quickstart](quickstart.md)
 4. [Microsoft Graph Setup](authentication/ms-graph.md)
 5. [Microsoft Graph User OAuth](authentication/user-oauth.md)
+6. [Gmail Setup](authentication/gmail.md)
 
 ## By Task
 

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
+use Pyle\Mailbox\Http\Controllers\GmailOAuthController;
 use Pyle\Mailbox\Http\Controllers\MsGraphOAuthController;
 
 Route::middleware((array) config('mailbox.oauth.route_middleware', ['web']))
@@ -13,4 +14,10 @@ Route::middleware((array) config('mailbox.oauth.route_middleware', ['web']))
 
         Route::get('ms-graph/callback', [MsGraphOAuthController::class, 'callback'])
             ->name('mailbox.oauth.ms-graph.callback');
+
+        Route::get('gmail/redirect', [GmailOAuthController::class, 'redirect'])
+            ->name('mailbox.oauth.gmail.redirect');
+
+        Route::get('gmail/callback', [GmailOAuthController::class, 'callback'])
+            ->name('mailbox.oauth.gmail.callback');
     });

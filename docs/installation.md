@@ -5,6 +5,7 @@
 - PHP 8.2+
 - Laravel 12+
 - A Microsoft 365 tenant if using `ms-graph`
+- A Google Workspace tenant if using `gmail` / `google-workspace`
 
 ## Dependency Model
 

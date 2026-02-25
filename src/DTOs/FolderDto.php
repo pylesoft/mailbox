@@ -45,6 +45,25 @@ final readonly class FolderDto implements Arrayable, JsonSerializable
         );
     }
 
+    /** @param array<string, mixed> $data */
+    public static function fromGmail(array $data, ?string $path = null): self
+    {
+        $name = (string) ($data['name'] ?? $data['id'] ?? '');
+        $normalizedPath = $path ?? ($name !== '' ? $name : null);
+
+        return new self(
+            id: (string) ($data['id'] ?? $name),
+            displayName: $name,
+            parentFolderId: self::resolveParentPath($name),
+            childFolderCount: 0,
+            totalItemCount: (int) ($data['messagesTotal'] ?? $data['threadsTotal'] ?? 0),
+            unreadItemCount: (int) ($data['messagesUnread'] ?? $data['threadsUnread'] ?? 0),
+            path: $normalizedPath,
+            wellKnownName: self::resolveWellKnownGmail((string) ($data['id'] ?? $name)),
+            children: [],
+        );
+    }
+
     private static function resolveWellKnown(?string $displayName): ?WellKnownFolder
     {
         if ($displayName === null) {
@@ -61,6 +80,34 @@ final readonly class FolderDto implements Arrayable, JsonSerializable
             'outbox' => WellKnownFolder::OUTBOX,
             default => null,
         };
+    }
+
+    private static function resolveWellKnownGmail(string $label): ?WellKnownFolder
+    {
+        return match (strtoupper($label)) {
+            'INBOX' => WellKnownFolder::INBOX,
+            'DRAFT', 'DRAFTS' => WellKnownFolder::DRAFTS,
+            'SENT' => WellKnownFolder::SENT,
+            'TRASH' => WellKnownFolder::DELETED,
+            'SPAM' => WellKnownFolder::JUNK,
+            'ALL_MAIL' => WellKnownFolder::ARCHIVE,
+            default => null,
+        };
+    }
+
+    private static function resolveParentPath(string $name): ?string
+    {
+        $trimmed = trim($name);
+
+        if ($trimmed === '' || ! str_contains($trimmed, '/')) {
+            return null;
+        }
+
+        $parts = explode('/', $trimmed);
+        array_pop($parts);
+        $parent = trim(implode('/', $parts), '/');
+
+        return $parent !== '' ? $parent : null;
     }
 
     /** @param array<FolderDto> $children */

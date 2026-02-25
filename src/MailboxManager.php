@@ -9,7 +9,6 @@ use Illuminate\Support\Manager;
 use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxResource;
-use Pyle\Mailbox\Drivers\MsGraph\MsGraphDriver;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
@@ -91,14 +90,58 @@ class MailboxManager extends Manager
         }
     }
 
-    protected function createMsGraphDriver(): MsGraphDriver
+    /** @param string $driver */
+    protected function createDriver($driver): MailboxDriver
     {
-        $config = (array) $this->config->get('mailbox.drivers.ms-graph', []);
+        if (isset($this->customCreators[$driver])) {
+            /** @var MailboxDriver $driverInstance */
+            $driverInstance = $this->callCustomCreator($driver);
 
-        if ($config === []) {
-            throw DriverNotConfiguredException::forDriver('ms-graph', array_keys((array) config('mailbox.drivers', [])));
+            return $driverInstance;
         }
 
-        return new MsGraphDriver($config);
+        $config = $this->resolveDriverConfig((string) $driver);
+
+        if ($config === []) {
+            throw new \InvalidArgumentException(sprintf('Driver [%s] is not configured.', $driver));
+        }
+
+        $canonical = strtolower(trim((string) ($config['driver'] ?? $driver)));
+        $classMap = (array) $this->config->get('mailbox.driver_classes', []);
+        $class = $classMap[$canonical] ?? null;
+
+        if (! is_string($class) || $class === '' || ! class_exists($class)) {
+            throw new \InvalidArgumentException(sprintf('Driver class mapping for [%s] is missing or invalid.', $canonical));
+        }
+
+        if (! is_a($class, MailboxDriver::class, true)) {
+            throw new \InvalidArgumentException(sprintf('Driver class [%s] must implement %s.', $class, MailboxDriver::class));
+        }
+
+        /** @var MailboxDriver $resolved */
+        $resolved = new $class($config);
+
+        return $resolved;
+    }
+
+    /** @return array<string, mixed> */
+    private function resolveDriverConfig(string $driver): array
+    {
+        $requested = strtolower(trim($driver));
+
+        if ($requested === 'google-workspace') {
+            $canonical = (array) $this->config->get('mailbox.drivers.gmail', []);
+            $alias = (array) $this->config->get('mailbox.drivers.google-workspace', []);
+
+            $merged = array_merge($canonical, $alias);
+
+            if ($merged !== []) {
+                $merged['driver'] = 'gmail';
+            }
+
+            return $merged;
+        }
+
+        return (array) $this->config->get('mailbox.drivers.'.$requested, []);
     }
 }
