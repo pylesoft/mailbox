@@ -73,7 +73,7 @@ $mailbox = Mailbox::driver('gmail')->mailbox('billing@vendor.com');
 
 | Key | Default | Description |
 |---|---|---|
-| `driver_classes` | See above | Maps canonical driver names to their PHP class. You rarely need to change this unless you are registering a [custom driver](architecture.md). |
+| `driver_classes` | See above | Maps canonical driver names to their PHP class. You rarely need to change this unless you are registering a [custom driver](extending/custom-drivers.md). |
 
 The `driver_classes` map is separate from the `drivers` config blocks so that multiple config blocks (like `gmail` and `google-workspace`) can share the same underlying driver class.
 

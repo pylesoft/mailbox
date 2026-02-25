@@ -110,7 +110,7 @@ $folder = MonitoredFolder::create([
 ]);
 ```
 
-> **Tip** You can discover folder IDs at runtime using the API layer. See [Folders](usage/folders.md) for details on listing and creating folders through the provider API.
+> **Tip** You can discover folder IDs at runtime using the API layer. See [Folders](folders.md) for details on listing and creating folders through the provider API.
 
 ### Auto-Discovering Folders
 
@@ -339,4 +339,4 @@ $gmailResource = Mailbox::forMailbox($gmailMailbox);      // Uses gmail driver
 
 - [Eloquent Models](eloquent-models.md) -- field reference, casts, relationships, and scopes for all four models
 - [Configuration](configuration.md) -- driver settings, OAuth, caching, and environment variables
-- [Messages](usage/messages.md) -- querying, filtering, and interacting with messages through the API layer
+- [Messages](messages.md) -- querying, filtering, and interacting with messages through the API layer

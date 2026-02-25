@@ -527,7 +527,7 @@ Each `AttachmentFileDto` contains:
 | `disk` | `string` | The Laravel filesystem disk used |
 | `alreadyExisted` | `bool` | Whether the file already existed at the path |
 
-For more details, see [Attachments](usage/attachments.md).
+For more details, see [Attachments](attachments.md).
 
 ## Bulk Operations
 
@@ -662,6 +662,6 @@ This example demonstrates folder scoping, multi-field filtering, body retrieval,
 
 ## What's Next
 
-- [Attachments](usage/attachments.md) -- downloading, streaming, and working with individual attachments in depth
-- [Folders](usage/folders.md) -- listing, creating, and managing mail folders
-- [Delta Sync](usage/delta-sync.md) -- efficiently tracking changes with incremental synchronization
+- [Attachments](attachments.md) -- downloading, streaming, and working with individual attachments in depth
+- [Folders](folders.md) -- listing, creating, and managing mail folders
+- [Delta Sync](delta-sync.md) -- efficiently tracking changes with incremental synchronization

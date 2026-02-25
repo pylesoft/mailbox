@@ -217,5 +217,5 @@ foreach ($messages as $message) {
 ## What's Next
 
 - [Architecture](architecture.md) -- understand the Manager, Driver, Resource, and DTO layers
-- [Messages](usage/messages.md) -- advanced filtering, bulk operations, and field selection
-- [Delta Sync](usage/delta-sync.md) -- build robust background sync jobs with incremental tracking
+- [Messages](messages.md) -- advanced filtering, bulk operations, and field selection
+- [Delta Sync](delta-sync.md) -- build robust background sync jobs with incremental tracking

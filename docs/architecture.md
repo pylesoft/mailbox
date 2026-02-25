@@ -289,5 +289,5 @@ $delta = $mailbox->folder(WellKnownFolder::INBOX)->delta($savedToken);
 ## What's Next
 
 - [Quickstart](quickstart.md) -- a scenario-driven walkthrough building a real feature
-- [Messages](usage/messages.md) -- deep dive into querying, filtering, and managing messages
+- [Messages](messages.md) -- deep dive into querying, filtering, and managing messages
 - [Extending Mailbox](extending/custom-drivers.md) -- build your own driver for any provider

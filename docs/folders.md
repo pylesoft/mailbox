@@ -249,7 +249,7 @@ if ($result->fullSyncRequired) {
 ```
 
 > **Note**
-> Delta sync is a powerful tool for keeping a local cache in sync with the remote mailbox. For a full walkthrough of sync strategies, see [Delta Sync](usage/delta-sync.md).
+> Delta sync is a powerful tool for keeping a local cache in sync with the remote mailbox. For a full walkthrough of sync strategies, see [Delta Sync](delta-sync.md).
 
 ### Moving a Folder
 
@@ -310,5 +310,5 @@ $json = json_encode($folder);
 ## What's Next
 
 - [Messages](messages.md) -- querying, filtering, and acting on individual messages
-- [Delta Sync](usage/delta-sync.md) -- incremental synchronization strategies for keeping a local cache up to date
+- [Delta Sync](delta-sync.md) -- incremental synchronization strategies for keeping a local cache up to date
 - [Attachments](attachments.md) -- downloading, streaming, and deduplicating file attachments

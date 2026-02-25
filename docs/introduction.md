@@ -124,18 +124,17 @@ php artisan mailbox:health --driver=ms-graph
 
 ### Usage
 
-- [Messages](usage/messages.md) -- querying, reading, moving, and deleting messages
-- [Folders](usage/folders.md) -- listing, creating, nesting, and syncing folders
-- [Attachments](usage/attachments.md) -- downloading and managing file attachments
-- [Delta Sync](usage/delta-sync.md) -- incremental sync with delta tokens
-- [Mailboxes](usage/mailboxes.md) -- working with `MonitoredMailbox` models
-- [Connections](usage/connections.md) -- managing `MailboxConnection` models
+- [Messages](messages.md) -- querying, reading, moving, and deleting messages
+- [Folders](folders.md) -- listing, creating, nesting, and syncing folders
+- [Attachments](attachments.md) -- downloading and managing file attachments
+- [Delta Sync](delta-sync.md) -- incremental sync with delta tokens
+- [Connections and Mailboxes](connections-and-mailboxes.md) -- managing connections, mailboxes, and the Eloquent-to-API bridge
 
 ### Operations
 
 - [Events](events.md) -- connection tests, secret warnings, and custom listeners
 - [Logging](logging.md) -- dedicated log channel and level configuration
-- [Models and Traits](models-and-traits.md) -- Eloquent models shipped with the package
+- [Eloquent Models](eloquent-models.md) -- Eloquent models shipped with the package
 - [Rule Matching](rule-matching.md) -- classify messages by subject, sender, or custom rules
 
 ### Advanced

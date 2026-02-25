@@ -44,13 +44,13 @@ Five lines of code -- that is all it takes to pull the 25 most recent unread mes
 
 ## Documentation
 
-Full documentation lives in the [`docs/`](docs/index.md) directory. Here are the pages you will reach for most often:
+Full documentation lives in the [`docs/`](docs/introduction.md) directory. Here are the pages you will reach for most often:
 
 - [Installation](docs/installation.md) -- requirements, Composer setup, publishing config and migrations.
 - [Configuration](docs/configuration.md) -- every option in `config/mailbox.php`, explained.
 - [Quickstart](docs/quickstart.md) -- a working example in under two minutes.
-- [Messages](docs/usage/messages.md) -- querying, reading, moving, and deleting messages.
-- [Authentication](docs/authentication/index.md) -- provider-specific credential setup for MS Graph and Gmail.
+- [Messages](docs/messages.md) -- querying, reading, moving, and deleting messages.
+- [Authentication](docs/authentication/ms-graph.md) -- provider-specific credential setup for MS Graph and Gmail.
 
 ## Contributing
 

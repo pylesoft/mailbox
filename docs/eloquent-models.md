@@ -439,4 +439,4 @@ EmailInbox::forConnection($connection)->get();
 
 - [Connections and Mailboxes](connections-and-mailboxes.md) -- creating connections, registering mailboxes, and bridging to the API layer
 - [Rule Matching](rule-matching.md) -- evaluating messages against JSON rule trees
-- [Delta Sync](usage/delta-sync.md) -- incremental synchronization using folder delta tokens
+- [Delta Sync](delta-sync.md) -- incremental synchronization using folder delta tokens

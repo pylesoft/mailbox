@@ -323,4 +323,4 @@ Event::listen(DeltaTokenExpired::class, function (DeltaTokenExpired $event) {
 
 - [Artisan Commands](artisan-commands.md) -- the full reference for `mailbox:sync` and every other CLI command
 - [Events](events.md) -- all events dispatched by Mailbox, with payload details and listener examples
-- [Models & Traits](models-and-traits.md) -- the `MonitoredFolder`, `MonitoredMailbox`, and `MailboxConnection` models in depth
+- [Eloquent Models](eloquent-models.md) -- the `MonitoredFolder`, `MonitoredMailbox`, and `MailboxConnection` models in depth

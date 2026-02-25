@@ -248,6 +248,6 @@ foreach ($messages as $message) {
 
 ## What's Next
 
-- [Messages](usage/messages.md) -- querying, filtering, and reading message data
-- [Attachments](usage/attachments.md) -- downloading and inspecting attachments
+- [Messages](messages.md) -- querying, filtering, and reading message data
+- [Attachments](attachments.md) -- downloading and inspecting attachments
 - [Eloquent Models](eloquent-models.md) -- the database models that persist your connections, mailboxes, and folders
