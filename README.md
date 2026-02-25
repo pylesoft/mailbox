@@ -1,99 +1,73 @@
-# pylesoft/mailbox
+# Pyle Mailbox
 
-[![CI](https://img.shields.io/badge/ci-passing-brightgreen)](./.github/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-tracked-blue)](./tests)
-[![PHPStan](https://img.shields.io/badge/phpstan-level%208-success)](./phpstan.neon.dist)
+[![CI](https://img.shields.io/badge/ci-passing-brightgreen)](.github/workflows/ci.yml)
+[![PHPStan](https://img.shields.io/badge/phpstan-level%208-success)](phpstan.neon.dist)
 [![PHP](https://img.shields.io/badge/php-8.2%2B-blue)](https://www.php.net/)
 [![Laravel](https://img.shields.io/badge/laravel-12.x-red)](https://laravel.com)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Driver-based mailbox abstraction for Laravel applications.
+**A unified, driver-based mailbox SDK for Laravel.**
 
-## What This Package Provides
+## What Makes It Great
 
-- Unified mailbox API across providers via contracts.
-- Microsoft Graph driver for mailbox operations, sync, and attachment downloads.
-- Google Workspace (Gmail API) driver with service-account delegation, history sync, and OAuth routes.
-- Shared DTOs, enums, models, migrations, and traits.
-- Retry/rate-limiting + batching + delta sync primitives.
-- Rule-matching support (`MessageMatcher`) and filter metadata for custom UIs.
+- **One API, every provider** -- swap between Microsoft 365 and Google Workspace without changing a line of application code.
+- **Fluent query builder** -- filter messages by folder, read status, date range, and free-text search with an Eloquent-like syntax.
+- **Delta sync built in** -- track changes with provider-native delta tokens so you only process what is new.
+- **Typed DTOs everywhere** -- every message, folder, and attachment comes back as a strict, readonly data-transfer object.
+- **Retry, rate-limit, and batch** -- resilient HTTP handling with configurable backoff, concurrency locks, and queue-aware retry strategies.
+- **Rule matching engine** -- evaluate inbound messages against user-defined filter rules with `MessageMatcher` and expose filterable fields to your UI.
 
-## Installation
-
-```bash
-composer require pylesoft/mailbox
-php artisan vendor:publish --tag=mailbox-config
-php artisan vendor:publish --tag=mailbox-migrations
-php artisan migrate
-```
-
-## Quickstart
+## Quick Look
 
 ```php
-use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Enums\WellKnownFolder;
 
-$messages = Mailbox::mailbox('invoices@example.com')
+$invoices = Mailbox::mailbox('invoices@acme.com')
     ->messages()
     ->inFolder(WellKnownFolder::INBOX)
     ->where('isRead', false)
     ->take(25)
-    ->get();
-
-foreach ($messages as $message) {
-    // Your application processing logic
-}
+    ->get(); // Collection<int, MessageDto>
 ```
 
-## Commands
-
-- `php artisan mailbox:test-access`
-- `php artisan mailbox:health`
-- `php artisan mailbox:folders {email} --tree`
-- `php artisan mailbox:find-folder {email} {name}`
-- `php artisan mailbox:sync`
-- `php artisan mailbox:status`
+Five lines of code -- that is all it takes to pull the 25 most recent unread messages from any supported provider. Mailbox handles authentication, pagination, and provider-specific quirks behind the scenes so you can focus on what your application does with those messages.
 
 ## Supported Drivers
 
-| Driver | Status | Notes |
-| --- | --- | --- |
-| Microsoft 365 (Graph API) | ✅ Supported | Client credentials flow with mailbox scoping policies |
-| Google Workspace (Gmail API) | ✅ Supported | Canonical key `gmail`, alias key `google-workspace` |
+| Driver                       | Key        | Auth Model                                       |
+| ---------------------------- | ---------- | ------------------------------------------------ |
+| Microsoft 365 (Graph API)    | `ms-graph` | Client credentials with mailbox-scoping policies |
+| Google Workspace (Gmail API) | `gmail`    | Service-account delegation or user OAuth         |
+
+> **Tip** The alias key `google-workspace` resolves to the `gmail` driver, so you can use whichever name feels more natural in your configuration.
 
 ## Documentation
 
-- [Docs Index](docs/index.md)
-- [Installation](docs/installation.md)
-- [Configuration](docs/configuration.md)
-- [Quickstart](docs/quickstart.md)
-- [Usage](docs/usage/index.md)
-- [Authentication](docs/authentication/index.md)
-- [MS Graph Setup Guide](docs/authentication/ms-graph.md)
-- [MS Graph User OAuth Guide](docs/authentication/user-oauth.md)
-- [Gmail Setup Guide](docs/authentication/gmail.md)
-- [Events](docs/events.md)
-- [Migration Guide](docs/migration-guide.md)
-- [Extending](docs/extending/index.md)
+Full documentation lives in the [`docs/`](docs/introduction.md) directory. Here are the pages you will reach for most often:
 
-## Development
-
-```bash
-php82 /usr/local/bin/composer install
-php82 vendor/bin/pint --test
-php82 vendor/bin/pest
-php82 vendor/bin/phpstan analyse --no-progress
-php82 vendor/bin/testbench package:test --parallel --recreate-databases
-```
-
-CI runs on PHP `8.2`, `8.3`, `8.4` (latest deps) plus a PHP `8.2` prefer-lowest lane.
+- [Installation](docs/installation.md) -- requirements, Composer setup, publishing config and migrations.
+- [Configuration](docs/configuration.md) -- every option in `config/mailbox.php`, explained.
+- [Quickstart](docs/quickstart.md) -- a working example in under two minutes.
+- [Messages](docs/messages.md) -- querying, reading, moving, and deleting messages.
+- [Authentication](docs/authentication/ms-graph.md) -- provider-specific credential setup for MS Graph and Gmail.
 
 ## Contributing
 
 1. Create a feature branch from the latest default branch.
-2. Implement changes with tests and docs updates where applicable.
-3. Run `php82 vendor/bin/pest`, `php82 vendor/bin/phpstan analyse`, and `php82 vendor/bin/pint --test`.
-4. Open a PR with a clear summary, migration impact, and validation notes.
+2. Implement changes with tests and documentation updates where applicable.
+3. Run the full quality suite:
+
+```bash
+vendor/bin/pest
+vendor/bin/phpstan analyse
+vendor/bin/pint --test
+```
+
+4. Open a pull request with a clear summary, migration impact, and validation notes.
+
+CI runs on PHP 8.2, 8.3, and 8.4 with latest dependencies, plus a PHP 8.2 prefer-lowest lane.
 
 ## License
 
-MIT
+Mailbox is open-source software licensed under the [MIT license](LICENSE).
