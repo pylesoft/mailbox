@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Testing;
 
 use Pyle\Mailbox\Contracts\MailboxDriver;
+use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsRawClient;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
+use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Facades\Mailbox;
 use RuntimeException;
 
@@ -21,21 +24,42 @@ final class MailboxMock
     {
         self::ensureMockeryInstalled();
 
-        /** @var \Mockery\MockInterface&MailboxDriver&SupportsRawClient $driverMock */
-        $driverMock = \Mockery::mock(MailboxDriver::class, SupportsRawClient::class);
         /** @var \Mockery\MockInterface&GraphClient $rawClientMock */
         $rawClientMock = \Mockery::mock(GraphClient::class);
 
-        $driverMock->shouldReceive('raw')->andReturn($rawClientMock);
+        $driverInstance = new class($rawClientMock) implements MailboxDriver, SupportsRawClient
+        {
+            public function __construct(private readonly GraphClient $rawClient) {}
+
+            public function mailbox(string $emailAddress): MailboxResource
+            {
+                throw new RuntimeException('MailboxMock fake driver only supports raw() in tests.');
+            }
+
+            public function testConnection(?string $emailAddress = null): ConnectionTestResult
+            {
+                throw new RuntimeException('MailboxMock fake driver only supports raw() in tests.');
+            }
+
+            public function healthCheck(): HealthCheckResult
+            {
+                throw new RuntimeException('MailboxMock fake driver only supports raw() in tests.');
+            }
+
+            public function raw(): GraphClient
+            {
+                return $this->rawClient;
+            }
+        };
 
         Mailbox::shouldReceive('driver')
             ->with($driver)
-            ->andReturn($driverMock);
+            ->andReturn($driverInstance);
 
         if ($driver === (string) config('mailbox.default', 'ms-graph')) {
             Mailbox::shouldReceive('driver')
                 ->withNoArgs()
-                ->andReturn($driverMock);
+                ->andReturn($driverInstance);
         }
 
         return $rawClientMock;
