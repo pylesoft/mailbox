@@ -22,8 +22,10 @@ For server-only jobs without user interaction, keep using [MS Graph app-only aut
    - `openid`
    - `profile`
    - `email`
+   - `User.Read` (required for sign-in/profile APIs used by the OAuth flow)
    - `offline_access`
    - `Mail.ReadWrite` (or stricter delegated scope if your use case allows)
+   - `Mail.ReadWrite.Shared` (required if users must access shared mailboxes through delegated auth)
 6. Click **Grant admin consent** if your tenant requires it.
 
 ## 2. Configure Laravel

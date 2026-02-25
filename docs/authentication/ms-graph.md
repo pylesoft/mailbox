@@ -47,11 +47,24 @@ Use that value as:
 ## Step 3: Add API Permissions
 
 1. In the app, go to **API permissions**.
-2. Add Microsoft Graph **Application** permission:
-   - `Mail.ReadWrite`
+2. Add Microsoft Graph **Application** permissions:
+   - `Mail.ReadWrite` (required for mailbox read/write operations)
+   - `User.Read.All` (recommended for tenant-wide user/directory reads and legacy `/users` probes)
 3. Click **Grant admin consent**.
 
 Without admin consent, token requests may succeed but mailbox calls will fail.
+
+If you only call mailbox endpoints and do not need directory/user listing, you can run without `User.Read.All`.
+
+If you use one Entra app for both app-only and user OAuth flows, also add these **Delegated** permissions:
+
+- `openid`
+- `profile`
+- `email`
+- `User.Read`
+- `offline_access`
+- `Mail.ReadWrite`
+- `Mail.ReadWrite.Shared` (for shared mailbox delegated access)
 
 ## Step 4: Restrict Mailbox Access (Recommended)
 
