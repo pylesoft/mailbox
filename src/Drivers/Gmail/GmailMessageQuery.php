@@ -182,7 +182,7 @@ class GmailMessageQuery implements MessageQueryBuilder
             return;
         }
 
-        $this->batchModify(array_values($messageIds), ['UNREAD'], []);
+        $this->batchModify(array_values($messageIds), [], ['UNREAD']);
     }
 
     /** @param array<string> $messageIds */
@@ -192,7 +192,7 @@ class GmailMessageQuery implements MessageQueryBuilder
             return;
         }
 
-        $this->batchModify(array_values($messageIds), [], ['UNREAD']);
+        $this->batchModify(array_values($messageIds), ['UNREAD'], []);
     }
 
     /** @param array<string> $messageIds */
@@ -207,7 +207,7 @@ class GmailMessageQuery implements MessageQueryBuilder
         $this->batchModify(
             array_values($messageIds),
             [$destination],
-            $this->defaultMoveRemovals($destination),
+            $this->defaultMoveRemovals($destination, $this->folderId),
         );
     }
 
@@ -283,11 +283,15 @@ class GmailMessageQuery implements MessageQueryBuilder
     }
 
     /** @return array<string> */
-    private function defaultMoveRemovals(string $destination): array
+    private function defaultMoveRemovals(string $destination, ?string $sourceLabel = null): array
     {
         $candidateRemovals = ['INBOX', 'SPAM', 'TRASH', 'SENT', 'DRAFT'];
 
-        return array_values(array_filter($candidateRemovals, static fn (string $label): bool => $label !== $destination));
+        if (is_string($sourceLabel) && trim($sourceLabel) !== '') {
+            $candidateRemovals[] = trim($sourceLabel);
+        }
+
+        return array_values(array_unique(array_filter($candidateRemovals, static fn (string $label): bool => $label !== $destination)));
     }
 
     /** @param Collection<int, MessageDto> $messages

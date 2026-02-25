@@ -49,7 +49,7 @@ class GmailMessageResource implements MessageResource
     public function moveTo(string|WellKnownFolder $folder): MessageDto
     {
         $destination = GmailLabelResolver::resolve($folder);
-        $this->modifyLabels(add: [$destination], remove: $this->defaultMoveRemovals($destination));
+        $this->modifyLabels(add: [$destination], remove: $this->resolveMoveRemovals($destination));
 
         return $this->get();
     }
@@ -157,10 +157,35 @@ class GmailMessageResource implements MessageResource
     }
 
     /** @return array<string> */
-    private function defaultMoveRemovals(string $destination): array
+    private function resolveMoveRemovals(string $destination): array
+    {
+        return $this->defaultMoveRemovals($destination, $this->currentFolderLabel());
+    }
+
+    private function currentFolderLabel(): ?string
+    {
+        $payload = $this->client->get($this->messageEndpoint(), ['format' => 'minimal'], $this->mailbox);
+        $labelIds = array_values(array_filter((array) ($payload['labelIds'] ?? []), 'is_string'));
+        $priority = ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM', 'ALL_MAIL'];
+
+        foreach ($priority as $label) {
+            if (in_array($label, $labelIds, true)) {
+                return $label;
+            }
+        }
+
+        return $labelIds[0] ?? null;
+    }
+
+    /** @return array<string> */
+    private function defaultMoveRemovals(string $destination, ?string $sourceLabel = null): array
     {
         $candidateRemovals = ['INBOX', 'SPAM', 'TRASH', 'SENT', 'DRAFT'];
 
-        return array_values(array_filter($candidateRemovals, static fn (string $label): bool => $label !== $destination));
+        if (is_string($sourceLabel) && trim($sourceLabel) !== '') {
+            $candidateRemovals[] = trim($sourceLabel);
+        }
+
+        return array_values(array_unique(array_filter($candidateRemovals, static fn (string $label): bool => $label !== $destination)));
     }
 }

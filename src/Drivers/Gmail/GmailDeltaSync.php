@@ -13,6 +13,7 @@ use Pyle\Mailbox\Events\DeltaSyncCompleted;
 use Pyle\Mailbox\Events\DeltaSyncStarted;
 use Pyle\Mailbox\Events\DeltaTokenExpired;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 
 class GmailDeltaSync
 {
@@ -139,8 +140,8 @@ class GmailDeltaSync
                     ? (string) $response['nextPageToken']
                     : null;
             } while ($nextPageToken !== null);
-        } catch (ApiRequestException $e) {
-            if ($e->status === 404) {
+        } catch (ApiRequestException|ResourceNotFoundException $e) {
+            if ($e instanceof ResourceNotFoundException || $e->status === 404) {
                 Event::dispatch(new DeltaTokenExpired('gmail', $mailbox, $folderId));
 
                 return new DeltaResultDto(
@@ -208,8 +209,8 @@ class GmailDeltaSync
                         ['format' => 'full'],
                         $mailbox,
                     );
-                } catch (ApiRequestException $e) {
-                    if ($e->status === 404) {
+                } catch (ApiRequestException|ResourceNotFoundException $e) {
+                    if ($e instanceof ResourceNotFoundException || $e->status === 404) {
                         return null;
                     }
 

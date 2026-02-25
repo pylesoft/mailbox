@@ -89,3 +89,39 @@ it('throws when gmail copy raw payload is unavailable', function (): void {
 
     $resource->copyTo('Processed');
 })->throws(MailboxException::class);
+
+it('removes source custom label when moving a gmail message', function (): void {
+    $client = new class extends GmailClient
+    {
+        /** @var array<int, array<string, mixed>> */
+        public array $posts = [];
+
+        public function __construct() {}
+
+        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            if (($query['format'] ?? null) === 'minimal') {
+                return ['labelIds' => ['Finance/Inbox', 'UNREAD']];
+            }
+
+            return gmailMessageFixture([
+                'id' => 'msg-1',
+                'labelIds' => ['Finance/Processed'],
+            ]);
+        }
+
+        public function post(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            $this->posts[] = ['endpoint' => $endpoint, 'payload' => $payload];
+
+            return [];
+        }
+    };
+
+    $resource = new GmailMessageResource($client, 'invoices@example.com', 'msg-1');
+    $resource->moveTo('Finance/Processed');
+
+    expect($client->posts)->toHaveCount(1);
+    expect((array) $client->posts[0]['payload']['addLabelIds'])->toBe(['Finance/Processed']);
+    expect((array) $client->posts[0]['payload']['removeLabelIds'])->toContain('Finance/Inbox');
+});

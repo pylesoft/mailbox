@@ -97,7 +97,71 @@ it('sends bulk batch modify requests in chunks', function (): void {
     $query->markAsRead($ids);
 
     expect($client->batchPayloads)->toHaveCount(3);
+    expect((array) $client->batchPayloads[0]['addLabelIds'])->toBe([]);
+    expect((array) $client->batchPayloads[0]['removeLabelIds'])->toBe(['UNREAD']);
     expect((array) $client->batchPayloads[0]['ids'])->toHaveCount(1000);
     expect((array) $client->batchPayloads[1]['ids'])->toHaveCount(1000);
     expect((array) $client->batchPayloads[2]['ids'])->toHaveCount(205);
+});
+
+it('marks gmail messages unread by adding the unread label', function (): void {
+    $client = new class extends GmailClient
+    {
+        /** @var array<int, array<string, mixed>> */
+        public array $batchPayloads = [];
+
+        public function __construct() {}
+
+        public function post(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            if (str_contains($endpoint, '/batchModify')) {
+                $this->batchPayloads[] = $payload;
+            }
+
+            return [];
+        }
+
+        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            return ['messages' => []];
+        }
+    };
+
+    $query = new GmailMessageQuery($client, 'invoices@example.com');
+    $query->markAsUnread(['m-1']);
+
+    expect($client->batchPayloads)->toHaveCount(1);
+    expect((array) $client->batchPayloads[0]['addLabelIds'])->toBe(['UNREAD']);
+    expect((array) $client->batchPayloads[0]['removeLabelIds'])->toBe([]);
+});
+
+it('removes source custom label when moving queried gmail messages', function (): void {
+    $client = new class extends GmailClient
+    {
+        /** @var array<int, array<string, mixed>> */
+        public array $batchPayloads = [];
+
+        public function __construct() {}
+
+        public function post(string $endpoint, array $payload = [], ?string $mailbox = null): array
+        {
+            if (str_contains($endpoint, '/batchModify')) {
+                $this->batchPayloads[] = $payload;
+            }
+
+            return [];
+        }
+
+        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            return ['messages' => []];
+        }
+    };
+
+    $query = (new GmailMessageQuery($client, 'invoices@example.com'))->inFolder('Finance/Inbox');
+    $query->moveTo('Finance/Processed', ['m-1']);
+
+    expect($client->batchPayloads)->toHaveCount(1);
+    expect((array) $client->batchPayloads[0]['addLabelIds'])->toBe(['Finance/Processed']);
+    expect((array) $client->batchPayloads[0]['removeLabelIds'])->toContain('Finance/Inbox');
 });
