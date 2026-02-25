@@ -11,7 +11,7 @@
   "autoload-dev": {
     "psr-4": {
       "Pyle\\Mailbox\\Tests\\": "tests/",
-      "Workbench\\": "workbench/"
+      "Workbench\\App\\": "workbench/app/"
     },
     "files": [
       "tests/Helpers.php"
