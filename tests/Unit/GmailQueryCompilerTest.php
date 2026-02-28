@@ -30,3 +30,12 @@ it('marks unsupported clauses', function (): void {
 
     expect($compiler->hasUnsupportedClauses())->toBeTrue();
 });
+
+it('compiles whereAny clauses to grouped gmail OR filters', function (): void {
+    $compiler = (new GmailQueryCompiler)
+        ->whereAny('from.address', 'contains', ['vendor-a@example.com', 'vendor-b@example.com']);
+
+    expect($compiler->compile())
+        ->toBe('{from:"vendor-a@example.com" from:"vendor-b@example.com"}');
+    expect($compiler->hasUnsupportedClauses())->toBeFalse();
+});

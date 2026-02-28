@@ -12,7 +12,11 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 
 class MsGraphMessageQuery implements MessageQueryBuilder
 {
+    private const MAX_PAGES = 100;
+
     private string $folderId = 'inbox';
+
+    private bool $queryAllFolders = false;
 
     private ?string $searchQuery = null;
 
@@ -27,10 +31,14 @@ class MsGraphMessageQuery implements MessageQueryBuilder
 
     private ?int $pageSizeOverride = null;
 
-    /** @var array<int, array{field:string, operator:mixed, value:mixed}> */
+    /**
+     * @var array<int, array{type:'single', field:string, operator:mixed, value:mixed}|array{type:'any', field:string, operator:mixed, values:array<int, mixed>}>
+     */
     private array $filters = [];
 
     private ODataFilterCompiler $compiler;
+
+    private int $maxPages;
 
     public function __construct(
         private readonly GraphClient $client,
@@ -41,11 +49,20 @@ class MsGraphMessageQuery implements MessageQueryBuilder
         $defaultSelect = (array) config('mailbox.default_select', ['id', 'subject']);
         $this->selectFields = $defaultSelect;
         $this->compiler = new ODataFilterCompiler;
+        $this->maxPages = max(1, (int) config('mailbox.max_query_pages', self::MAX_PAGES));
     }
 
     public function inFolder(string|WellKnownFolder $folder): static
     {
         $this->folderId = FolderIdResolver::resolve($folder);
+        $this->queryAllFolders = false;
+
+        return $this;
+    }
+
+    public function allFolders(): static
+    {
+        $this->queryAllFolders = true;
 
         return $this;
     }
@@ -54,11 +71,34 @@ class MsGraphMessageQuery implements MessageQueryBuilder
     {
         $normalizedField = $field instanceof FilterableField ? $field->value : (string) $field;
         $this->filters[] = [
+            'type' => 'single',
             'field' => $normalizedField,
             'operator' => $operator,
             'value' => $value,
         ];
         $this->compiler->where($field, $operator, $value);
+
+        return $this;
+    }
+
+    /** @param array<int, mixed> $values */
+    public function whereAny(FilterableField|string $field, mixed $operator, array $values): static
+    {
+        if ($values === []) {
+            return $this;
+        }
+
+        $normalizedField = $field instanceof FilterableField ? $field->value : (string) $field;
+        $normalizedValues = array_values($values);
+
+        $this->filters[] = [
+            'type' => 'any',
+            'field' => $normalizedField,
+            'operator' => $operator,
+            'values' => $normalizedValues,
+        ];
+
+        $this->compiler->whereAny($field, $operator, $normalizedValues);
 
         return $this;
     }
@@ -123,10 +163,28 @@ class MsGraphMessageQuery implements MessageQueryBuilder
             }
         }
 
-        $endpoint = sprintf('users/%s/mailFolders/%s/messages', rawurlencode($this->mailbox), rawurlencode($this->folderId));
+        $endpoint = $this->queryAllFolders
+            ? sprintf('users/%s/messages', rawurlencode($this->mailbox))
+            : sprintf('users/%s/mailFolders/%s/messages', rawurlencode($this->mailbox), rawurlencode($this->folderId));
+
         $collected = collect();
+        $seenPageSignatures = [];
+        $seenMessageIds = [];
+        $pageCount = 0;
 
         do {
+            $pageSignature = $endpoint.'|'.http_build_query($query);
+            if (isset($seenPageSignatures[$pageSignature])) {
+                break;
+            }
+
+            if ($pageCount >= $this->maxPages) {
+                break;
+            }
+
+            $seenPageSignatures[$pageSignature] = true;
+            $pageCount++;
+
             $response = $this->client->get($endpoint, $query, $this->mailbox);
 
             $messages = collect((array) ($response['value'] ?? []))
@@ -135,6 +193,22 @@ class MsGraphMessageQuery implements MessageQueryBuilder
             if ($applyClientFiltersPerPage) {
                 $messages = $this->applyClientFilters($messages);
             }
+
+            $messages = $messages
+                ->filter(function (MessageDto $message) use (&$seenMessageIds): bool {
+                    if ($message->id === '') {
+                        return true;
+                    }
+
+                    if (isset($seenMessageIds[$message->id])) {
+                        return false;
+                    }
+
+                    $seenMessageIds[$message->id] = true;
+
+                    return true;
+                })
+                ->values();
 
             $collected = $collected->concat($messages);
 
@@ -203,14 +277,30 @@ class MsGraphMessageQuery implements MessageQueryBuilder
         $this->batch->send($requests);
     }
 
-    /** @param Collection<int, MessageDto> $messages
+    /**
+     * @param  Collection<int, MessageDto>  $messages
      * @return Collection<int, MessageDto>
      */
     private function applyClientFilters(Collection $messages): Collection
     {
         return $messages->filter(function (MessageDto $message): bool {
             foreach ($this->filters as $filter) {
-                $field = $filter['field'];
+                if ($filter['type'] === 'any') {
+                    $matchesAny = false;
+                    foreach ($filter['values'] as $expectedValue) {
+                        if ($this->compare((string) $filter['operator'], $this->resolveActualValue($message, $filter['field']), $expectedValue)) {
+                            $matchesAny = true;
+                            break;
+                        }
+                    }
+
+                    if (! $matchesAny) {
+                        return false;
+                    }
+
+                    continue;
+                }
+
                 $operator = $filter['operator'];
                 $value = $filter['value'];
 
@@ -219,23 +309,26 @@ class MsGraphMessageQuery implements MessageQueryBuilder
                     $operator = '=';
                 }
 
-                $actual = match ($field) {
-                    'subject' => $message->subject,
-                    'isRead' => $message->isRead,
-                    'isDraft' => $message->isDraft,
-                    'hasAttachments' => $message->hasAttachments,
-                    'importance' => $message->importance->value,
-                    'receivedAt' => $message->receivedAt?->toIso8601String(),
-                    default => $message->raw[$field] ?? null,
-                };
-
-                if (! $this->compare((string) $operator, $actual, $value)) {
+                if (! $this->compare((string) $operator, $this->resolveActualValue($message, $filter['field']), $value)) {
                     return false;
                 }
             }
 
             return true;
         })->values();
+    }
+
+    private function resolveActualValue(MessageDto $message, string $field): mixed
+    {
+        return match ($field) {
+            'subject' => $message->subject,
+            'isRead' => $message->isRead,
+            'isDraft' => $message->isDraft,
+            'hasAttachments' => $message->hasAttachments,
+            'importance' => $message->importance->value,
+            'receivedAt' => $message->receivedAt?->toIso8601String(),
+            default => $message->raw[$field] ?? null,
+        };
     }
 
     private function compare(string $operator, mixed $actual, mixed $expected): bool

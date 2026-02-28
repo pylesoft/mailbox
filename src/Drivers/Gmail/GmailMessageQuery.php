@@ -12,7 +12,11 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 
 class GmailMessageQuery implements MessageQueryBuilder
 {
+    private const MAX_PAGES = 100;
+
     private string $folderId = 'INBOX';
+
+    private bool $queryAllFolders = false;
 
     private ?string $searchQuery = null;
 
@@ -24,21 +28,34 @@ class GmailMessageQuery implements MessageQueryBuilder
 
     private ?int $pageSizeOverride = null;
 
-    /** @var array<int, array{field:string, operator:mixed, value:mixed}> */
+    /**
+     * @var array<int, array{type:'single', field:string, operator:mixed, value:mixed}|array{type:'any', field:string, operator:mixed, values:array<int, mixed>}>
+     */
     private array $filters = [];
 
     private GmailQueryCompiler $compiler;
+
+    private int $maxPages;
 
     public function __construct(
         private readonly GmailClient $client,
         private readonly string $mailbox,
     ) {
         $this->compiler = new GmailQueryCompiler;
+        $this->maxPages = max(1, (int) config('mailbox.max_query_pages', self::MAX_PAGES));
     }
 
     public function inFolder(string|WellKnownFolder $folder): static
     {
         $this->folderId = GmailLabelResolver::resolve($folder);
+        $this->queryAllFolders = false;
+
+        return $this;
+    }
+
+    public function allFolders(): static
+    {
+        $this->queryAllFolders = true;
 
         return $this;
     }
@@ -48,12 +65,35 @@ class GmailMessageQuery implements MessageQueryBuilder
         $normalizedField = $field instanceof FilterableField ? $field->value : (string) $field;
 
         $this->filters[] = [
+            'type' => 'single',
             'field' => $normalizedField,
             'operator' => $operator,
             'value' => $value,
         ];
 
         $this->compiler->where($field, $operator, $value);
+
+        return $this;
+    }
+
+    /** @param array<int, mixed> $values */
+    public function whereAny(FilterableField|string $field, mixed $operator, array $values): static
+    {
+        if ($values === []) {
+            return $this;
+        }
+
+        $normalizedField = $field instanceof FilterableField ? $field->value : (string) $field;
+        $normalizedValues = array_values($values);
+
+        $this->filters[] = [
+            'type' => 'any',
+            'field' => $normalizedField,
+            'operator' => $operator,
+            'values' => $normalizedValues,
+        ];
+
+        $this->compiler->whereAny($field, $operator, $normalizedValues);
 
         return $this;
     }
@@ -102,8 +142,11 @@ class GmailMessageQuery implements MessageQueryBuilder
 
         $query = [
             'maxResults' => $this->limit !== null ? min($this->limit, $pageSize) : $pageSize,
-            'labelIds' => [$this->folderId],
         ];
+
+        if (! $this->queryAllFolders) {
+            $query['labelIds'] = [$this->folderId];
+        }
 
         $q = trim(implode(' ', array_filter([$search, $serverFilter], static fn (?string $part): bool => is_string($part) && $part !== '')));
 
@@ -114,17 +157,34 @@ class GmailMessageQuery implements MessageQueryBuilder
         $endpoint = sprintf('users/%s/messages', rawurlencode($this->mailbox));
         $collected = collect();
         $nextPageToken = null;
+        $seenPageTokens = [];
+        $seenMessageIds = [];
+        $pageCount = 0;
 
         do {
+            $tokenSignature = $nextPageToken ?? '__first__';
+            if (isset($seenPageTokens[$tokenSignature])) {
+                break;
+            }
+
+            if ($pageCount >= $this->maxPages) {
+                break;
+            }
+
+            $seenPageTokens[$tokenSignature] = true;
+            $pageCount++;
+
             if ($nextPageToken !== null) {
                 $query['pageToken'] = $nextPageToken;
+            } else {
+                unset($query['pageToken']);
             }
 
             $response = $this->client->get($endpoint, $query, $this->mailbox);
             $summaries = (array) ($response['messages'] ?? []);
 
             $messages = collect($summaries)
-                ->map(function (mixed $summary): ?MessageDto {
+                ->map(function (mixed $summary) use (&$seenMessageIds): ?MessageDto {
                     if (! is_array($summary)) {
                         return null;
                     }
@@ -134,6 +194,12 @@ class GmailMessageQuery implements MessageQueryBuilder
                     if ($id === '') {
                         return null;
                     }
+
+                    if (isset($seenMessageIds[$id])) {
+                        return null;
+                    }
+
+                    $seenMessageIds[$id] = true;
 
                     $payload = $this->client->get(
                         sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($id)),
@@ -211,14 +277,30 @@ class GmailMessageQuery implements MessageQueryBuilder
         );
     }
 
-    /** @param Collection<int, MessageDto> $messages
+    /**
+     * @param  Collection<int, MessageDto>  $messages
      * @return Collection<int, MessageDto>
      */
     private function applyClientFilters(Collection $messages): Collection
     {
         return $messages->filter(function (MessageDto $message): bool {
             foreach ($this->filters as $filter) {
-                $field = $filter['field'];
+                if ($filter['type'] === 'any') {
+                    $matchesAny = false;
+                    foreach ($filter['values'] as $expectedValue) {
+                        if ($this->compare((string) $filter['operator'], $this->resolveActualValue($message, $filter['field']), $expectedValue)) {
+                            $matchesAny = true;
+                            break;
+                        }
+                    }
+
+                    if (! $matchesAny) {
+                        return false;
+                    }
+
+                    continue;
+                }
+
                 $operator = $filter['operator'];
                 $value = $filter['value'];
 
@@ -227,28 +309,31 @@ class GmailMessageQuery implements MessageQueryBuilder
                     $operator = '=';
                 }
 
-                $actual = match ($field) {
-                    'subject' => $message->subject,
-                    'from.address' => $message->from?->address,
-                    'from.name' => $message->from?->name,
-                    'sender.address' => $message->sender?->address,
-                    'toRecipients.address' => collect($message->toRecipients)->pluck('address')->implode(','),
-                    'ccRecipients.address' => collect($message->ccRecipients)->pluck('address')->implode(','),
-                    'receivedAt' => $message->receivedAt?->toIso8601String(),
-                    'isRead' => $message->isRead,
-                    'isDraft' => $message->isDraft,
-                    'hasAttachments' => $message->hasAttachments,
-                    'importance' => $message->importance->value,
-                    default => $message->raw[$field] ?? null,
-                };
-
-                if (! $this->compare((string) $operator, $actual, $value)) {
+                if (! $this->compare((string) $operator, $this->resolveActualValue($message, $filter['field']), $value)) {
                     return false;
                 }
             }
 
             return true;
         })->values();
+    }
+
+    private function resolveActualValue(MessageDto $message, string $field): mixed
+    {
+        return match ($field) {
+            'subject' => $message->subject,
+            'from.address' => $message->from?->address,
+            'from.name' => $message->from?->name,
+            'sender.address' => $message->sender?->address,
+            'toRecipients.address' => collect($message->toRecipients)->pluck('address')->implode(','),
+            'ccRecipients.address' => collect($message->ccRecipients)->pluck('address')->implode(','),
+            'receivedAt' => $message->receivedAt?->toIso8601String(),
+            'isRead' => $message->isRead,
+            'isDraft' => $message->isDraft,
+            'hasAttachments' => $message->hasAttachments,
+            'importance' => $message->importance->value,
+            default => $message->raw[$field] ?? null,
+        };
     }
 
     private function compare(string $operator, mixed $actual, mixed $expected): bool

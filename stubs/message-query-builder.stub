@@ -19,9 +19,21 @@ class {{ class }}MessageQuery implements MessageQueryBuilder
         return $this;
     }
 
+    public function allFolders(): static
+    {
+        // TODO: Remove folder scoping and query across all folders.
+        return $this;
+    }
+
     public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static
     {
         // TODO: Add provider-specific filter expression state.
+        return $this;
+    }
+
+    public function whereAny(FilterableField|string $field, mixed $operator, array $values): static
+    {
+        // TODO: Add OR-group filtering state for repeated field comparisons.
         return $this;
     }
 

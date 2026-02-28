@@ -152,7 +152,17 @@ class FakeMessageQueryBuilder implements MessageQueryBuilder
         return $this;
     }
 
+    public function allFolders(): static
+    {
+        return $this;
+    }
+
     public function where(\Pyle\Mailbox\Enums\FilterableField|string $field, mixed $operator, mixed $value = null): static
+    {
+        return $this;
+    }
+
+    public function whereAny(\Pyle\Mailbox\Enums\FilterableField|string $field, mixed $operator, array $values): static
     {
         return $this;
     }
