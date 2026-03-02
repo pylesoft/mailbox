@@ -59,6 +59,46 @@ it('applies client-side filters when using search with where clauses', function 
     expect($result->first()?->id)->toBe('1');
 });
 
+it('applies internetMessageId and from.address client-side filters during search', function (): void {
+    $client = new class extends GraphClient
+    {
+        public function __construct() {}
+
+        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            expect($query)->toHaveKey('$search');
+
+            return [
+                'value' => [
+                    [
+                        'id' => '1',
+                        'subject' => 'Invoice 1001',
+                        'internetMessageId' => '<id-1@example.com>',
+                        'from' => ['emailAddress' => ['address' => 'sender-a@example.com']],
+                    ],
+                    [
+                        'id' => '2',
+                        'subject' => 'Invoice 1002',
+                        'internetMessageId' => '<id-2@example.com>',
+                        'from' => ['emailAddress' => ['address' => 'sender-b@example.com']],
+                    ],
+                ],
+            ];
+        }
+    };
+
+    $query = new MsGraphMessageQuery($client, new BatchRequest($client), 'invoices@example.com');
+
+    $result = $query
+        ->search('invoice')
+        ->where('internetMessageId', 'eq', '<id-1@example.com>')
+        ->where('from.address', 'contains', 'sender-a')
+        ->get();
+
+    expect($result)->toHaveCount(1);
+    expect($result->first()?->id)->toBe('1');
+});
+
 it('sends bulk actions in chunked batch requests', function (): void {
     $client = new class extends GraphClient
     {

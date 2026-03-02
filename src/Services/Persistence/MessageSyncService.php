@@ -69,6 +69,8 @@ class MessageSyncService
         $mailboxResource = MailboxFacade::forMailbox($mailbox);
         $matcher = $this->buildMatcher($savedFilters);
         $requiresAttachmentMetadata = $this->requiresAttachmentMetadata($savedFilters);
+        $persistAttachments = ! array_key_exists('include_attachments', $options)
+            || (bool) $options['include_attachments'];
         $messages = $this->fetchMessages($mailboxResource, $filters)
             ->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)
             ->values();
@@ -94,6 +96,7 @@ class MessageSyncService
                 $message,
                 $messageResource,
                 $requiresAttachmentMetadata ? $attachments : null,
+                $persistAttachments,
             ));
         }
 
@@ -147,37 +150,37 @@ class MessageSyncService
             if ($messageId !== '' && ! str_starts_with($messageId, '<')) {
                 $messageId = "<{$messageId}>";
             }
-            $query->where('internetMessageId', MatchOperator::EQUALS, $messageId);
+            $query->where('internetMessageId', 'eq', $messageId);
         }
 
         $fromAddresses = $this->normalizeStringArray($filters['from_email_addresses'] ?? null);
         if ($fromAddresses !== []) {
             if (count($fromAddresses) === 1) {
-                $query->where(FilterableField::FROM_ADDRESS, MatchOperator::EQUALS, $fromAddresses[0]);
+                $query->where(FilterableField::FROM_ADDRESS, 'eq', $fromAddresses[0]);
             } else {
-                $query->whereAny(FilterableField::FROM_ADDRESS, MatchOperator::EQUALS, $fromAddresses);
+                $query->whereAny(FilterableField::FROM_ADDRESS, 'eq', $fromAddresses);
             }
         }
 
         $subjectContains = $this->normalizeStringArray($filters['subject_contains'] ?? null);
         if ($subjectContains !== []) {
             if (count($subjectContains) === 1) {
-                $query->where(FilterableField::SUBJECT, MatchOperator::CONTAINS, $subjectContains[0]);
+                $query->where(FilterableField::SUBJECT, 'contains', $subjectContains[0]);
             } else {
-                $query->whereAny(FilterableField::SUBJECT, MatchOperator::CONTAINS, $subjectContains);
+                $query->whereAny(FilterableField::SUBJECT, 'contains', $subjectContains);
             }
         }
 
         if (isset($filters['has_attachments'])) {
-            $query->where(FilterableField::HAS_ATTACHMENTS, MatchOperator::EQUALS, (bool) $filters['has_attachments']);
+            $query->where(FilterableField::HAS_ATTACHMENTS, 'eq', (bool) $filters['has_attachments']);
         }
 
         if (! empty($filters['importance'])) {
-            $query->where(FilterableField::IMPORTANCE, MatchOperator::EQUALS, (string) $filters['importance']);
+            $query->where(FilterableField::IMPORTANCE, 'eq', (string) $filters['importance']);
         }
 
         if (isset($filters['is_read'])) {
-            $query->where(FilterableField::IS_READ, MatchOperator::EQUALS, (bool) $filters['is_read']);
+            $query->where(FilterableField::IS_READ, 'eq', (bool) $filters['is_read']);
         }
 
         $pageSize = isset($filters['page_size']) ? (int) $filters['page_size'] : 0;
@@ -331,6 +334,7 @@ class MessageSyncService
         MessageDto $message,
         ?MessageResource $resource = null,
         ?Collection $prefetchedAttachments = null,
+        bool $persistAttachments = true,
     ): MailboxMessage {
         $mailboxMessage = MailboxMessage::query()->updateOrCreate(
             [
@@ -360,14 +364,26 @@ class MessageSyncService
             ],
         );
 
+        if (! $persistAttachments) {
+            return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;
+        }
+
+        if (! $message->hasAttachments) {
+            $mailboxMessage->attachments()->delete();
+
+            return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;
+        }
+
         $resource ??= $mailboxResource->message($message->id);
         $attachments = $prefetchedAttachments ?? $resource->attachments();
+        $persistedAttachmentIds = [];
 
         foreach ($attachments as $attachment) {
             if ($attachment->id === '') {
                 continue;
             }
 
+            $persistedAttachmentIds[] = $attachment->id;
             $content = (string) $resource->attachment($attachment->id)->stream();
 
             $mailboxMessage->attachments()->updateOrCreate(
@@ -384,6 +400,14 @@ class MessageSyncService
                     'content_bytes' => base64_encode($content),
                 ],
             );
+        }
+
+        if ($persistedAttachmentIds === []) {
+            $mailboxMessage->attachments()->delete();
+        } else {
+            $mailboxMessage->attachments()
+                ->whereNotIn('provider_attachment_id', array_values(array_unique($persistedAttachmentIds)))
+                ->delete();
         }
 
         return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;

@@ -27,7 +27,9 @@ class MailboxServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        if ($this->shouldLoadPackageMigrations()) {
+            $this->loadMigrationsFrom($this->packageMigrationPath());
+        }
 
         if (config('logging.channels.mailbox') === null) {
             config()->set('logging.channels.mailbox', [
@@ -66,5 +68,44 @@ class MailboxServiceProvider extends ServiceProvider
             SyncCommand::class,
             StatusCommand::class,
         ]);
+    }
+
+    protected function shouldLoadPackageMigrations(): bool
+    {
+        $packageMigrations = glob($this->packageMigrationPath().'/*.php') ?: [];
+        $publishedMigrations = glob($this->applicationMigrationPath().'/*.php') ?: [];
+
+        if ($packageMigrations === [] || $publishedMigrations === []) {
+            return true;
+        }
+
+        $publishedByName = [];
+
+        foreach ($publishedMigrations as $path) {
+            $publishedByName[$this->normalizeMigrationFilename($path)] = true;
+        }
+
+        foreach ($packageMigrations as $path) {
+            if (isset($publishedByName[$this->normalizeMigrationFilename($path)])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    protected function packageMigrationPath(): string
+    {
+        return __DIR__.'/../database/migrations';
+    }
+
+    protected function applicationMigrationPath(): string
+    {
+        return database_path('migrations');
+    }
+
+    private function normalizeMigrationFilename(string $path): string
+    {
+        return (string) preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', basename($path));
     }
 }

@@ -129,6 +129,94 @@ it('syncs and upserts mailbox messages and attachments using canonical keys', fu
     expect($mailbox->fresh()?->last_synced_at)->not->toBeNull();
 });
 
+it('uses provider operator tokens when applying sync filters', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Filter Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'filters@example.com',
+        'display_name' => 'Filter Mailbox',
+        'is_active' => true,
+    ]);
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'filters' => [
+            'internet_message_id' => 'abc@example.com',
+            'from_email_addresses' => ['sender-a@example.com', 'sender-b@example.com'],
+            'subject_contains' => ['Invoice'],
+            'has_attachments' => true,
+            'importance' => 'high',
+            'is_read' => false,
+            'limit' => 10,
+        ],
+    ]);
+
+    expect(collect($query->whereCalls)->every(fn (array $call): bool => is_string($call['operator'])))->toBeTrue();
+    expect(collect($query->whereAnyCalls)->every(fn (array $call): bool => is_string($call['operator'])))->toBeTrue();
+
+    expect($query->whereCalls)->toContain(['field' => 'internetMessageId', 'operator' => 'eq', 'value' => '<abc@example.com>']);
+    expect($query->whereAnyCalls)->toContain(['field' => 'from.address', 'operator' => 'eq', 'values' => ['sender-a@example.com', 'sender-b@example.com']]);
+    expect($query->whereCalls)->toContain(['field' => 'subject', 'operator' => 'contains', 'value' => 'Invoice']);
+    expect($query->whereCalls)->toContain(['field' => 'hasAttachments', 'operator' => 'eq', 'value' => true]);
+    expect($query->whereCalls)->toContain(['field' => 'importance', 'operator' => 'eq', 'value' => 'high']);
+    expect($query->whereCalls)->toContain(['field' => 'isRead', 'operator' => 'eq', 'value' => false]);
+});
+
+it('does not resolve message resources for messages without attachments', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'No Attachment Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'no-attachments@example.com',
+        'display_name' => 'No Attachments Mailbox',
+        'is_active' => true,
+    ]);
+
+    $message = testMailboxMessageDto(
+        id: 'provider-message-no-attachments',
+        internetMessageId: '<internet-no-attachments@example.com>',
+        parentFolderId: 'inbox',
+        hasAttachments: false,
+    );
+
+    $resource = new TrackingMailboxResource(
+        query: new TestMessageQueryBuilder(collect([$message])),
+        messages: [],
+    );
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $persisted = $service->syncMailbox($mailbox, [
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($persisted)->toHaveCount(1);
+    expect($resource->messageCalls)->toBe(0);
+});
+
 it('moves a mailbox message and updates provider id and folder metadata', function (): void {
     $connection = MailboxConnection::query()->create([
         'name' => 'Move Connection',
@@ -186,7 +274,7 @@ it('moves a mailbox message and updates provider id and folder metadata', functi
         ->and($moved->parent_folder_id)->toBe('archive-folder');
 });
 
-function testMailboxMessageDto(string $id, ?string $internetMessageId, ?string $parentFolderId): MessageDto
+function testMailboxMessageDto(string $id, ?string $internetMessageId, ?string $parentFolderId, bool $hasAttachments = true): MessageDto
 {
     return new MessageDto(
         id: $id,
@@ -202,7 +290,7 @@ function testMailboxMessageDto(string $id, ?string $internetMessageId, ?string $
         sentAt: CarbonImmutable::parse('2026-03-01 10:59:00', 'UTC'),
         isRead: false,
         isDraft: false,
-        hasAttachments: true,
+        hasAttachments: $hasAttachments,
         importance: Importance::NORMAL,
         conversationId: 'conversation-1',
         internetMessageId: $internetMessageId,
@@ -228,6 +316,47 @@ final class TestMailboxResource implements MailboxResource
 
     public function message(string $messageId): MessageResource
     {
+        $resource = $this->messages[$messageId] ?? null;
+
+        if (! $resource instanceof MessageResource) {
+            throw new RuntimeException('Unknown message id: '.$messageId);
+        }
+
+        return $resource;
+    }
+
+    public function folders(): FolderQueryBuilder
+    {
+        throw new RuntimeException('Not used in this test.');
+    }
+
+    public function folder(string|WellKnownFolder $folderId): FolderResource
+    {
+        throw new RuntimeException('Not used in this test.');
+    }
+}
+
+final class TrackingMailboxResource implements MailboxResource
+{
+    public int $messageCalls = 0;
+
+    /**
+     * @param  array<string, MessageResource>  $messages
+     */
+    public function __construct(
+        private readonly MessageQueryBuilder $query,
+        private readonly array $messages,
+    ) {}
+
+    public function messages(): MessageQueryBuilder
+    {
+        return $this->query;
+    }
+
+    public function message(string $messageId): MessageResource
+    {
+        $this->messageCalls++;
+
         $resource = $this->messages[$messageId] ?? null;
 
         if (! $resource instanceof MessageResource) {
@@ -313,6 +442,93 @@ final class TestMessageQueryBuilder implements MessageQueryBuilder
     public function first(): ?MessageDto
     {
         return $this->messages->first();
+    }
+
+    public function markAsRead(array $messageIds): void {}
+
+    public function markAsUnread(array $messageIds): void {}
+
+    public function moveTo(string|WellKnownFolder $folder, array $messageIds): void {}
+}
+
+final class RecordingMessageQueryBuilder implements MessageQueryBuilder
+{
+    /** @var array<int, array{field:string, operator:mixed, value:mixed}> */
+    public array $whereCalls = [];
+
+    /** @var array<int, array{field:string, operator:mixed, values:array<int, mixed>}> */
+    public array $whereAnyCalls = [];
+
+    public function inFolder(string|WellKnownFolder $folder): static
+    {
+        return $this;
+    }
+
+    public function allFolders(): static
+    {
+        return $this;
+    }
+
+    public function where(\Pyle\Mailbox\Enums\FilterableField|string $field, mixed $operator, mixed $value = null): static
+    {
+        $this->whereCalls[] = [
+            'field' => $field instanceof \Pyle\Mailbox\Enums\FilterableField ? $field->value : (string) $field,
+            'operator' => $operator,
+            'value' => $value,
+        ];
+
+        return $this;
+    }
+
+    public function whereAny(\Pyle\Mailbox\Enums\FilterableField|string $field, mixed $operator, array $values): static
+    {
+        $this->whereAnyCalls[] = [
+            'field' => $field instanceof \Pyle\Mailbox\Enums\FilterableField ? $field->value : (string) $field,
+            'operator' => $operator,
+            'values' => $values,
+        ];
+
+        return $this;
+    }
+
+    public function search(string $query): static
+    {
+        return $this;
+    }
+
+    public function select(array $fields): static
+    {
+        return $this;
+    }
+
+    public function orderBy(string $field, string $direction = 'desc'): static
+    {
+        return $this;
+    }
+
+    public function take(int $limit): static
+    {
+        return $this;
+    }
+
+    public function pageSize(int $size): static
+    {
+        return $this;
+    }
+
+    public function get(): Collection
+    {
+        return collect();
+    }
+
+    public function count(): int
+    {
+        return 0;
+    }
+
+    public function first(): ?MessageDto
+    {
+        return null;
     }
 
     public function markAsRead(array $messageIds): void {}

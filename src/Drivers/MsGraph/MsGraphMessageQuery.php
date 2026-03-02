@@ -322,11 +322,30 @@ class MsGraphMessageQuery implements MessageQueryBuilder
     {
         return match ($field) {
             'subject' => $message->subject,
+            'from.address' => $message->from?->address,
+            'from.name' => $message->from?->name,
+            'sender.address' => $message->sender?->address,
+            'sender.name' => $message->sender?->name,
+            'toRecipients.address', 'to.address' => collect($message->toRecipients)->pluck('address')->implode(','),
+            'toRecipients.name', 'to.name' => collect($message->toRecipients)->pluck('name')->implode(','),
+            'ccRecipients.address', 'cc.address' => collect($message->ccRecipients)->pluck('address')->implode(','),
+            'ccRecipients.name', 'cc.name' => collect($message->ccRecipients)->pluck('name')->implode(','),
+            'bccRecipients.address', 'bcc.address' => collect($message->bccRecipients)->pluck('address')->implode(','),
+            'bccRecipients.name', 'bcc.name' => collect($message->bccRecipients)->pluck('name')->implode(','),
+            'replyTo.address' => collect((array) ($message->raw['replyTo'] ?? []))
+                ->map(static fn (mixed $recipient): ?string => is_array($recipient) ? ($recipient['emailAddress']['address'] ?? null) : null)
+                ->filter()
+                ->implode(','),
+            'replyTo.name' => collect((array) ($message->raw['replyTo'] ?? []))
+                ->map(static fn (mixed $recipient): ?string => is_array($recipient) ? ($recipient['emailAddress']['name'] ?? null) : null)
+                ->filter()
+                ->implode(','),
             'isRead' => $message->isRead,
             'isDraft' => $message->isDraft,
             'hasAttachments' => $message->hasAttachments,
             'importance' => $message->importance->value,
             'receivedAt' => $message->receivedAt?->toIso8601String(),
+            'internetMessageId' => $message->internetMessageId,
             default => $message->raw[$field] ?? null,
         };
     }

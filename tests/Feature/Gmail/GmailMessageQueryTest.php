@@ -68,6 +68,48 @@ it('combines search and where into gmail q syntax', function (): void {
     expect((string) ($client->queries[0]['q'] ?? ''))->toContain('is:unread');
 });
 
+it('applies internetMessageId filter client-side when search is used', function (): void {
+    $client = new class extends GmailClient
+    {
+        public function __construct() {}
+
+        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            if (str_ends_with($endpoint, '/messages')) {
+                return [
+                    'messages' => [
+                        ['id' => 'm-1'],
+                        ['id' => 'm-2'],
+                    ],
+                ];
+            }
+
+            $id = basename($endpoint);
+
+            return gmailMessageFixture([
+                'id' => $id,
+                'payload' => [
+                    'headers' => [
+                        ['name' => 'Subject', 'value' => 'Invoice '.$id],
+                        ['name' => 'Message-ID', 'value' => $id === 'm-1' ? '<m-1@example.com>' : '<m-2@example.com>'],
+                    ],
+                    'parts' => [],
+                ],
+                'labelIds' => ['INBOX'],
+            ]);
+        }
+    };
+
+    $query = new GmailMessageQuery($client, 'invoices@example.com');
+    $result = $query
+        ->search('invoice')
+        ->where('internetMessageId', 'eq', '<m-1@example.com>')
+        ->get();
+
+    expect($result)->toHaveCount(1);
+    expect($result->first()?->id)->toBe('m-1');
+});
+
 it('sends bulk batch modify requests in chunks', function (): void {
     $client = new class extends GmailClient
     {
