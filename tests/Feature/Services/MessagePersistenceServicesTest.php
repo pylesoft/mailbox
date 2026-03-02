@@ -20,11 +20,11 @@ use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\ConnectionStatus;
 use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Enums\WellKnownFolder;
-use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxAttachment;
 use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MailboxMessage;
-use Pyle\Mailbox\Models\MonitoredMailbox;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 
@@ -40,7 +40,7 @@ it('syncs and upserts mailbox messages and attachments using canonical keys', fu
         'config' => [],
     ]);
 
-    $mailbox = MonitoredMailbox::query()->create([
+    $mailbox = Mailbox::query()->create([
         'mailbox_connection_id' => $connection->id,
         'email_address' => 'sync@example.com',
         'display_name' => 'Sync Mailbox',
@@ -90,9 +90,9 @@ it('syncs and upserts mailbox messages and attachments using canonical keys', fu
         ],
     );
 
-    Mailbox::shouldReceive('forMailbox')
+    MailboxFacade::shouldReceive('forMailbox')
         ->twice()
-        ->with(\Mockery::on(fn (MonitoredMailbox $model): bool => $model->is($mailbox)))
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
         ->andReturn($resourceFirst, $resourceSecond);
 
     $service = new MessageSyncService;
@@ -137,7 +137,7 @@ it('moves a mailbox message and updates provider id and folder metadata', functi
         'config' => [],
     ]);
 
-    $mailbox = MonitoredMailbox::query()->create([
+    $mailbox = Mailbox::query()->create([
         'mailbox_connection_id' => $connection->id,
         'email_address' => 'move@example.com',
         'display_name' => 'Move Mailbox',
@@ -145,7 +145,7 @@ it('moves a mailbox message and updates provider id and folder metadata', functi
     ]);
 
     $message = MailboxMessage::query()->create([
-        'monitored_mailbox_id' => $mailbox->id,
+        'mailbox_id' => $mailbox->id,
         'provider_message_id' => 'provider-before-move',
         'canonical_message_key' => 'provider:provider-before-move',
         'internet_message_id' => null,
@@ -173,9 +173,9 @@ it('moves a mailbox message and updates provider id and folder metadata', functi
         ],
     );
 
-    Mailbox::shouldReceive('forMailbox')
+    MailboxFacade::shouldReceive('forMailbox')
         ->once()
-        ->with(\Mockery::on(fn (MonitoredMailbox $model): bool => $model->is($mailbox)))
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
         ->andReturn($resource);
 
     $service = new MessageMoveService;

@@ -12,14 +12,14 @@ class MessageMoveService
 {
     public function move(MailboxMessage $message, string|WellKnownFolder $destinationFolder): MailboxMessage
     {
-        $message->loadMissing('monitoredMailbox.connection');
+        $message->loadMissing('mailbox.connection');
 
-        $monitoredMailbox = $message->monitoredMailbox;
-        if ($monitoredMailbox === null) {
+        $mailbox = $message->mailbox;
+        if ($mailbox === null) {
             return $message;
         }
 
-        $moved = Mailbox::forMailbox($monitoredMailbox)
+        $moved = Mailbox::forMailbox($mailbox)
             ->message($message->provider_message_id)
             ->moveTo($destinationFolder);
 

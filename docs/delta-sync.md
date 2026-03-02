@@ -94,9 +94,9 @@ The `DeltaResultDto` is a readonly data transfer object that implements `Arrayab
 | `deltaLink` | `?string` | The opaque token to pass on the next `delta()` call. Store this value. For MS Graph this is a URL; for Gmail it is a `historyId` string. `null` when `fullSyncRequired` is `true`. |
 | `fullSyncRequired` | `bool` | `true` when the stored token has expired and you need to perform a fresh baseline sync with a `null` token. |
 
-## The MonitoredFolder Model
+## The Folder Model
 
-Mailbox ships with a `MonitoredFolder` Eloquent model designed to track delta sync state in your database. It stores the `delta_token`, `last_synced_at` timestamp, and `sync_status` for each folder you monitor. The `SyncStatus` enum has three values:
+Mailbox ships with a `Folder` Eloquent model designed to track delta sync state in your database. It stores the `delta_token`, `last_synced_at` timestamp, and `sync_status` for each folder you monitor. The `SyncStatus` enum has three values:
 
 | Value | Description |
 |---|---|
@@ -107,25 +107,25 @@ Mailbox ships with a `MonitoredFolder` Eloquent model designed to track delta sy
 The model provides several useful query scopes:
 
 ```php
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
 // All active folders
-MonitoredFolder::active()->get();
+Folder::active()->get();
 
 // Folders that need syncing (not synced in the last 15 minutes)
-MonitoredFolder::needsSync(15)->get();
+Folder::needsSync(15)->get();
 
 // Folders with sync errors
-MonitoredFolder::withErrors()->get();
+Folder::withErrors()->get();
 ```
 
-When you use `MonitoredFolder` with the `Mailbox` facade, you can skip the manual mailbox and folder resolution entirely:
+When you use `Folder` with the `Mailbox` facade, you can skip the manual mailbox and folder resolution entirely:
 
 ```php
 use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
-$folder = MonitoredFolder::with('mailbox.connection')->first();
+$folder = Folder::with('mailbox.connection')->first();
 
 $result = Mailbox::forFolder($folder)->delta($folder->delta_token);
 
@@ -155,7 +155,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Str;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
 class SyncMailboxFolder implements ShouldQueue
 {
@@ -166,7 +166,7 @@ class SyncMailboxFolder implements ShouldQueue
     public int $backoff = 30;
 
     public function __construct(
-        public MonitoredFolder $folder,
+        public Folder $folder,
     ) {}
 
     public function handle(): void
@@ -219,13 +219,13 @@ Dispatch the job from a scheduled command or a controller:
 
 ```php
 // In your scheduler (app/Console/Kernel.php or routes/console.php)
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
 Schedule::call(function () {
-    MonitoredFolder::active()
+    Folder::active()
         ->needsSync(minutes: 10)
         ->with('mailbox.connection')
-        ->each(fn (MonitoredFolder $folder) => SyncMailboxFolder::dispatch($folder));
+        ->each(fn (Folder $folder) => SyncMailboxFolder::dispatch($folder));
 })->everyFiveMinutes();
 ```
 
@@ -323,4 +323,4 @@ Event::listen(DeltaTokenExpired::class, function (DeltaTokenExpired $event) {
 
 - [Artisan Commands](artisan-commands.md) -- the full reference for `mailbox:sync` and every other CLI command
 - [Events](events.md) -- all events dispatched by Mailbox, with payload details and listener examples
-- [Eloquent Models](eloquent-models.md) -- the `MonitoredFolder`, `MonitoredMailbox`, and `MailboxConnection` models in depth
+- [Eloquent Models](eloquent-models.md) -- the `Folder`, `Mailbox`, and `MailboxConnection` models in depth

@@ -14,7 +14,7 @@ use Pyle\Mailbox\Traits\HasMailbox;
 
 /**
  * @property int $id
- * @property int $monitored_mailbox_id
+ * @property int $mailbox_id
  * @property string $folder_id
  * @property string $display_name
  * @property string|null $path
@@ -24,16 +24,16 @@ use Pyle\Mailbox\Traits\HasMailbox;
  * @property \Carbon\CarbonImmutable|null $last_synced_at
  * @property SyncStatus $sync_status
  * @property string|null $last_sync_error
- * @property MonitoredMailbox|null $mailbox
+ * @property Mailbox|null $mailbox
  */
-class MonitoredFolder extends Model
+class Folder extends Model
 {
     use HasMailbox;
 
-    protected $table = 'monitored_folders';
+    protected $table = 'mailbox_folders';
 
     protected $fillable = [
-        'monitored_mailbox_id',
+        'mailbox_id',
         'folder_id',
         'display_name',
         'path',
@@ -52,10 +52,10 @@ class MonitoredFolder extends Model
         'last_synced_at' => 'immutable_datetime',
     ];
 
-    /** @return BelongsTo<MonitoredMailbox, $this> */
+    /** @return BelongsTo<Mailbox, $this> */
     public function mailbox(): BelongsTo
     {
-        return $this->belongsTo(MonitoredMailbox::class, 'monitored_mailbox_id');
+        return $this->belongsTo(Mailbox::class, 'mailbox_id');
     }
 
     /** @param Builder<self> $query

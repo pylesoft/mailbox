@@ -249,7 +249,7 @@ php artisan mailbox:sync --folder=42
  ERROR  Failed syncing Inbox: Token acquisition failed — client secret may be expired.
 ```
 
-The command updates each `MonitoredFolder` model's `sync_status`, `delta_token`, `last_synced_at`, and `last_sync_error` columns as it processes each folder. If a sync fails, the folder's status is set to `error` and the error message is recorded. The command exits with a non-zero status code on failure.
+The command updates each `Folder` model's `sync_status`, `delta_token`, `last_synced_at`, and `last_sync_error` columns as it processes each folder. If a sync fails, the folder's status is set to `error` and the error message is recorded. The command exits with a non-zero status code on failure.
 
 > **Warning** This command runs syncs sequentially and synchronously. For production workloads with many monitored folders, dispatch `SyncMailboxFolder` jobs to your queue instead. See [Delta Sync](delta-sync.md) for a complete queue job example.
 
@@ -293,7 +293,7 @@ php artisan mailbox:status
  No mailbox connections configured.
 ```
 
-The status values shown in the **Status** column come from the `MonitoredMailbox` model's `is_active` flag (`Active` or `Disabled`). The connection-level status in the header (e.g., `connected`) comes from the `MailboxConnection` model's `ConnectionStatus` enum, which has four possible values: `pending`, `connected`, `error`, and `disabled`.
+The status values shown in the **Status** column come from the `Mailbox` model's `is_active` flag (`Active` or `Disabled`). The connection-level status in the header (e.g., `connected`) comes from the `MailboxConnection` model's `ConnectionStatus` enum, which has four possible values: `pending`, `connected`, `error`, and `disabled`.
 
 ## Exit Codes
 

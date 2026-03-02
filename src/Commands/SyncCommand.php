@@ -7,9 +7,9 @@ namespace Pyle\Mailbox\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 use Pyle\Mailbox\Enums\SyncStatus;
-use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredFolder;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Folder;
+use Pyle\Mailbox\Models\Mailbox;
 
 use function Laravel\Prompts\error;
 use function Laravel\Prompts\info;
@@ -19,11 +19,11 @@ class SyncCommand extends Command
 {
     protected $signature = 'mailbox:sync {--mailbox=} {--folder=}';
 
-    protected $description = 'Run delta sync for monitored folders';
+    protected $description = 'Run delta sync for folders';
 
     public function handle(): int
     {
-        $query = MonitoredFolder::query()->active()->with('mailbox.connection');
+        $query = Folder::query()->active()->with('mailbox.connection');
 
         if (is_string($this->option('mailbox')) && $this->option('mailbox') !== '') {
             $mailboxEmail = (string) $this->option('mailbox');
@@ -37,7 +37,7 @@ class SyncCommand extends Command
         $folders = $query->get();
 
         if ($folders->isEmpty()) {
-            info('No matching monitored folders found.');
+            info('No matching folders found.');
 
             return self::SUCCESS;
         }
@@ -47,13 +47,13 @@ class SyncCommand extends Command
 
             try {
                 $mailbox = $folder->mailbox;
-                if (! $mailbox instanceof MonitoredMailbox) {
-                    throw new \RuntimeException('Monitored folder does not have an associated mailbox.');
+                if (! $mailbox instanceof Mailbox) {
+                    throw new \RuntimeException('Folder does not have an associated mailbox.');
                 }
                 $mailboxEmail = $mailbox->email_address;
                 $folderName = $folder->display_name;
                 $result = spin(
-                    fn () => Mailbox::forFolder($folder)->delta($folder->delta_token),
+                    fn () => MailboxFacade::forFolder($folder)->delta($folder->delta_token),
                     sprintf('Syncing %s (%s)...', $folderName, $mailboxEmail),
                 );
 

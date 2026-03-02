@@ -7,17 +7,17 @@ namespace Pyle\Mailbox\Services\Folders;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
-use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Mailbox;
 
 class FolderLookupService
 {
     /**
      * @return Collection<int, array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}>
      */
-    public function listTree(MonitoredMailbox $mailbox, int $maxDepth = 10): Collection
+    public function listTree(Mailbox $mailbox, int $maxDepth = 10): Collection
     {
-        $folders = Mailbox::forMailbox($mailbox)->folders()->tree(max(1, $maxDepth));
+        $folders = MailboxFacade::forMailbox($mailbox)->folders()->tree(max(1, $maxDepth));
         $items = [];
         $visited = [];
 
@@ -32,12 +32,12 @@ class FolderLookupService
      * @return array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}|null
      */
     public function findByName(
-        MonitoredMailbox $mailbox,
+        Mailbox $mailbox,
         string $folderName,
         string|WellKnownFolder|null $root = null,
         bool $caseSensitive = true,
     ): ?array {
-        $folder = Mailbox::forMailbox($mailbox)->folders()->find($folderName, $root, $caseSensitive);
+        $folder = MailboxFacade::forMailbox($mailbox)->folders()->find($folderName, $root, $caseSensitive);
 
         if (! $folder instanceof FolderDto) {
             return null;

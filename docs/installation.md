@@ -37,12 +37,15 @@ This creates `config/mailbox.php` where you configure drivers, cache, retry beha
 php artisan vendor:publish --tag=mailbox-migrations
 ```
 
-Mailbox ships four migration files that create the tables it needs to track connections, monitored mailboxes, monitored folders, and OAuth tokens:
+Mailbox ships migration files that create and normalize the tables it needs for connections, mailboxes, folders, OAuth tokens, messages, and attachments:
 
 - `create_mailbox_connections_table`
 - `create_monitored_mailboxes_table`
 - `create_monitored_folders_table`
 - `create_mailbox_oauth_tokens_table`
+- `create_mailbox_messages_table`
+- `create_mailbox_attachments_table`
+- `rename_monitored_entities_to_mailbox_entities`
 
 > **Tip** If you prefer to keep package migrations out of your `database/migrations` directory, you can load them directly from the package instead of publishing. Mailbox will still function correctly either way.
 

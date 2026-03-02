@@ -7,17 +7,17 @@ namespace Pyle\Mailbox\Services\Persistence;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MailboxResource;
-use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
-use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxMessage;
-use Pyle\Mailbox\Models\MonitoredMailbox;
 use Pyle\Mailbox\Support\MessageMatcher;
 
 class MessageSyncService
@@ -26,7 +26,7 @@ class MessageSyncService
      * @param  array<string, mixed>  $options
      * @return Collection<int, MailboxMessage>
      */
-    public function syncMailbox(MonitoredMailbox $mailbox, array $options = []): Collection
+    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         $mailbox->loadMissing('connection');
 
@@ -66,7 +66,7 @@ class MessageSyncService
             $filters['mail_folder_id'] = $this->normalizeStoredFolderReference($folderReference);
         }
 
-        $mailboxResource = Mailbox::forMailbox($mailbox);
+        $mailboxResource = MailboxFacade::forMailbox($mailbox);
         $matcher = $this->buildMatcher($savedFilters);
         $requiresAttachmentMetadata = $this->requiresAttachmentMetadata($savedFilters);
         $messages = $this->fetchMessages($mailboxResource, $filters)
@@ -327,15 +327,14 @@ class MessageSyncService
      */
     private function upsertMessage(
         MailboxResource $mailboxResource,
-        int $monitoredMailboxId,
+        int $mailboxId,
         MessageDto $message,
         ?MessageResource $resource = null,
         ?Collection $prefetchedAttachments = null,
-    ): MailboxMessage
-    {
+    ): MailboxMessage {
         $mailboxMessage = MailboxMessage::query()->updateOrCreate(
             [
-                'monitored_mailbox_id' => $monitoredMailboxId,
+                'mailbox_id' => $mailboxId,
                 'canonical_message_key' => $this->canonicalMessageKey($message),
             ],
             [
