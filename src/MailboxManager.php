@@ -16,8 +16,8 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\DriverNotConfiguredException;
 use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MailboxMessage;
-use Pyle\Mailbox\Models\MonitoredFolder;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Folder;
+use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Services\Folders\FolderLookupService;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
@@ -35,12 +35,12 @@ class MailboxManager extends Manager
         return $this->driver()->mailbox($emailAddress);
     }
 
-    public function forMailbox(MonitoredMailbox $mailbox): MailboxResource
+    public function forMailbox(Mailbox $mailbox): MailboxResource
     {
         $connection = $mailbox->getRelationValue('connection');
 
         if (! $connection instanceof MailboxConnection) {
-            throw new RuntimeException('Monitored mailbox does not have an associated connection.');
+            throw new RuntimeException('Mailbox does not have an associated connection.');
         }
 
         $driver = $connection->driver;
@@ -48,12 +48,12 @@ class MailboxManager extends Manager
         return $this->driver($driver)->mailbox($mailbox->email_address);
     }
 
-    public function forFolder(MonitoredFolder $folder): FolderResource
+    public function forFolder(Folder $folder): FolderResource
     {
         $mailbox = $folder->mailbox;
 
-        if (! $mailbox instanceof MonitoredMailbox) {
-            throw new RuntimeException('Monitored folder does not have an associated mailbox.');
+        if (! $mailbox instanceof Mailbox) {
+            throw new RuntimeException('Folder does not have an associated mailbox.');
         }
 
         return $this->forMailbox($mailbox)->folder($folder->folder_id);
@@ -73,7 +73,7 @@ class MailboxManager extends Manager
      * @param  array<string, mixed>  $options
      * @return Collection<int, MailboxMessage>
      */
-    public function syncMailbox(MonitoredMailbox $mailbox, array $options = []): Collection
+    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         /** @var MessageSyncService $service */
         $service = $this->container->make(MessageSyncService::class);
@@ -92,7 +92,7 @@ class MailboxManager extends Manager
     /**
      * @return Collection<int, array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}>
      */
-    public function listFolderTree(MonitoredMailbox $mailbox, int $maxDepth = 10): Collection
+    public function listFolderTree(Mailbox $mailbox, int $maxDepth = 10): Collection
     {
         /** @var FolderLookupService $service */
         $service = $this->container->make(FolderLookupService::class);
@@ -104,7 +104,7 @@ class MailboxManager extends Manager
      * @return array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}|null
      */
     public function findFolderByName(
-        MonitoredMailbox $mailbox,
+        Mailbox $mailbox,
         string $folderName,
         string|WellKnownFolder|null $root = null,
         bool $caseSensitive = true,

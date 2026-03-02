@@ -24,7 +24,7 @@ The following diagram shows how the four tables relate to one another:
          │ hasMany         │   │ last_refreshed_at      │  │
          ▼                 │   │ revoked_at             │  │
 ┌──────────────────────┐   │   │ meta                   │  │
-│  monitored_mailboxes │   │   │ timestamps             │  │
+│  mailbox_mailboxes │   │   │ timestamps             │  │
 ├──────────────────────┤   │   └───────────────────────┘  │
 │ id                   │   │              ▲                │
 │ mailbox_connection_id│───┘              │ belongsTo      │
@@ -39,10 +39,10 @@ The following diagram shows how the four tables relate to one another:
          │ hasMany
          ▼
 ┌──────────────────────┐
-│  monitored_folders   │
+│  mailbox_folders   │
 ├──────────────────────┤
 │ id                   │
-│ monitored_mailbox_id │
+│ mailbox_id │
 │ folder_id            │
 │ display_name         │
 │ path                 │
@@ -94,8 +94,8 @@ use Pyle\Mailbox\Models\MailboxConnection;
 
 $connection = MailboxConnection::find(1);
 
-$connection->mailboxes;      // HasMany → MonitoredMailbox (all)
-$connection->activeMailboxes; // HasMany → MonitoredMailbox (where is_active = true)
+$connection->mailboxes;      // HasMany → Mailbox (all)
+$connection->activeMailboxes; // HasMany → Mailbox (where is_active = true)
 $connection->oauthTokens;    // HasMany → MailboxOAuthToken
 ```
 
@@ -126,9 +126,9 @@ You can resolve the `MailboxDriver` instance directly from a connection model:
 $driver = $connection->resolveDriver(); // MailboxDriver
 ```
 
-## MonitoredMailbox
+## Mailbox
 
-A `MonitoredMailbox` ties a single email address to a connection. You can monitor multiple addresses under the same connection -- for example, `invoices@acme.com` and `support@acme.com` both using the same Microsoft 365 tenant.
+A `Mailbox` ties a single email address to a connection. You can monitor multiple addresses under the same connection -- for example, `invoices@acme.com` and `support@acme.com` both using the same Microsoft 365 tenant.
 
 ### Database Fields
 
@@ -158,45 +158,45 @@ protected $casts = [
 ### Relationships
 
 ```php
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 
-$mailbox = MonitoredMailbox::find(1);
+$mailbox = Mailbox::find(1);
 
 $mailbox->connection;    // BelongsTo → MailboxConnection
-$mailbox->folders;       // HasMany → MonitoredFolder (all)
-$mailbox->activeFolders; // HasMany → MonitoredFolder (where is_active = true)
+$mailbox->folders;       // HasMany → Folder (all)
+$mailbox->activeFolders; // HasMany → Folder (where is_active = true)
 ```
 
 ### Scopes
 
 ```php
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 
 // Only active mailboxes
-MonitoredMailbox::active()->get();
+Mailbox::active()->get();
 
 // Find by email address
-MonitoredMailbox::forEmail('invoices@acme.com')->first();
+Mailbox::forEmail('invoices@acme.com')->first();
 
 // Mailboxes not synced in the last 30 minutes
-MonitoredMailbox::stale(30)->get();
+Mailbox::stale(30)->get();
 
 // Mailboxes that have never been synced
-MonitoredMailbox::neverSynced()->get();
+Mailbox::neverSynced()->get();
 ```
 
 The `stale()` scope accepts a `$minutes` parameter (default `30`). It matches mailboxes where `last_synced_at` is null or older than the threshold -- useful for building a sync scheduler.
 
-## MonitoredFolder
+## Folder
 
-Each `MonitoredFolder` represents a single folder (or label, in Gmail terms) being tracked within a mailbox. This is where delta sync tokens and per-folder sync state live.
+Each `Folder` represents a single folder (or label, in Gmail terms) being tracked within a mailbox. This is where delta sync tokens and per-folder sync state live.
 
 ### Database Fields
 
 | Column | Type | Default | Description |
 |---|---|---|---|
 | `id` | `bigint` | auto | Primary key |
-| `monitored_mailbox_id` | `bigint` (FK) | -- | References `monitored_mailboxes.id` (cascade delete) |
+| `mailbox_id` | `bigint` (FK) | -- | References `mailbox_mailboxes.id` (cascade delete) |
 | `folder_id` | `string` | -- | Provider-specific folder identifier |
 | `display_name` | `string` | -- | Human-readable folder name |
 | `path` | `string` (nullable) | `null` | Full folder path (e.g. `Clients/Acme`) |
@@ -209,7 +209,7 @@ Each `MonitoredFolder` represents a single folder (or label, in Gmail terms) bei
 | `created_at` | `timestamp` | auto | |
 | `updated_at` | `timestamp` | auto | |
 
-A unique composite index on `(monitored_mailbox_id, folder_id)` prevents duplicate folder registrations within the same mailbox.
+A unique composite index on `(mailbox_id, folder_id)` prevents duplicate folder registrations within the same mailbox.
 
 ### Casts
 
@@ -225,33 +225,33 @@ protected $casts = [
 ### Relationships
 
 ```php
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
-$folder = MonitoredFolder::find(1);
+$folder = Folder::find(1);
 
-$folder->mailbox; // BelongsTo → MonitoredMailbox
+$folder->mailbox; // BelongsTo → Mailbox
 ```
 
 ### Scopes
 
 ```php
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
 // Only active folders
-MonitoredFolder::active()->get();
+Folder::active()->get();
 
 // Currently syncing
-MonitoredFolder::syncing()->get();
+Folder::syncing()->get();
 
 // Folders in an error state
-MonitoredFolder::withErrors()->get();
+Folder::withErrors()->get();
 
 // Folders that need a sync (active, not synced in the last 15 minutes)
-MonitoredFolder::needsSync(15)->get();
+Folder::needsSync(15)->get();
 
 // Find the inbox folder
-MonitoredFolder::forWellKnown(WellKnownFolder::INBOX)->first();
+Folder::forWellKnown(WellKnownFolder::INBOX)->first();
 ```
 
 The `needsSync()` scope combines the `is_active` check with a staleness threshold (default `15` minutes). It matches folders that are active and either have never been synced or were last synced before the threshold.
@@ -361,7 +361,7 @@ Several model fields are cast to PHP enums. Here is the complete reference for e
 
 ## The HasMailbox Trait
 
-The `HasMailbox` trait is designed for your own application models -- any model that stores a `monitored_mailbox_id` foreign key. It provides relationships back into the Mailbox model layer and convenient scopes for querying by mailbox or connection.
+The `HasMailbox` trait is designed for your own application models -- any model that stores a `mailbox_id` foreign key. It provides relationships back into the Mailbox model layer and convenient scopes for querying by mailbox or connection.
 
 ### Adding the Trait
 
@@ -374,19 +374,19 @@ class EmailInbox extends Model
     use HasMailbox;
 
     protected $fillable = [
-        'monitored_mailbox_id',
+        'mailbox_id',
         'name',
         // ...
     ];
 }
 ```
 
-Your model's table must have a `monitored_mailbox_id` column:
+Your model's table must have a `mailbox_id` column:
 
 ```php
 Schema::table('email_inboxes', function (Blueprint $table) {
-    $table->foreignId('monitored_mailbox_id')
-        ->constrained('monitored_mailboxes')
+    $table->foreignId('mailbox_id')
+        ->constrained('mailbox_mailboxes')
         ->cascadeOnDelete();
 });
 ```
@@ -398,11 +398,11 @@ The trait adds two relationships to your model:
 ```php
 $inbox = EmailInbox::find(1);
 
-$inbox->monitoredMailbox;   // BelongsTo → MonitoredMailbox
-$inbox->mailboxConnection;  // HasOneThrough → MailboxConnection (via MonitoredMailbox)
+$inbox->mailbox;   // BelongsTo → Mailbox
+$inbox->mailboxConnection;  // HasOneThrough → MailboxConnection (via Mailbox)
 ```
 
-The `mailboxConnection` relationship traverses through the `MonitoredMailbox` join, giving you direct access to the connection without intermediate queries.
+The `mailboxConnection` relationship traverses through the `Mailbox` join, giving you direct access to the connection without intermediate queries.
 
 ### Getting a MailboxResource
 
@@ -417,15 +417,15 @@ $messages = $resource->messages()
     ->get(); // Collection<int, MessageDto>
 ```
 
-> **Warning** The `mailboxResource()` method throws a `RuntimeException` if the model does not have an associated `MonitoredMailbox`. Always ensure the relationship is loaded or check for `null` before calling this method.
+> **Warning** The `mailboxResource()` method throws a `RuntimeException` if the model does not have an associated `Mailbox`. Always ensure the relationship is loaded or check for `null` before calling this method.
 
 ### Scopes Provided
 
 ```php
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxConnection;
 
-$mailbox = MonitoredMailbox::find(1);
+$mailbox = Mailbox::find(1);
 $connection = MailboxConnection::find(1);
 
 // All inboxes for a specific monitored mailbox

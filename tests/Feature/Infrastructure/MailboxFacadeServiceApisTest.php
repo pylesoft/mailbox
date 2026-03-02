@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Enums\WellKnownFolder;
-use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Models\MailboxMessage;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Services\Folders\FolderLookupService;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
@@ -16,14 +16,14 @@ afterEach(function (): void {
 });
 
 it('delegates sync and move APIs through the facade manager', function (): void {
-    $mailbox = new MonitoredMailbox([
+    $mailbox = new Mailbox([
         'mailbox_connection_id' => 1,
         'email_address' => 'service@example.com',
         'is_active' => true,
     ]);
 
     $message = new MailboxMessage([
-        'monitored_mailbox_id' => 1,
+        'mailbox_id' => 1,
         'provider_message_id' => 'provider-id',
         'canonical_message_key' => 'provider:provider-id',
         'subject' => 'Subject',
@@ -40,7 +40,7 @@ it('delegates sync and move APIs through the facade manager', function (): void 
     $syncService->shouldReceive('syncMailbox')
         ->once()
         ->with(
-            \Mockery::on(fn (MonitoredMailbox $model): bool => $model->email_address === 'service@example.com'),
+            \Mockery::on(fn (Mailbox $model): bool => $model->email_address === 'service@example.com'),
             ['limit' => 10],
         )
         ->andReturn($syncResult);
@@ -56,12 +56,12 @@ it('delegates sync and move APIs through the facade manager', function (): void 
     app()->instance(MessageSyncService::class, $syncService);
     app()->instance(MessageMoveService::class, $moveService);
 
-    expect(Mailbox::syncMailbox($mailbox, ['limit' => 10]))->toBeInstanceOf(Collection::class)
-        ->and(Mailbox::moveMessage($message, WellKnownFolder::ARCHIVE))->toBeInstanceOf(MailboxMessage::class);
+    expect(MailboxFacade::syncMailbox($mailbox, ['limit' => 10]))->toBeInstanceOf(Collection::class)
+        ->and(MailboxFacade::moveMessage($message, WellKnownFolder::ARCHIVE))->toBeInstanceOf(MailboxMessage::class);
 });
 
 it('delegates folder lookup APIs through the facade manager', function (): void {
-    $mailbox = new MonitoredMailbox([
+    $mailbox = new Mailbox([
         'mailbox_connection_id' => 1,
         'email_address' => 'folders@example.com',
         'is_active' => true,
@@ -88,7 +88,7 @@ it('delegates folder lookup APIs through the facade manager', function (): void 
     $service->shouldReceive('listTree')
         ->once()
         ->with(
-            \Mockery::on(fn (MonitoredMailbox $model): bool => $model->email_address === 'folders@example.com'),
+            \Mockery::on(fn (Mailbox $model): bool => $model->email_address === 'folders@example.com'),
             5,
         )
         ->andReturn($tree);
@@ -96,7 +96,7 @@ it('delegates folder lookup APIs through the facade manager', function (): void 
     $service->shouldReceive('findByName')
         ->once()
         ->with(
-            \Mockery::on(fn (MonitoredMailbox $model): bool => $model->email_address === 'folders@example.com'),
+            \Mockery::on(fn (Mailbox $model): bool => $model->email_address === 'folders@example.com'),
             'Processed',
             WellKnownFolder::INBOX,
             false,
@@ -105,7 +105,7 @@ it('delegates folder lookup APIs through the facade manager', function (): void 
 
     app()->instance(FolderLookupService::class, $service);
 
-    expect(Mailbox::listFolderTree($mailbox, 5))->toBeInstanceOf(Collection::class)
-        ->and(Mailbox::findFolderByName($mailbox, 'Processed', WellKnownFolder::INBOX, false))
+    expect(MailboxFacade::listFolderTree($mailbox, 5))->toBeInstanceOf(Collection::class)
+        ->and(MailboxFacade::findFolderByName($mailbox, 'Processed', WellKnownFolder::INBOX, false))
         ->toBe($found);
 });

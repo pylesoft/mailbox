@@ -171,7 +171,7 @@ Schedule::command('invoices:process')
 
 ## Multi-Mailbox Monitoring Dashboard
 
-When your application manages several shared mailboxes -- say `support@acme.com`, `billing@acme.com`, and `invoices@acme.com` -- you need a single dashboard that shows unread counts, sync health, and folder statistics at a glance. This recipe builds a JSON API endpoint that aggregates that data from your `MonitoredMailbox` records.
+When your application manages several shared mailboxes -- say `support@acme.com`, `billing@acme.com`, and `invoices@acme.com` -- you need a single dashboard that shows unread counts, sync health, and folder statistics at a glance. This recipe builds a JSON API endpoint that aggregates that data from your `Mailbox` records.
 
 ### The Controller
 
@@ -184,32 +184,32 @@ use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
-use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredFolder;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Folder;
+use Pyle\Mailbox\Models\Mailbox;
 
 class MailboxDashboardController extends Controller
 {
     public function index(): JsonResponse
     {
-        $mailboxes = MonitoredMailbox::with('folders')
+        $mailboxes = Mailbox::with('folders')
             ->active()
             ->get();
 
-        $dashboard = $mailboxes->map(function (MonitoredMailbox $monitored) {
-            $resource = Mailbox::forMailbox($monitored);
+        $dashboard = $mailboxes->map(function (Mailbox $mailbox) {
+            $resource = MailboxFacade::forMailbox($mailbox);
             $inbox = $resource->folder(WellKnownFolder::INBOX)->get();
 
             return [
-                'email' => $monitored->email_address,
-                'display_name' => $monitored->display_name,
-                'last_synced_at' => $monitored->last_synced_at?->toIso8601String(),
-                'is_stale' => $monitored->last_synced_at?->lt(now()->subMinutes(30)) ?? true,
+                'email' => $mailbox->email_address,
+                'display_name' => $mailbox->display_name,
+                'last_synced_at' => $mailbox->last_synced_at?->toIso8601String(),
+                'is_stale' => $mailbox->last_synced_at?->lt(now()->subMinutes(30)) ?? true,
                 'inbox' => [
                     'total' => $inbox->totalItemCount,
                     'unread' => $inbox->unreadItemCount,
                 ],
-                'folders' => $monitored->folders->map(fn (MonitoredFolder $folder) => [
+                'folders' => $mailbox->folders->map(fn (Folder $folder) => [
                     'name' => $folder->display_name,
                     'sync_status' => $folder->sync_status->value,
                     'last_synced_at' => $folder->last_synced_at?->toIso8601String(),
@@ -226,8 +226,8 @@ class MailboxDashboardController extends Controller
                 'stale_count' => $mailboxes->filter(
                     fn ($m) => $m->last_synced_at?->lt(now()->subMinutes(30)) ?? true
                 )->count(),
-                'error_folders' => MonitoredFolder::withErrors()->count(),
-                'needs_sync' => MonitoredFolder::needsSync()->count(),
+                'error_folders' => Folder::withErrors()->count(),
+                'needs_sync' => Folder::needsSync()->count(),
             ],
         ]);
     }
@@ -283,7 +283,7 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Notification;
 use App\Notifications\StaleMailboxNotification;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 
 class CheckMailboxHealth extends Command
 {
@@ -292,7 +292,7 @@ class CheckMailboxHealth extends Command
 
     public function handle(): int
     {
-        $stale = MonitoredMailbox::active()
+        $stale = Mailbox::active()
             ->stale(minutes: 30)
             ->get();
 
@@ -312,7 +312,7 @@ class CheckMailboxHealth extends Command
 }
 ```
 
-> **Tip** Use the `stale()` scope on `MonitoredMailbox` and the `needsSync()` scope on `MonitoredFolder` to quickly identify mailboxes and folders that have fallen behind. Both accept a configurable minute threshold.
+> **Tip** Use the `stale()` scope on `Mailbox` and the `needsSync()` scope on `Folder` to quickly identify mailboxes and folders that have fallen behind. Both accept a configurable minute threshold.
 
 ## Graceful Rate Limit Handling in Queue Jobs
 
@@ -333,7 +333,7 @@ use Illuminate\Queue\SerializesModels;
 use Pyle\Mailbox\Exceptions\DeltaTokenExpiredException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
 class SyncInboxMessages implements ShouldQueue
 {
@@ -343,7 +343,7 @@ class SyncInboxMessages implements ShouldQueue
     public int $maxExceptions = 3;
 
     public function __construct(
-        public MonitoredFolder $folder,
+        public Folder $folder,
     ) {}
 
     /** @return array<int, object> */
@@ -452,13 +452,13 @@ Pair this job with a scheduled command that fans out one job per active folder:
 
 ```php
 use Illuminate\Support\Facades\Schedule;
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
 Schedule::call(function () {
-    MonitoredFolder::active()
+    Folder::active()
         ->needsSync(minutes: 15)
         ->with('mailbox')
-        ->each(fn (MonitoredFolder $folder) => SyncInboxMessages::dispatch($folder));
+        ->each(fn (Folder $folder) => SyncInboxMessages::dispatch($folder));
 })->everyFiveMinutes()->onOneServer();
 ```
 

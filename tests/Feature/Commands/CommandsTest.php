@@ -24,8 +24,8 @@ use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\MailboxManager;
 use Pyle\Mailbox\Models\MailboxConnection;
-use Pyle\Mailbox\Models\MonitoredFolder;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Folder;
+use Pyle\Mailbox\Models\Mailbox;
 
 beforeEach(function (): void {
     config()->set('mailbox.default', 'fake');
@@ -61,15 +61,15 @@ it('runs mailbox:sync and mailbox:status successfully', function (): void {
         'status' => ConnectionStatus::CONNECTED,
     ]);
 
-    $mailbox = MonitoredMailbox::query()->create([
+    $mailbox = Mailbox::query()->create([
         'mailbox_connection_id' => $connection->id,
         'email_address' => 'invoices@example.com',
         'display_name' => 'Invoices',
         'is_active' => true,
     ]);
 
-    $folder = MonitoredFolder::query()->create([
-        'monitored_mailbox_id' => $mailbox->id,
+    $folder = Folder::query()->create([
+        'mailbox_id' => $mailbox->id,
         'folder_id' => 'inbox',
         'display_name' => 'Inbox',
         'is_active' => true,

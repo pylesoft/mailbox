@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * @property int $id
- * @property int $monitored_mailbox_id
+ * @property int $mailbox_id
  * @property string $provider_message_id
  * @property string $canonical_message_key
  * @property string|null $internet_message_id
@@ -37,7 +37,7 @@ class MailboxMessage extends Model
     protected $table = 'mailbox_messages';
 
     protected $fillable = [
-        'monitored_mailbox_id',
+        'mailbox_id',
         'provider_message_id',
         'canonical_message_key',
         'internet_message_id',
@@ -75,10 +75,10 @@ class MailboxMessage extends Model
         'raw_payload' => 'array',
     ];
 
-    /** @return BelongsTo<MonitoredMailbox, $this> */
-    public function monitoredMailbox(): BelongsTo
+    /** @return BelongsTo<Mailbox, $this> */
+    public function mailbox(): BelongsTo
     {
-        return $this->belongsTo(MonitoredMailbox::class, 'monitored_mailbox_id');
+        return $this->belongsTo(Mailbox::class, 'mailbox_id');
     }
 
     /** @return HasMany<MailboxAttachment, $this> */

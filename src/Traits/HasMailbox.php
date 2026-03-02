@@ -8,53 +8,53 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 use Pyle\Mailbox\Contracts\MailboxResource;
-use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Models\MailboxConnection;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 use RuntimeException;
 
 /**
- * @property-read MonitoredMailbox|null $monitoredMailbox
+ * @property-read Mailbox|null $mailbox
  * @property-read MailboxConnection|null $mailboxConnection
  */
 trait HasMailbox
 {
-    /** @return BelongsTo<MonitoredMailbox, $this> */
-    public function monitoredMailbox(): BelongsTo
+    /** @return BelongsTo<Mailbox, $this> */
+    public function mailbox(): BelongsTo
     {
-        return $this->belongsTo(MonitoredMailbox::class);
+        return $this->belongsTo(Mailbox::class);
     }
 
-    /** @return HasOneThrough<MailboxConnection, MonitoredMailbox, $this> */
+    /** @return HasOneThrough<MailboxConnection, Mailbox, $this> */
     public function mailboxConnection(): HasOneThrough
     {
         return $this->hasOneThrough(
             MailboxConnection::class,
-            MonitoredMailbox::class,
+            Mailbox::class,
             'id',
             'id',
-            'monitored_mailbox_id',
+            'mailbox_id',
             'mailbox_connection_id',
         );
     }
 
     public function mailboxResource(): MailboxResource
     {
-        $mailbox = $this->monitoredMailbox;
+        $mailbox = $this->mailbox;
 
-        if (! $mailbox instanceof MonitoredMailbox) {
-            throw new RuntimeException('No monitored mailbox is associated with this model.');
+        if (! $mailbox instanceof Mailbox) {
+            throw new RuntimeException('No mailbox is associated with this model.');
         }
 
-        return Mailbox::forMailbox($mailbox);
+        return MailboxFacade::forMailbox($mailbox);
     }
 
     /** @param Builder<self> $query
      * @return Builder<self>
      */
-    public function scopeForMailbox(Builder $query, MonitoredMailbox $mailbox): Builder
+    public function scopeForMailbox(Builder $query, Mailbox $mailbox): Builder
     {
-        return $query->where('monitored_mailbox_id', $mailbox->id);
+        return $query->where('mailbox_id', $mailbox->id);
     }
 
     /** @param Builder<self> $query
@@ -62,6 +62,6 @@ trait HasMailbox
      */
     public function scopeForConnection(Builder $query, MailboxConnection $connection): Builder
     {
-        return $query->whereHas('monitoredMailbox', fn (Builder $q): Builder => $q->where('mailbox_connection_id', $connection->id));
+        return $query->whereHas('mailbox', fn (Builder $q): Builder => $q->where('mailbox_connection_id', $connection->id));
     }
 }

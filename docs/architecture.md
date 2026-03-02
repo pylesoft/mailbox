@@ -49,15 +49,15 @@ $resource = Mailbox::driver('gmail')->mailbox('billing@vendor.com');
 The Manager also accepts Eloquent models directly. When your application tracks connections and mailboxes in the database, you can skip the string-based lookup entirely:
 
 ```php
-use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Mailbox;
 
-$monitored = MonitoredMailbox::where('email_address', 'invoices@acme.com')->first();
+$mailbox = Mailbox::where('email_address', 'invoices@acme.com')->first();
 
-$resource = Mailbox::forMailbox($monitored); // MailboxResource
+$resource = MailboxFacade::forMailbox($mailbox); // MailboxResource
 ```
 
-The `forMailbox` method reads the `driver` column from the related `MailboxConnection` model and resolves the correct driver automatically. A similar `forFolder` method exists for `MonitoredFolder` models and returns a `FolderResource` directly.
+The `forMailbox` method reads the `driver` column from the related `MailboxConnection` model and resolves the correct driver automatically. A similar `forFolder` method exists for `Folder` models and returns a `FolderResource` directly.
 
 ## Drivers
 
@@ -219,16 +219,16 @@ Mailbox provides three Eloquent models for persisting connection and sync state 
 | Model | Table | Purpose |
 |---|---|---|
 | `MailboxConnection` | `mailbox_connections` | Stores driver name, status, and encrypted config for a provider connection |
-| `MonitoredMailbox` | `monitored_mailboxes` | Links an email address to a connection, tracks sync timestamps |
-| `MonitoredFolder` | `monitored_folders` | Tracks a folder within a monitored mailbox, stores delta tokens |
+| `Mailbox` | `mailbox_mailboxes` | Links an email address to a connection, tracks sync timestamps |
+| `Folder` | `mailbox_folders` | Tracks a folder within a monitored mailbox, stores delta tokens |
 
 The relationships form a straightforward hierarchy:
 
 ```
-MailboxConnection  --hasMany-->  MonitoredMailbox  --hasMany-->  MonitoredFolder
+MailboxConnection  --hasMany-->  Mailbox  --hasMany-->  Folder
 ```
 
-Each model ships with useful query scopes. For example, `MonitoredMailbox::active()` filters to enabled mailboxes, and `MonitoredFolder::needsSync(15)` finds folders that have not been synced in the last 15 minutes.
+Each model ships with useful query scopes. For example, `Mailbox::active()` filters to enabled mailboxes, and `Folder::needsSync(15)` finds folders that have not been synced in the last 15 minutes.
 
 > **Note** The `MailboxConnection` model encrypts its `config` column using Laravel's `encrypted:array` cast. Sensitive credentials never touch the database in plain text.
 
