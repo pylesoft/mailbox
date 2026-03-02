@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Commands;
 
 use Illuminate\Console\Command;
+use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxConnection;
-use Pyle\Mailbox\Models\MonitoredMailbox;
 
 use function Laravel\Prompts\info;
 use function Laravel\Prompts\table;
@@ -32,7 +32,7 @@ class StatusCommand extends Command
 
             table(
                 ['Mailbox', 'Active Folders', 'Last Sync', 'Status'],
-                $connection->mailboxes->map(fn (MonitoredMailbox $mailbox): array => [
+                $connection->mailboxes->map(fn (Mailbox $mailbox): array => [
                     $mailbox->email_address,
                     (string) $mailbox->activeFolders->count(),
                     $mailbox->last_synced_at?->diffForHumans() ?? 'Never',

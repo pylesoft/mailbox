@@ -11,3 +11,12 @@ it('compiles where clauses to odata filter', function (): void {
 
     expect($compiler->compile())->toBe("isRead eq false and receivedDateTime ge '2026-01-01T00:00:00Z'");
 });
+
+it('compiles whereAny clauses to grouped odata OR filters', function (): void {
+    $compiler = new ODataFilterCompiler;
+    $compiler->whereAny('from.address', 'eq', ['first@example.com', 'second@example.com']);
+    $compiler->where('isRead', '=', false);
+
+    expect($compiler->compile())
+        ->toBe("(from/emailAddress/address eq 'first@example.com' or from/emailAddress/address eq 'second@example.com') and isRead eq false");
+});

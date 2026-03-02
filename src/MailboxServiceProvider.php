@@ -27,6 +27,8 @@ class MailboxServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
         if (config('logging.channels.mailbox') === null) {
             config()->set('logging.channels.mailbox', [
                 'driver' => 'daily',
@@ -47,10 +49,6 @@ class MailboxServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__.'/../config/mailbox.php' => config_path('mailbox.php'),
         ], 'mailbox-config');
-
-        $this->publishes([
-            __DIR__.'/../database/migrations/' => database_path('migrations'),
-        ], 'mailbox-migrations');
 
         $this->publishes([
             __DIR__.'/../stubs' => base_path('stubs/mailbox'),

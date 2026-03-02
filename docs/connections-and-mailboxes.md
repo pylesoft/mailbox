@@ -56,9 +56,9 @@ $connection->update([
 Once you have a connection, register the email addresses you want to monitor:
 
 ```php
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 
-$mailbox = MonitoredMailbox::create([
+$mailbox = Mailbox::create([
     'mailbox_connection_id' => $connection->id,
     'email_address'         => 'invoices@acme.com',
     'display_name'          => 'Acme Invoices',
@@ -91,7 +91,7 @@ $mailbox->update(['is_active' => true]);
 Use the `active()` scope when querying for mailboxes that should be synced:
 
 ```php
-$activeMailboxes = MonitoredMailbox::active()->get();
+$activeMailboxes = Mailbox::active()->get();
 ```
 
 ## Registering Folders
@@ -99,11 +99,11 @@ $activeMailboxes = MonitoredMailbox::active()->get();
 Each mailbox can track one or more folders. Register them with the provider's folder ID:
 
 ```php
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
-$folder = MonitoredFolder::create([
-    'monitored_mailbox_id' => $mailbox->id,
+$folder = Folder::create([
+    'mailbox_id' => $mailbox->id,
     'folder_id'            => 'AAMkAGI2TG93AAA=',
     'display_name'         => 'Inbox',
     'well_known_name'      => WellKnownFolder::INBOX,
@@ -123,9 +123,9 @@ $resource = Mailbox::forMailbox($mailbox);
 $providerFolders = $resource->folders()->get(); // Collection<int, FolderDto>
 
 foreach ($providerFolders as $dto) {
-    MonitoredFolder::updateOrCreate(
+    Folder::updateOrCreate(
         [
-            'monitored_mailbox_id' => $mailbox->id,
+            'mailbox_id' => $mailbox->id,
             'folder_id'            => $dto->id,
         ],
         [
@@ -142,15 +142,15 @@ Mailbox provides two facade methods that bridge from Eloquent models to live API
 
 ### Mailbox::forMailbox()
 
-Pass a `MonitoredMailbox` model and receive a `MailboxResource` -- the entry point for messages, folders, and everything else:
+Pass a `Mailbox` model and receive a `MailboxResource` -- the entry point for messages, folders, and everything else:
 
 ```php
-use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Mailbox;
 
-$mailbox = MonitoredMailbox::with('connection')->find(1);
+$mailbox = Mailbox::with('connection')->find(1);
 
-$resource = Mailbox::forMailbox($mailbox); // MailboxResource
+$resource = MailboxFacade::forMailbox($mailbox); // MailboxResource
 ```
 
 From there, you have full access to the API:
@@ -177,12 +177,12 @@ $folders = $resource->folders()->get(); // Collection<int, FolderDto>
 
 ### Mailbox::forFolder()
 
-When you already have a `MonitoredFolder` record and want to jump straight to folder-level operations:
+When you already have a `Folder` record and want to jump straight to folder-level operations:
 
 ```php
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
-$folder = MonitoredFolder::with('mailbox.connection')->find(1);
+$folder = Folder::with('mailbox.connection')->find(1);
 
 $folderResource = Mailbox::forFolder($folder); // FolderResource
 
@@ -294,7 +294,7 @@ $connections = MailboxConnection::where('tenant_id', $currentTenant->id)
 When processing work for a specific tenant, load their connection and bridge into the API layer:
 
 ```php
-$mailbox = MonitoredMailbox::with('connection')
+$mailbox = Mailbox::with('connection')
     ->whereHas('connection', fn ($q) => $q->where('tenant_id', $tenant->id))
     ->forEmail('invoices@acme.com')
     ->firstOrFail();
@@ -308,7 +308,7 @@ $messages = $resource->messages()
 
 ### Using the HasMailbox Trait
 
-If your tenant model has a `monitored_mailbox_id` column, the `HasMailbox` trait makes this even cleaner:
+If your tenant model has a `mailbox_id` column, the `HasMailbox` trait makes this even cleaner:
 
 ```php
 use Illuminate\Database\Eloquent\Model;

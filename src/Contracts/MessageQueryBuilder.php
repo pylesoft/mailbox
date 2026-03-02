@@ -12,7 +12,12 @@ interface MessageQueryBuilder
 {
     public function inFolder(string|\Pyle\Mailbox\Enums\WellKnownFolder $folder): static;
 
+    public function allFolders(): static;
+
     public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static;
+
+    /** @param array<int, mixed> $values */
+    public function whereAny(FilterableField|string $field, mixed $operator, array $values): static;
 
     public function search(string $query): static;
 

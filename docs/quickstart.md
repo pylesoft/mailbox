@@ -22,7 +22,7 @@ If your application manages multiple providers, you can select a driver explicit
 $mailbox = Mailbox::driver('gmail')->mailbox('billing@vendor.com');
 ```
 
-> **Tip** When you store connections in the database using the `MailboxConnection` and `MonitoredMailbox` models, you can skip the string-based lookup entirely with `Mailbox::forMailbox($monitoredMailbox)`. The driver is resolved from the model's relationship automatically.
+> **Tip** When you store connections in the database using the `MailboxConnection` and `Mailbox` models, you can skip the string-based lookup entirely with `Mailbox::forMailbox($mailbox)`. The driver is resolved from the model's relationship automatically.
 
 ## List Messages
 

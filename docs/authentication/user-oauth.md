@@ -34,10 +34,9 @@ Mailbox handles steps 3-6 automatically. You only need to initiate the redirect 
 
 ## Prerequisites
 
-Before configuring either provider, publish the Mailbox migrations and run them. The user OAuth flow stores tokens in the `mailbox_oauth_tokens` table:
+Before configuring either provider, run your migrations. Mailbox auto-loads its package migrations, and the user OAuth flow stores tokens in the `mailbox_oauth_tokens` table:
 
 ```bash
-php artisan vendor:publish --tag=mailbox-migrations
 php artisan migrate
 ```
 

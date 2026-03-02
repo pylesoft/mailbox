@@ -18,8 +18,6 @@ it('boots package provider and resolves mailbox services', function (): void {
 it('registers publishable assets under expected tags', function (): void {
     expect(ServiceProvider::pathsToPublish(MailboxServiceProvider::class, 'mailbox-config'))
         ->not->toBeEmpty();
-    expect(ServiceProvider::pathsToPublish(MailboxServiceProvider::class, 'mailbox-migrations'))
-        ->not->toBeEmpty();
     expect(ServiceProvider::pathsToPublish(MailboxServiceProvider::class, 'mailbox-stubs'))
         ->not->toBeEmpty();
 });
@@ -58,6 +56,22 @@ it('loads oauth routes when oauth is enabled', function (): void {
     $provider->boot();
 
     expect($provider->loadedOauthRoutes)->toBeTrue();
+});
+
+it('always loads package migrations automatically', function (): void {
+    $provider = new class(app()) extends MailboxServiceProvider
+    {
+        public bool $loadedMigrations = false;
+
+        protected function loadMigrationsFrom($paths): void
+        {
+            $this->loadedMigrations = true;
+        }
+    };
+
+    $provider->boot();
+
+    expect($provider->loadedMigrations)->toBeTrue();
 });
 
 it('resolves sqlite paths for serial and parallel test modes', function (): void {

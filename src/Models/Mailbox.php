@@ -19,13 +19,14 @@ use Illuminate\Support\Carbon;
  * @property bool $is_active
  * @property \Carbon\CarbonImmutable|null $last_synced_at
  * @property MailboxConnection $connection
- * @property \Illuminate\Database\Eloquent\Collection<int, MonitoredFolder> $folders
+ * @property \Illuminate\Database\Eloquent\Collection<int, Folder> $folders
+ * @property \Illuminate\Database\Eloquent\Collection<int, MailboxMessage> $messages
  */
-class MonitoredMailbox extends Model
+class Mailbox extends Model
 {
     use SoftDeletes;
 
-    protected $table = 'monitored_mailboxes';
+    protected $table = 'mailbox_mailboxes';
 
     protected $fillable = [
         'mailbox_connection_id',
@@ -46,16 +47,22 @@ class MonitoredMailbox extends Model
         return $this->belongsTo(MailboxConnection::class, 'mailbox_connection_id');
     }
 
-    /** @return HasMany<MonitoredFolder, $this> */
+    /** @return HasMany<Folder, $this> */
     public function folders(): HasMany
     {
-        return $this->hasMany(MonitoredFolder::class, 'monitored_mailbox_id');
+        return $this->hasMany(Folder::class, 'mailbox_id');
     }
 
-    /** @return HasMany<MonitoredFolder, $this> */
+    /** @return HasMany<Folder, $this> */
     public function activeFolders(): HasMany
     {
         return $this->folders()->where('is_active', true);
+    }
+
+    /** @return HasMany<MailboxMessage, $this> */
+    public function messages(): HasMany
+    {
+        return $this->hasMany(MailboxMessage::class, 'mailbox_id');
     }
 
     /** @param Builder<self> $query

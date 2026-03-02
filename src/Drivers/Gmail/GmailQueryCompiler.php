@@ -9,7 +9,9 @@ use Pyle\Mailbox\Enums\FilterableField;
 
 class GmailQueryCompiler
 {
-    /** @var array<int, array{field:string, operator:string, value:mixed}> */
+    /**
+     * @var array<int, array{type:'single', field:string, operator:string, value:mixed}|array{type:'any', clauses:array<int, array{field:string, operator:string, value:mixed}>}>
+     */
     private array $clauses = [];
 
     /** @var array<int, int> */
@@ -23,9 +25,36 @@ class GmailQueryCompiler
         }
 
         $this->clauses[] = [
+            'type' => 'single',
             'field' => $field instanceof FilterableField ? $field->value : (string) $field,
             'operator' => strtolower((string) $operator),
             'value' => $value,
+        ];
+
+        return $this;
+    }
+
+    /** @param array<int, mixed> $values */
+    public function whereAny(FilterableField|string $field, mixed $operator, array $values): self
+    {
+        $normalizedField = $field instanceof FilterableField ? $field->value : (string) $field;
+        $clauses = [];
+
+        foreach ($values as $value) {
+            $clauses[] = [
+                'field' => $normalizedField,
+                'operator' => strtolower((string) $operator),
+                'value' => $value,
+            ];
+        }
+
+        if ($clauses === []) {
+            return $this;
+        }
+
+        $this->clauses[] = [
+            'type' => 'any',
+            'clauses' => $clauses,
         ];
 
         return $this;
@@ -37,17 +66,53 @@ class GmailQueryCompiler
         $this->unsupportedClauseIndexes = [];
 
         foreach ($this->clauses as $index => $clause) {
-            $compiled = $this->compileClause($clause['field'], $clause['operator'], $clause['value']);
+            if ($clause['type'] === 'single') {
+                $compiled = $this->compileClause($clause['field'], $clause['operator'], $clause['value']);
 
-            if ($compiled === null) {
+                if ($compiled === null) {
+                    $this->unsupportedClauseIndexes[] = $index;
+
+                    continue;
+                }
+
+                if ($compiled !== '') {
+                    $parts[] = $compiled;
+                }
+
+                continue;
+            }
+
+            $groupParts = [];
+            $groupUnsupported = false;
+            foreach ($clause['clauses'] as $groupClause) {
+                $compiled = $this->compileClause($groupClause['field'], $groupClause['operator'], $groupClause['value']);
+                if ($compiled === null) {
+                    $groupUnsupported = true;
+                    break;
+                }
+
+                if ($compiled !== '') {
+                    $groupParts[] = $compiled;
+                }
+            }
+
+            if ($groupUnsupported) {
                 $this->unsupportedClauseIndexes[] = $index;
 
                 continue;
             }
 
-            if ($compiled !== '') {
-                $parts[] = $compiled;
+            if ($groupParts === []) {
+                continue;
             }
+
+            if (count($groupParts) === 1) {
+                $parts[] = $groupParts[0];
+
+                continue;
+            }
+
+            $parts[] = sprintf('{%s}', implode(' ', $groupParts));
         }
 
         return implode(' ', $parts);

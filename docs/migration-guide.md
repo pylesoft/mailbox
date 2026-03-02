@@ -69,15 +69,15 @@ MailboxConnection::create([
 ]);
 ```
 
-### Monitored Mailboxes
+### Mailboxes
 
-Each email address you want to sync maps to a `monitored_mailboxes` record:
+Each email address you want to sync maps to a `mailbox_mailboxes` record:
 
 ```php
-use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Models\Mailbox;
 
-MonitoredMailbox::create([
-    'connection_id' => $connection->id,
+Mailbox::create([
+    'mailbox_connection_id' => $connection->id,
     'email_address' => 'invoices@acme.com',
     'is_active' => true,
 ]);
@@ -85,13 +85,13 @@ MonitoredMailbox::create([
 
 ### Sync State
 
-If you have been tracking delta tokens or sync cursors, persist them in the `monitored_folders` table:
+If you have been tracking delta tokens or sync cursors, persist them in the `mailbox_folders` table:
 
 ```php
-use Pyle\Mailbox\Models\MonitoredFolder;
+use Pyle\Mailbox\Models\Folder;
 
-MonitoredFolder::create([
-    'monitored_mailbox_id' => $mailbox->id,
+Folder::create([
+    'mailbox_id' => $mailbox->id,
     'folder_id' => 'AAMkAG...',
     'display_name' => 'Inbox',
     'delta_token' => $yourExistingDeltaToken,
@@ -112,7 +112,6 @@ Install the package and run migrations alongside your existing code. Both system
 ```bash
 composer require pylesoft/mailbox
 php artisan vendor:publish --tag=mailbox-config
-php artisan vendor:publish --tag=mailbox-migrations
 php artisan migrate
 ```
 
@@ -128,7 +127,7 @@ Address any authentication or permission issues before proceeding. See [Troubles
 
 ### Phase 3 -- Backfill Records
 
-Create `MailboxConnection`, `MonitoredMailbox`, and `MonitoredFolder` records for each mailbox and folder you are tracking. If you have existing delta tokens, preserve them.
+Create `MailboxConnection`, `Mailbox`, and `Folder` records for each mailbox and folder you are tracking. If you have existing delta tokens, preserve them.
 
 ### Phase 4 -- Switch Ingestion
 

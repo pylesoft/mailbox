@@ -21,7 +21,7 @@ use Pyle\Mailbox\MailboxManager;
  * @property array<string, mixed>|null $config
  * @property \Carbon\CarbonImmutable|null $last_connected_at
  * @property string|null $last_error
- * @property \Illuminate\Database\Eloquent\Collection<int, MonitoredMailbox> $mailboxes
+ * @property \Illuminate\Database\Eloquent\Collection<int, Mailbox> $mailboxes
  * @property \Illuminate\Database\Eloquent\Collection<int, MailboxOAuthToken> $oauthTokens
  */
 class MailboxConnection extends Model
@@ -45,13 +45,13 @@ class MailboxConnection extends Model
         'last_connected_at' => 'immutable_datetime',
     ];
 
-    /** @return HasMany<MonitoredMailbox, $this> */
+    /** @return HasMany<Mailbox, $this> */
     public function mailboxes(): HasMany
     {
-        return $this->hasMany(MonitoredMailbox::class, 'mailbox_connection_id');
+        return $this->hasMany(Mailbox::class, 'mailbox_connection_id');
     }
 
-    /** @return HasMany<MonitoredMailbox, $this> */
+    /** @return HasMany<Mailbox, $this> */
     public function activeMailboxes(): HasMany
     {
         return $this->mailboxes()->where('is_active', true);
