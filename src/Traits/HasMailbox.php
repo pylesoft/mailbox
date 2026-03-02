@@ -9,8 +9,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
-use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\Mailbox;
+use Pyle\Mailbox\Models\MailboxConnection;
 use RuntimeException;
 
 /**

@@ -11,10 +11,10 @@ use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\WellKnownFolder;
-use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\MailboxManager;
 use Pyle\Mailbox\Models\Folder;
 use Pyle\Mailbox\Models\Mailbox as MailboxModel;
+use Pyle\Mailbox\Models\MailboxMessage;
 
 /**
  * @method static MailboxDriver driver(string $name = null)

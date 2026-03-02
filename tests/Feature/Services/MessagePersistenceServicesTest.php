@@ -21,10 +21,10 @@ use Pyle\Mailbox\Enums\ConnectionStatus;
 use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxAttachment;
 use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MailboxMessage;
-use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 

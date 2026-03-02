@@ -23,9 +23,9 @@ use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\MailboxManager;
-use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\Folder;
 use Pyle\Mailbox\Models\Mailbox;
+use Pyle\Mailbox\Models\MailboxConnection;
 
 beforeEach(function (): void {
     config()->set('mailbox.default', 'fake');

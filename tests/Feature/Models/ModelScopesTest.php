@@ -5,10 +5,10 @@ declare(strict_types=1);
 use Carbon\CarbonImmutable;
 use Pyle\Mailbox\Enums\ConnectionStatus;
 use Pyle\Mailbox\Enums\SyncStatus;
-use Pyle\Mailbox\Models\MailboxConnection;
-use Pyle\Mailbox\Models\MailboxOAuthToken;
 use Pyle\Mailbox\Models\Folder;
 use Pyle\Mailbox\Models\Mailbox;
+use Pyle\Mailbox\Models\MailboxConnection;
+use Pyle\Mailbox\Models\MailboxOAuthToken;
 
 it('applies model scopes and casts correctly', function (): void {
     $connection = MailboxConnection::query()->create([

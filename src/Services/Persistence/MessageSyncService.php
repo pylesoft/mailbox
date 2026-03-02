@@ -7,8 +7,8 @@ namespace Pyle\Mailbox\Services\Persistence;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MailboxResource;
-use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\MessageDto;
@@ -16,8 +16,8 @@ use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
-use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Models\Mailbox;
+use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Support\MessageMatcher;
 
 class MessageSyncService
@@ -331,8 +331,7 @@ class MessageSyncService
         MessageDto $message,
         ?MessageResource $resource = null,
         ?Collection $prefetchedAttachments = null,
-    ): MailboxMessage
-    {
+    ): MailboxMessage {
         $mailboxMessage = MailboxMessage::query()->updateOrCreate(
             [
                 'mailbox_id' => $mailboxId,

@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Commands;
 
 use Illuminate\Console\Command;
-use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\Mailbox;
+use Pyle\Mailbox\Models\MailboxConnection;
 
 use function Laravel\Prompts\info;
 use function Laravel\Prompts\table;
