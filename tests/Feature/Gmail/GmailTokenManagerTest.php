@@ -13,6 +13,10 @@ use Pyle\Mailbox\Drivers\Gmail\GmailTokenManager;
 it('acquires and caches delegated gmail token per mailbox', function (): void {
     Cache::flush();
 
+    if (! function_exists('openssl_pkey_new')) {
+        $this->markTestSkipped('OpenSSL extension is required for delegated Gmail token tests.');
+    }
+
     $history = [];
     $handler = new MockHandler([
         new Response(200, [], json_encode([
@@ -31,7 +35,9 @@ it('acquires and caches delegated gmail token per mailbox', function (): void {
         'private_key_bits' => 2048,
     ]);
 
-    expect($privateKey)->not->toBeFalse();
+    if ($privateKey === false) {
+        $this->markTestSkipped('OpenSSL key generation is not available in this environment.');
+    }
 
     $privateKeyPem = '';
     openssl_pkey_export($privateKey, $privateKeyPem);

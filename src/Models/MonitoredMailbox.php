@@ -20,6 +20,7 @@ use Illuminate\Support\Carbon;
  * @property \Carbon\CarbonImmutable|null $last_synced_at
  * @property MailboxConnection $connection
  * @property \Illuminate\Database\Eloquent\Collection<int, MonitoredFolder> $folders
+ * @property \Illuminate\Database\Eloquent\Collection<int, MailboxMessage> $messages
  */
 class MonitoredMailbox extends Model
 {
@@ -56,6 +57,12 @@ class MonitoredMailbox extends Model
     public function activeFolders(): HasMany
     {
         return $this->folders()->where('is_active', true);
+    }
+
+    /** @return HasMany<MailboxMessage, $this> */
+    public function messages(): HasMany
+    {
+        return $this->hasMany(MailboxMessage::class, 'monitored_mailbox_id');
     }
 
     /** @param Builder<self> $query

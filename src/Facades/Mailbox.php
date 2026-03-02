@@ -10,6 +10,8 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\MailboxManager;
 use Pyle\Mailbox\Models\MonitoredFolder;
 use Pyle\Mailbox\Models\MonitoredMailbox;
@@ -21,6 +23,10 @@ use Pyle\Mailbox\Models\MonitoredMailbox;
  * @method static \Pyle\Mailbox\Contracts\FolderResource forFolder(MonitoredFolder $folder)
  * @method static ConnectionTestResult testConnection(?string $emailAddress = null)
  * @method static HealthCheckResult healthCheck()
+ * @method static \Illuminate\Support\Collection<int, MailboxMessage> syncMailbox(MonitoredMailbox $mailbox, array<string, mixed> $options = [])
+ * @method static MailboxMessage moveMessage(MailboxMessage $message, string|WellKnownFolder $destinationFolder)
+ * @method static \Illuminate\Support\Collection<int, array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}> listFolderTree(MonitoredMailbox $mailbox, int $maxDepth = 10)
+ * @method static array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}|null findFolderByName(MonitoredMailbox $mailbox, string $folderName, string|WellKnownFolder|null $root = null, bool $caseSensitive = true)
  * @method static \Illuminate\Support\Collection<int, FilterableField> filterableFields()
  *
  * @see MailboxManager

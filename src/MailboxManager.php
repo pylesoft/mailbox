@@ -12,10 +12,15 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\DriverNotConfiguredException;
 use Pyle\Mailbox\Models\MailboxConnection;
+use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Models\MonitoredFolder;
 use Pyle\Mailbox\Models\MonitoredMailbox;
+use Pyle\Mailbox\Services\Folders\FolderLookupService;
+use Pyle\Mailbox\Services\Persistence\MessageMoveService;
+use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 use RuntimeException;
 
 class MailboxManager extends Manager
@@ -62,6 +67,52 @@ class MailboxManager extends Manager
     public function healthCheck(): HealthCheckResult
     {
         return $this->driver()->healthCheck();
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     * @return Collection<int, MailboxMessage>
+     */
+    public function syncMailbox(MonitoredMailbox $mailbox, array $options = []): Collection
+    {
+        /** @var MessageSyncService $service */
+        $service = $this->container->make(MessageSyncService::class);
+
+        return $service->syncMailbox($mailbox, $options);
+    }
+
+    public function moveMessage(MailboxMessage $message, string|WellKnownFolder $destinationFolder): MailboxMessage
+    {
+        /** @var MessageMoveService $service */
+        $service = $this->container->make(MessageMoveService::class);
+
+        return $service->move($message, $destinationFolder);
+    }
+
+    /**
+     * @return Collection<int, array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}>
+     */
+    public function listFolderTree(MonitoredMailbox $mailbox, int $maxDepth = 10): Collection
+    {
+        /** @var FolderLookupService $service */
+        $service = $this->container->make(FolderLookupService::class);
+
+        return $service->listTree($mailbox, $maxDepth);
+    }
+
+    /**
+     * @return array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}|null
+     */
+    public function findFolderByName(
+        MonitoredMailbox $mailbox,
+        string $folderName,
+        string|WellKnownFolder|null $root = null,
+        bool $caseSensitive = true,
+    ): ?array {
+        /** @var FolderLookupService $service */
+        $service = $this->container->make(FolderLookupService::class);
+
+        return $service->findByName($mailbox, $folderName, $root, $caseSensitive);
     }
 
     /** @return Collection<int, FilterableField> */
