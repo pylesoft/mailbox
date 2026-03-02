@@ -313,13 +313,8 @@ php artisan vendor:publish --tag=mailbox-config --force
 php artisan migrate:status | grep mailbox
 ```
 
-2. If tables already exist from a manual setup, publish and adjust the migration files:
-
-```bash
-php artisan vendor:publish --tag=mailbox-migrations
-```
-
-3. Edit the published migrations to wrap table creation in `Schema::hasTable()` checks if needed.
+2. If tables already exist from a manual setup, reconcile the existing schema before running `php artisan migrate` again.
+3. If needed, create a one-off application migration to align legacy tables/columns with Mailbox's expected schema.
 
 ### Attachment Write Failures
 

@@ -18,8 +18,6 @@ it('boots package provider and resolves mailbox services', function (): void {
 it('registers publishable assets under expected tags', function (): void {
     expect(ServiceProvider::pathsToPublish(MailboxServiceProvider::class, 'mailbox-config'))
         ->not->toBeEmpty();
-    expect(ServiceProvider::pathsToPublish(MailboxServiceProvider::class, 'mailbox-migrations'))
-        ->not->toBeEmpty();
     expect(ServiceProvider::pathsToPublish(MailboxServiceProvider::class, 'mailbox-stubs'))
         ->not->toBeEmpty();
 });
@@ -60,35 +58,10 @@ it('loads oauth routes when oauth is enabled', function (): void {
     expect($provider->loadedOauthRoutes)->toBeTrue();
 });
 
-it('skips package migration loading when published migration names exist', function (): void {
-    $base = storage_path('framework/testing/migration-provider-'.uniqid('', true));
-    $packagePath = $base.'/package';
-    $appPath = $base.'/app';
-
-    mkdir($packagePath, 0777, true);
-    mkdir($appPath, 0777, true);
-
-    file_put_contents($packagePath.'/2026_03_01_000005_create_mailbox_messages_table.php', '<?php');
-    file_put_contents($appPath.'/2026_03_02_000010_create_mailbox_messages_table.php', '<?php');
-
-    $provider = new class(app(), $packagePath, $appPath) extends MailboxServiceProvider
+it('always loads package migrations automatically', function (): void {
+    $provider = new class(app()) extends MailboxServiceProvider
     {
         public bool $loadedMigrations = false;
-
-        public function __construct($app, private readonly string $packagePath, private readonly string $appPath)
-        {
-            parent::__construct($app);
-        }
-
-        protected function packageMigrationPath(): string
-        {
-            return $this->packagePath;
-        }
-
-        protected function applicationMigrationPath(): string
-        {
-            return $this->appPath;
-        }
 
         protected function loadMigrationsFrom($paths): void
         {
@@ -96,20 +69,9 @@ it('skips package migration loading when published migration names exist', funct
         }
     };
 
-    try {
-        $provider->boot();
-        expect($provider->loadedMigrations)->toBeFalse();
-    } finally {
-        foreach (glob($packagePath.'/*.php') ?: [] as $file) {
-            @unlink($file);
-        }
-        foreach (glob($appPath.'/*.php') ?: [] as $file) {
-            @unlink($file);
-        }
-        @rmdir($packagePath);
-        @rmdir($appPath);
-        @rmdir($base);
-    }
+    $provider->boot();
+
+    expect($provider->loadedMigrations)->toBeTrue();
 });
 
 it('resolves sqlite paths for serial and parallel test modes', function (): void {

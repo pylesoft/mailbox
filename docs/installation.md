@@ -31,13 +31,9 @@ php artisan vendor:publish --tag=mailbox-config
 
 This creates `config/mailbox.php` where you configure drivers, cache, retry behaviour, attachment storage, and more. See [Configuration](configuration.md) for a full reference.
 
-## Publish the Migrations
+## Package Migrations
 
-```bash
-php artisan vendor:publish --tag=mailbox-migrations
-```
-
-Mailbox ships migration files that create and normalize the tables it needs for connections, mailboxes, folders, OAuth tokens, messages, and attachments:
+Mailbox auto-loads its migration files and they create/normalize the tables it needs for connections, mailboxes, folders, OAuth tokens, messages, and attachments:
 
 - `create_mailbox_connections_table`
 - `create_monitored_mailboxes_table`
@@ -46,8 +42,6 @@ Mailbox ships migration files that create and normalize the tables it needs for 
 - `create_mailbox_messages_table`
 - `create_mailbox_attachments_table`
 - `rename_monitored_entities_to_mailbox_entities`
-
-> **Tip** If you prefer to keep package migrations out of your `database/migrations` directory, you can load them directly from the package instead of publishing. Mailbox will still function correctly either way.
 
 ## Run the Migrations
 

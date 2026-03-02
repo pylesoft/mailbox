@@ -112,7 +112,6 @@ Install the package and run migrations alongside your existing code. Both system
 ```bash
 composer require pylesoft/mailbox
 php artisan vendor:publish --tag=mailbox-config
-php artisan vendor:publish --tag=mailbox-migrations
 php artisan migrate
 ```
 
