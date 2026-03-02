@@ -117,49 +117,7 @@ class MessageSyncService
             return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $filters);
         }
 
-        $query = $mailbox->messages();
-        if (method_exists($query, 'allFolders')) {
-            $query->allFolders();
-
-            return $this->fetchUsingQuery($query, $filters);
-        }
-
-        return $this->fetchAcrossFolders($mailbox, $filters);
-    }
-
-    /**
-     * @param  array<string, mixed>  $filters
-     * @return Collection<int, MessageDto>
-     */
-    private function fetchAcrossFolders(MailboxResource $mailbox, array $filters): Collection
-    {
-        $folderIds = $mailbox->folders()
-            ->get()
-            ->pluck('id')
-            ->filter(fn (mixed $folderId): bool => is_string($folderId) && trim($folderId) !== '')
-            ->map(fn (string $folderId): string => trim($folderId))
-            ->unique()
-            ->values();
-
-        if ($folderIds->isEmpty()) {
-            return $this->fetchUsingQuery($mailbox->messages(), $filters);
-        }
-
-        $messages = collect();
-        foreach ($folderIds as $folderId) {
-            $messages = $messages->concat($this->fetchUsingQuery($mailbox->messages()->inFolder($folderId), $filters));
-        }
-
-        $deduplicated = $messages
-            ->unique(fn (MessageDto $message): string => $message->id !== '' ? $message->id : spl_object_hash($message))
-            ->values();
-
-        $limit = isset($filters['limit']) ? (int) $filters['limit'] : 0;
-        if ($limit > 0) {
-            return $deduplicated->take($limit)->values();
-        }
-
-        return $deduplicated;
+        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $filters);
     }
 
     /**
@@ -407,7 +365,7 @@ class MessageSyncService
         $attachments = $prefetchedAttachments ?? $resource->attachments();
 
         foreach ($attachments as $attachment) {
-            if (! $attachment instanceof AttachmentDto || $attachment->id === '') {
+            if ($attachment->id === '') {
                 continue;
             }
 
