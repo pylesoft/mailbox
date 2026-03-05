@@ -19,6 +19,7 @@ use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Support\MessageMatcher;
+use RuntimeException;
 
 class MessageSyncService
 {
@@ -29,8 +30,16 @@ class MessageSyncService
     public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         $mailbox->loadMissing('connection');
+        $driver = trim((string) $mailbox->connection->driver);
+
+        if ($driver === '') {
+            throw new RuntimeException('Mailbox connection driver is required.');
+        }
 
         $savedFilters = isset($options['filters']) && is_array($options['filters']) ? $options['filters'] : [];
+        $ruleTree = $this->extractRuleTree($options['rule_tree'] ?? null, $savedFilters['rule_tree'] ?? null);
+        unset($savedFilters['rule_tree']);
+
         $folderReference = null;
         if (isset($options['folder']) && is_string($options['folder'])) {
             $folderReference = $options['folder'];
@@ -40,8 +49,8 @@ class MessageSyncService
 
         $referenceTime = Carbon::now('UTC');
         $hasAttachmentNamePrefix = ! empty($savedFilters['attachment_name_prefix']);
-        $hasAttachmentIsPdf = ! empty($savedFilters['attachment_is_pdf']) && $savedFilters['attachment_is_pdf'] === true;
-        $hasAttachmentFilters = $hasAttachmentNamePrefix || $hasAttachmentIsPdf;
+        $requiresAttachmentsFromRuleTree = $this->ruleTreeRequiresHasAttachmentsTrue($ruleTree);
+        $hasAttachmentFilters = $hasAttachmentNamePrefix || $requiresAttachmentsFromRuleTree;
 
         if ($hasAttachmentFilters && ! isset($savedFilters['has_attachments'])) {
             $savedFilters['has_attachments'] = true;
@@ -67,11 +76,11 @@ class MessageSyncService
         }
 
         $mailboxResource = MailboxFacade::forMailbox($mailbox);
-        $matcher = $this->buildMatcher($savedFilters);
-        $requiresAttachmentMetadata = $this->requiresAttachmentMetadata($savedFilters);
+        $matcher = $this->buildMatcher($savedFilters, $ruleTree);
+        $requiresAttachmentMetadata = $this->requiresAttachmentMetadata($savedFilters, $ruleTree);
         $persistAttachments = ! array_key_exists('include_attachments', $options)
             || (bool) $options['include_attachments'];
-        $messages = $this->fetchMessages($mailboxResource, $filters)
+        $messages = $this->fetchMessages($mailboxResource, $filters, $ruleTree, $driver)
             ->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)
             ->values();
 
@@ -81,7 +90,7 @@ class MessageSyncService
             $messageResource = null;
             $attachments = collect();
 
-            if ($requiresAttachmentMetadata) {
+            if ($requiresAttachmentMetadata && $message->hasAttachments) {
                 $messageResource = $mailboxResource->message($message->id);
                 $attachments = $messageResource->attachments();
             }
@@ -110,32 +119,37 @@ class MessageSyncService
 
     /**
      * @param  array<string, mixed>  $filters
+     * @param  array<string, mixed>  $ruleTree
      * @return Collection<int, MessageDto>
      */
-    private function fetchMessages(MailboxResource $mailbox, array $filters): Collection
+    private function fetchMessages(MailboxResource $mailbox, array $filters, array $ruleTree, string $driver): Collection
     {
         $folderReference = $this->parseFolderReference($filters['mail_folder_id'] ?? null);
 
         if ($folderReference !== null) {
-            return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $filters);
+            return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $filters, $ruleTree, $driver);
         }
 
-        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $filters);
+        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $filters, $ruleTree, $driver);
     }
 
     /**
      * @param  array<string, mixed>  $filters
+     * @param  array<string, mixed>  $ruleTree
      * @return Collection<int, MessageDto>
      */
-    private function fetchUsingQuery(MessageQueryBuilder $query, array $filters): Collection
+    private function fetchUsingQuery(MessageQueryBuilder $query, array $filters, array $ruleTree, string $driver): Collection
     {
-        $this->applyFilters($query, $filters);
+        $this->applyFilters($query, $filters, $ruleTree, $driver);
 
         return $query->get();
     }
 
-    /** @param  array<string, mixed>  $filters */
-    private function applyFilters(MessageQueryBuilder $query, array $filters): void
+    /**
+     * @param  array<string, mixed>  $filters
+     * @param  array<string, mixed>  $ruleTree
+     */
+    private function applyFilters(MessageQueryBuilder $query, array $filters, array $ruleTree, string $driver): void
     {
         if (! empty($filters['received_after'])) {
             $query->where(FilterableField::RECEIVED_AT, 'ge', Carbon::parse((string) $filters['received_after'])->utc());
@@ -192,6 +206,8 @@ class MessageSyncService
         if ($limit > 0) {
             $query->take($limit);
         }
+
+        $this->applyRuleTreePushdown($query, $ruleTree, $driver);
     }
 
     /**
@@ -206,9 +222,16 @@ class MessageSyncService
         return array_values(array_filter(array_map(fn (mixed $item): string => trim((string) $item), $value), fn (string $item): bool => $item !== ''));
     }
 
-    /** @param  array<string, mixed>  $filters */
-    private function buildMatcher(array $filters): ?MessageMatcher
+    /**
+     * @param  array<string, mixed>  $filters
+     * @param  array<string, mixed>  $ruleTree
+     */
+    private function buildMatcher(array $filters, array $ruleTree): ?MessageMatcher
     {
+        if ($ruleTree !== []) {
+            return new MessageMatcher($ruleTree);
+        }
+
         $conditions = [];
 
         $fromAddresses = $this->normalizeStringArray($filters['from_email_addresses'] ?? null);
@@ -290,24 +313,6 @@ class MessageSyncService
             ];
         }
 
-        if (! empty($filters['attachment_is_pdf']) && $filters['attachment_is_pdf'] === true) {
-            $conditions[] = [
-                'operator' => 'OR',
-                'conditions' => [
-                    [
-                        'field' => FilterableField::ATTACHMENT_CONTENT_TYPE->value,
-                        'operator' => MatchOperator::EQUALS->value,
-                        'value' => 'application/pdf',
-                    ],
-                    [
-                        'field' => FilterableField::ATTACHMENT_NAME->value,
-                        'operator' => MatchOperator::ENDS_WITH->value,
-                        'value' => '.pdf',
-                    ],
-                ],
-            ];
-        }
-
         if ($conditions === []) {
             return null;
         }
@@ -318,11 +323,17 @@ class MessageSyncService
         ]);
     }
 
-    /** @param  array<string, mixed>  $filters */
-    private function requiresAttachmentMetadata(array $filters): bool
+    /**
+     * @param  array<string, mixed>  $filters
+     * @param  array<string, mixed>  $ruleTree
+     */
+    private function requiresAttachmentMetadata(array $filters, array $ruleTree): bool
     {
-        return trim((string) ($filters['attachment_name_prefix'] ?? '')) !== ''
-            || (! empty($filters['attachment_is_pdf']) && $filters['attachment_is_pdf'] === true);
+        if ($this->ruleTreeRequiresAttachmentMetadata($ruleTree)) {
+            return true;
+        }
+
+        return trim((string) ($filters['attachment_name_prefix'] ?? '')) !== '';
     }
 
     /**
@@ -455,12 +466,14 @@ class MessageSyncService
         }
 
         $normalized = strtolower($trimmed);
-        if ($normalized === 'inbox') {
-            return 'wk:inbox';
+        if ($normalized === 'inbox' || $normalized === 'wk:inbox') {
+            return WellKnownFolder::INBOX->value;
         }
 
         if (str_starts_with($normalized, 'wk:')) {
-            return 'wk:'.substr($normalized, 3);
+            $wellKnown = substr($normalized, 3);
+
+            return $wellKnown !== '' ? $wellKnown : $trimmed;
         }
 
         return $trimmed;
@@ -478,8 +491,9 @@ class MessageSyncService
         }
 
         $normalized = strtolower($trimmed);
-        if ($normalized === 'inbox') {
-            return WellKnownFolder::INBOX;
+        $wellKnown = WellKnownFolder::tryFrom($normalized);
+        if ($wellKnown instanceof WellKnownFolder) {
+            return $wellKnown;
         }
 
         if (! str_starts_with($normalized, 'wk:')) {
@@ -489,5 +503,350 @@ class MessageSyncService
         $wellKnown = WellKnownFolder::tryFrom(substr($normalized, 3));
 
         return $wellKnown ?? $trimmed;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function extractRuleTree(mixed $runtimeRuleTree, mixed $storedRuleTree): array
+    {
+        if ($this->isRuleTree($runtimeRuleTree)) {
+            return $this->normalizeRuleTree($runtimeRuleTree);
+        }
+
+        if ($this->isRuleTree($storedRuleTree)) {
+            return $this->normalizeRuleTree($storedRuleTree);
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $ruleTree
+     */
+    private function ruleTreeRequiresAttachmentMetadata(array $ruleTree): bool
+    {
+        foreach ($this->collectRuleTreeFields($ruleTree) as $field) {
+            if (str_starts_with($field, 'attachment')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $ruleTree
+     */
+    private function ruleTreeRequiresHasAttachmentsTrue(array $ruleTree): bool
+    {
+        if ($ruleTree === []) {
+            return false;
+        }
+
+        return ! $this->groupMayMatchWithoutAttachments($ruleTree);
+    }
+
+    /**
+     * @param  array<string, mixed>  $ruleTree
+     * @return array<int, string>
+     */
+    private function collectRuleTreeFields(array $ruleTree): array
+    {
+        $conditions = $ruleTree['conditions'] ?? null;
+
+        if (! is_array($conditions)) {
+            return [];
+        }
+
+        $fields = [];
+
+        foreach ($conditions as $condition) {
+            if (! is_array($condition)) {
+                continue;
+            }
+
+            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
+                $fields = [...$fields, ...$this->collectRuleTreeFields($condition)];
+
+                continue;
+            }
+
+            $field = trim((string) ($condition['field'] ?? ''));
+            if ($field !== '') {
+                $fields[] = $field;
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * @param  array<string, mixed>  $group
+     */
+    private function groupMayMatchWithoutAttachments(array $group): bool
+    {
+        $operator = strtoupper((string) ($group['operator'] ?? 'AND'));
+        $conditions = $group['conditions'] ?? [];
+
+        if (! is_array($conditions) || $conditions === []) {
+            return true;
+        }
+
+        $results = [];
+
+        foreach ($conditions as $condition) {
+            if (! is_array($condition)) {
+                continue;
+            }
+
+            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
+                $results[] = $this->groupMayMatchWithoutAttachments($condition);
+
+                continue;
+            }
+
+            $results[] = $this->conditionMayMatchWithoutAttachments($condition);
+        }
+
+        return $operator === 'OR'
+            ? in_array(true, $results, true)
+            : ! in_array(false, $results, true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $condition
+     */
+    private function conditionMayMatchWithoutAttachments(array $condition): bool
+    {
+        $field = trim((string) ($condition['field'] ?? ''));
+
+        if ($field === '' || ! str_starts_with($field, 'attachment')) {
+            return true;
+        }
+
+        if ($field !== FilterableField::ATTACHMENT_COUNT->value) {
+            return false;
+        }
+
+        return $this->attachmentCountConditionMayMatchWithoutAttachments($condition);
+    }
+
+    /**
+     * @param  array<string, mixed>  $condition
+     */
+    private function attachmentCountConditionMayMatchWithoutAttachments(array $condition): bool
+    {
+        $operator = MatchOperator::tryFrom((string) ($condition['operator'] ?? ''));
+        $value = $condition['value'] ?? null;
+
+        if (! $operator instanceof MatchOperator) {
+            return true;
+        }
+
+        return match ($operator) {
+            MatchOperator::EQUALS => ($this->numericValue($value) ?? 0.0) === 0.0,
+            MatchOperator::GREATER_THAN => 0.0 > ($this->numericValue($value) ?? INF),
+            MatchOperator::LESS_THAN => 0.0 < ($this->numericValue($value) ?? -INF),
+            MatchOperator::BETWEEN => $this->zeroWithinRange($value),
+            default => true,
+        };
+    }
+
+    private function zeroWithinRange(mixed $value): bool
+    {
+        if (! is_array($value) || count($value) !== 2) {
+            return true;
+        }
+
+        $normalizedRange = array_values($value);
+        $minimum = $this->numericValue($normalizedRange[0]);
+        $maximum = $this->numericValue($normalizedRange[1]);
+
+        if ($minimum === null || $maximum === null) {
+            return true;
+        }
+
+        return $minimum <= 0.0 && $maximum >= 0.0;
+    }
+
+    private function numericValue(mixed $value): ?float
+    {
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+
+        if (is_bool($value)) {
+            return $value ? 1.0 : 0.0;
+        }
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        if ($trimmed === '' || ! is_numeric($trimmed)) {
+            return null;
+        }
+
+        return (float) $trimmed;
+    }
+
+    /**
+     * @param  array<string, mixed>  $ruleTree
+     */
+    private function applyRuleTreePushdown(MessageQueryBuilder $query, array $ruleTree, string $driver): void
+    {
+        if ($ruleTree === []) {
+            return;
+        }
+
+        $conditions = $this->collectAndOnlyConditions($ruleTree);
+
+        if ($conditions === null || $conditions === []) {
+            return;
+        }
+
+        foreach ($conditions as $condition) {
+            $field = trim((string) ($condition['field'] ?? ''));
+            $operator = trim((string) ($condition['operator'] ?? ''));
+            $value = $condition['value'] ?? null;
+
+            $filterableField = FilterableField::tryFrom($field);
+            $matchOperator = MatchOperator::tryFrom($operator);
+
+            if (! $filterableField instanceof FilterableField || ! $matchOperator instanceof MatchOperator) {
+                continue;
+            }
+
+            if (! $filterableField->isServerPushable($driver)) {
+                continue;
+            }
+
+            if (! in_array($matchOperator, $filterableField->operators(), true)) {
+                continue;
+            }
+
+            if ($matchOperator === MatchOperator::BETWEEN && is_array($value) && count($value) === 2) {
+                [$min, $max] = array_values($value);
+                $query->where($field, 'ge', $min);
+                $query->where($field, 'le', $max);
+
+                continue;
+            }
+
+            $providerOperator = match ($matchOperator) {
+                MatchOperator::EQUALS => 'eq',
+                MatchOperator::CONTAINS => 'contains',
+                MatchOperator::STARTS_WITH => 'starts_with',
+                MatchOperator::ENDS_WITH => 'ends_with',
+                MatchOperator::GREATER_THAN => 'gt',
+                MatchOperator::LESS_THAN => 'lt',
+                MatchOperator::BEFORE => 'lt',
+                MatchOperator::AFTER => 'gt',
+                default => null,
+            };
+
+            if (! is_string($providerOperator)) {
+                continue;
+            }
+
+            $query->where($field, $providerOperator, $value);
+        }
+    }
+
+    private function isRuleTree(mixed $value): bool
+    {
+        return is_array($value)
+            && isset($value['operator'])
+            && is_array($value['conditions'] ?? null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $ruleTree
+     * @return array<string, mixed>
+     */
+    private function normalizeRuleTree(array $ruleTree): array
+    {
+        $operator = strtoupper((string) ($ruleTree['operator'] ?? 'AND'));
+        $conditions = $ruleTree['conditions'] ?? [];
+
+        if (! is_array($conditions)) {
+            $conditions = [];
+        }
+
+        $normalizedConditions = [];
+
+        foreach ($conditions as $condition) {
+            if (! is_array($condition)) {
+                continue;
+            }
+
+            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
+                $normalizedConditions[] = $this->normalizeRuleTree($condition);
+
+                continue;
+            }
+
+            $field = trim((string) ($condition['field'] ?? ''));
+            $conditionOperator = trim((string) ($condition['operator'] ?? ''));
+
+            if ($field === '' || $conditionOperator === '') {
+                continue;
+            }
+
+            $normalizedConditions[] = [
+                'field' => $field,
+                'operator' => $conditionOperator,
+                'value' => $condition['value'] ?? null,
+            ];
+        }
+
+        return [
+            'operator' => $operator === 'OR' ? 'OR' : 'AND',
+            'conditions' => $normalizedConditions,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $group
+     * @return array<int, array<string, mixed>>|null
+     */
+    private function collectAndOnlyConditions(array $group): ?array
+    {
+        if (strtoupper((string) ($group['operator'] ?? 'AND')) !== 'AND') {
+            return null;
+        }
+
+        $conditions = $group['conditions'] ?? [];
+
+        if (! is_array($conditions)) {
+            return null;
+        }
+
+        $flattened = [];
+
+        foreach ($conditions as $condition) {
+            if (! is_array($condition)) {
+                return null;
+            }
+
+            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
+                $subConditions = $this->collectAndOnlyConditions($condition);
+
+                if ($subConditions === null) {
+                    return null;
+                }
+
+                $flattened = [...$flattened, ...$subConditions];
+
+                continue;
+            }
+
+            $flattened[] = $condition;
+        }
+
+        return $flattened;
     }
 }

@@ -20,6 +20,7 @@ enum FilterableField: string
     case BODY_PREVIEW = 'bodyPreview';
     case ATTACHMENT_COUNT = 'attachmentCount';
     case ATTACHMENT_NAME = 'attachmentName';
+    case ATTACHMENT_EXTENSION = 'attachmentExtension';
     case ATTACHMENT_CONTENT_TYPE = 'attachmentContentType';
     case ATTACHMENT_SIZE = 'attachmentSize';
 
@@ -47,7 +48,7 @@ enum FilterableField: string
                 MatchOperator::CONTAINS,
                 MatchOperator::MATCHES_REGEX,
             ],
-            self::ATTACHMENT_NAME => [
+            self::ATTACHMENT_NAME, self::ATTACHMENT_EXTENSION => [
                 MatchOperator::EQUALS,
                 MatchOperator::CONTAINS,
                 MatchOperator::STARTS_WITH,

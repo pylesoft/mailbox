@@ -13,6 +13,7 @@ it('returns expected metadata for filterable fields', function (): void {
 
     expect(FilterableField::SUBJECT->operators())->toContain(MatchOperator::CONTAINS, MatchOperator::MATCHES_REGEX);
     expect(FilterableField::ATTACHMENT_NAME->operators())->toContain(MatchOperator::STARTS_WITH, MatchOperator::ENDS_WITH);
+    expect(FilterableField::ATTACHMENT_EXTENSION->operators())->toContain(MatchOperator::EQUALS, MatchOperator::ENDS_WITH);
 
     expect(FilterableField::IS_READ->isServerPushable())->toBeTrue();
     expect(FilterableField::ATTACHMENT_SIZE->isServerPushable())->toBeFalse();
