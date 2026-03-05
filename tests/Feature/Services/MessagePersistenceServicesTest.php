@@ -176,6 +176,149 @@ it('uses provider operator tokens when applying sync filters', function (): void
     expect($query->whereCalls)->toContain(['field' => 'isRead', 'operator' => 'eq', 'value' => false]);
 });
 
+it('prefers runtime rule tree over stored rule tree when applying pushdown filters', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Rule Tree Precedence Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'rule-tree-precedence@example.com',
+        'display_name' => 'Rule Tree Precedence Mailbox',
+        'is_active' => true,
+    ]);
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'subject', 'operator' => 'contains', 'value' => 'runtime-subject'],
+            ],
+        ],
+        'filters' => [
+            'rule_tree' => [
+                'operator' => 'AND',
+                'conditions' => [
+                    ['field' => 'from.address', 'operator' => 'equals', 'value' => 'stored@example.com'],
+                ],
+            ],
+            'limit' => 10,
+        ],
+    ]);
+
+    expect($query->whereCalls)->toContain(['field' => 'subject', 'operator' => 'contains', 'value' => 'runtime-subject']);
+    expect($query->whereCalls)->not->toContain(['field' => 'from.address', 'operator' => 'eq', 'value' => 'stored@example.com']);
+});
+
+it('normalizes rule trees and only pushes down supported AND conditions', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Rule Tree Normalization Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'rule-tree-normalization@example.com',
+        'display_name' => 'Rule Tree Normalization Mailbox',
+        'is_active' => true,
+    ]);
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'subject', 'operator' => 'contains', 'value' => 'invoice'],
+                [
+                    'operator' => 'AND',
+                    'conditions' => [
+                        ['field' => 'from.address', 'operator' => 'equals', 'value' => 'sender@example.com'],
+                        ['field' => 'attachmentName', 'operator' => 'contains', 'value' => 'invoice'],
+                        ['field' => 'subject', 'operator' => 'matches_regex', 'value' => '/invoice/i'],
+                        ['field' => '', 'operator' => 'equals', 'value' => 'invalid'],
+                        'invalid-scalar',
+                    ],
+                ],
+                ['field' => 'subject', 'value' => 'missing-operator'],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($query->whereCalls)->toContain(['field' => 'subject', 'operator' => 'contains', 'value' => 'invoice']);
+    expect($query->whereCalls)->toContain(['field' => 'from.address', 'operator' => 'eq', 'value' => 'sender@example.com']);
+    expect($query->whereCalls)->not->toContain(['field' => 'attachmentName', 'operator' => 'contains', 'value' => 'invoice']);
+    expect($query->whereCalls)->not->toContain(['field' => 'subject', 'operator' => 'matches_regex', 'value' => '/invoice/i']);
+});
+
+it('does not push down rule-tree conditions when any OR group is present', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Rule Tree OR Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'rule-tree-or@example.com',
+        'display_name' => 'Rule Tree Or Mailbox',
+        'is_active' => true,
+    ]);
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'subject', 'operator' => 'contains', 'value' => 'invoice'],
+                [
+                    'operator' => 'OR',
+                    'conditions' => [
+                        ['field' => 'from.address', 'operator' => 'equals', 'value' => 'a@example.com'],
+                        ['field' => 'from.address', 'operator' => 'equals', 'value' => 'b@example.com'],
+                    ],
+                ],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($query->whereCalls)->not->toContain(['field' => 'subject', 'operator' => 'contains', 'value' => 'invoice']);
+    expect($query->whereCalls)->not->toContain(['field' => 'from.address', 'operator' => 'eq', 'value' => 'a@example.com']);
+    expect($query->whereCalls)->not->toContain(['field' => 'from.address', 'operator' => 'eq', 'value' => 'b@example.com']);
+});
+
 it('does not resolve message resources for messages without attachments', function (): void {
     $connection = MailboxConnection::query()->create([
         'name' => 'No Attachment Connection',
@@ -214,6 +357,59 @@ it('does not resolve message resources for messages without attachments', functi
     ]);
 
     expect($persisted)->toHaveCount(1);
+    expect($resource->messageCalls)->toBe(0);
+});
+
+it('does not resolve message resources for attachment rules when message has no attachments', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Attachment Rule No Metadata Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'attachment-rule-no-metadata@example.com',
+        'display_name' => 'Attachment Rule No Metadata Mailbox',
+        'is_active' => true,
+    ]);
+
+    $message = testMailboxMessageDto(
+        id: 'provider-message-attachment-rule',
+        internetMessageId: '<internet-attachment-rule@example.com>',
+        parentFolderId: 'inbox',
+        hasAttachments: false,
+    );
+
+    $resource = new TrackingMailboxResource(
+        query: new TestMessageQueryBuilder(collect([$message])),
+        messages: [
+            'provider-message-attachment-rule' => new TestMessageResource(
+                dto: $message,
+                attachments: collect(),
+                streams: [],
+            ),
+        ],
+    );
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $persisted = $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'attachmentName', 'operator' => 'contains', 'value' => 'invoice'],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($persisted)->toHaveCount(0);
     expect($resource->messageCalls)->toBe(0);
 });
 

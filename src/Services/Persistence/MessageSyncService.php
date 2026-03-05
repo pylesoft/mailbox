@@ -89,7 +89,7 @@ class MessageSyncService
             $messageResource = null;
             $attachments = collect();
 
-            if ($requiresAttachmentMetadata) {
+            if ($requiresAttachmentMetadata && $message->hasAttachments) {
                 $messageResource = $mailboxResource->message($message->id);
                 $attachments = $messageResource->attachments();
             }
