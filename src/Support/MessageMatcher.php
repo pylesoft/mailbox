@@ -13,6 +13,38 @@ use Pyle\Mailbox\Enums\MatchOperator;
 
 class MessageMatcher
 {
+    /**
+     * @var array<string, string>
+     */
+    private const MIME_TYPE_EXTENSIONS = [
+        'application/pdf' => 'pdf',
+        'application/msword' => 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+        'application/vnd.ms-powerpoint' => 'ppt',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
+        'application/zip' => 'zip',
+        'application/x-zip-compressed' => 'zip',
+        'application/gzip' => 'gz',
+        'application/x-gzip' => 'gz',
+        'application/json' => 'json',
+        'application/xml' => 'xml',
+        'text/plain' => 'txt',
+        'text/csv' => 'csv',
+        'text/xml' => 'xml',
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/gif' => 'gif',
+        'image/webp' => 'webp',
+        'image/svg+xml' => 'svg',
+        'image/tiff' => 'tiff',
+        'image/bmp' => 'bmp',
+        'audio/mpeg' => 'mp3',
+        'audio/wav' => 'wav',
+        'video/mp4' => 'mp4',
+    ];
+
     /** @param array<string, mixed> $rules */
     public function __construct(
         private readonly array $rules,
@@ -96,6 +128,7 @@ class MessageMatcher
         return $attachments->contains(function (AttachmentDto $attachment) use ($field, $operator, $expected): bool {
             $actual = match ($field) {
                 'attachmentName' => $attachment->name,
+                'attachmentExtension' => $this->resolveAttachmentExtension($attachment),
                 'attachmentContentType' => $attachment->contentType,
                 'attachmentSize' => $attachment->size,
                 default => null,
@@ -103,6 +136,59 @@ class MessageMatcher
 
             return $this->evaluateOperator($operator, $actual, $expected);
         });
+    }
+
+    private function resolveAttachmentExtension(AttachmentDto $attachment): string
+    {
+        $extension = strtolower(pathinfo($attachment->name, PATHINFO_EXTENSION));
+
+        if ($extension !== '') {
+            return $extension;
+        }
+
+        return $this->extensionFromMimeType($attachment->contentType);
+    }
+
+    private function extensionFromMimeType(string $mimeType): string
+    {
+        $normalizedMimeType = strtolower(trim(strtok($mimeType, ';') ?: ''));
+
+        if ($normalizedMimeType === '') {
+            return '';
+        }
+
+        if (array_key_exists($normalizedMimeType, self::MIME_TYPE_EXTENSIONS)) {
+            return self::MIME_TYPE_EXTENSIONS[$normalizedMimeType];
+        }
+
+        if (! str_contains($normalizedMimeType, '/')) {
+            return '';
+        }
+
+        [, $subtype] = explode('/', $normalizedMimeType, 2);
+
+        if ($subtype === '') {
+            return '';
+        }
+
+        if (str_contains($subtype, '+')) {
+            $suffix = explode('+', $subtype);
+            $candidate = end($suffix);
+
+            if (is_string($candidate) && preg_match('/^[a-z0-9]+$/', $candidate) === 1) {
+                return $candidate;
+            }
+        }
+
+        if (str_starts_with($subtype, 'x-')) {
+            $subtype = substr($subtype, 2);
+        }
+
+        if (str_starts_with($subtype, 'vnd.')) {
+            return '';
+        }
+
+        return preg_match('/^[a-z0-9]+$/', $subtype) === 1 ? $subtype : '';
     }
 
     private function resolveMessageField(MessageDto $message, string $field): mixed

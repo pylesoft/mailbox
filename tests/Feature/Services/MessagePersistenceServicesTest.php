@@ -217,6 +217,28 @@ it('does not resolve message resources for messages without attachments', functi
     expect($resource->messageCalls)->toBe(0);
 });
 
+it('requires an explicit mailbox connection driver when syncing', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Missing Driver Connection',
+        'driver' => '',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'missing-driver@example.com',
+        'display_name' => 'Missing Driver Mailbox',
+        'is_active' => true,
+    ]);
+
+    $service = new MessageSyncService;
+
+    expect(fn (): Collection => $service->syncMailbox($mailbox, [
+        'filters' => ['limit' => 10],
+    ]))->toThrow(\RuntimeException::class, 'Mailbox connection driver is required.');
+});
+
 it('moves a mailbox message and updates provider id and folder metadata', function (): void {
     $connection = MailboxConnection::query()->create([
         'name' => 'Move Connection',

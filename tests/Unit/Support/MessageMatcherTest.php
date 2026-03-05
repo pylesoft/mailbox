@@ -109,6 +109,7 @@ it('evaluates attachment conditions', function (): void {
         'operator' => 'AND',
         'conditions' => [
             ['field' => 'attachmentCount', 'operator' => 'greater_than', 'value' => 1],
+            ['field' => 'attachmentExtension', 'operator' => 'equals', 'value' => 'pdf'],
             ['field' => 'attachmentName', 'operator' => 'ends_with', 'value' => '.pdf'],
             ['field' => 'attachmentSize', 'operator' => 'less_than', 'value' => 10_000],
         ],
@@ -117,6 +118,51 @@ it('evaluates attachment conditions', function (): void {
     $attachments = [
         new AttachmentDto('a1', 'invoice.pdf', 'application/pdf', 1200, false, null),
         new AttachmentDto('a2', 'note.txt', 'text/plain', 500, false, null),
+    ];
+
+    expect($matcher->matches(messageDto(), $attachments))->toBeTrue();
+});
+
+it('evaluates attachment extension from mime type when filename has no extension', function (): void {
+    $matcher = new MessageMatcher([
+        'operator' => 'AND',
+        'conditions' => [
+            ['field' => 'attachmentExtension', 'operator' => 'equals', 'value' => 'pdf'],
+        ],
+    ]);
+
+    $attachments = [
+        new AttachmentDto('a1', 'invoice', 'application/pdf', 1200, false, null),
+    ];
+
+    expect($matcher->matches(messageDto(), $attachments))->toBeTrue();
+});
+
+it('evaluates attachment extension from non-pdf mime type when filename has no extension', function (): void {
+    $matcher = new MessageMatcher([
+        'operator' => 'AND',
+        'conditions' => [
+            ['field' => 'attachmentExtension', 'operator' => 'equals', 'value' => 'png'],
+        ],
+    ]);
+
+    $attachments = [
+        new AttachmentDto('a1', 'diagram', 'image/png', 1200, false, null),
+    ];
+
+    expect($matcher->matches(messageDto(), $attachments))->toBeTrue();
+});
+
+it('evaluates attachment extension from mime type with parameters', function (): void {
+    $matcher = new MessageMatcher([
+        'operator' => 'AND',
+        'conditions' => [
+            ['field' => 'attachmentExtension', 'operator' => 'equals', 'value' => 'json'],
+        ],
+    ]);
+
+    $attachments = [
+        new AttachmentDto('a1', 'payload', 'application/json; charset=utf-8', 1200, false, null),
     ];
 
     expect($matcher->matches(messageDto(), $attachments))->toBeTrue();
