@@ -49,7 +49,8 @@ class MessageSyncService
 
         $referenceTime = Carbon::now('UTC');
         $hasAttachmentNamePrefix = ! empty($savedFilters['attachment_name_prefix']);
-        $hasAttachmentFilters = $hasAttachmentNamePrefix;
+        $requiresAttachmentsFromRuleTree = $this->ruleTreeRequiresHasAttachmentsTrue($ruleTree);
+        $hasAttachmentFilters = $hasAttachmentNamePrefix || $requiresAttachmentsFromRuleTree;
 
         if ($hasAttachmentFilters && ! isset($savedFilters['has_attachments'])) {
             $savedFilters['has_attachments'] = true;
@@ -536,6 +537,18 @@ class MessageSyncService
 
     /**
      * @param  array<string, mixed>  $ruleTree
+     */
+    private function ruleTreeRequiresHasAttachmentsTrue(array $ruleTree): bool
+    {
+        if ($ruleTree === []) {
+            return false;
+        }
+
+        return ! $this->groupMayMatchWithoutAttachments($ruleTree);
+    }
+
+    /**
+     * @param  array<string, mixed>  $ruleTree
      * @return array<int, string>
      */
     private function collectRuleTreeFields(array $ruleTree): array
@@ -566,6 +579,118 @@ class MessageSyncService
         }
 
         return $fields;
+    }
+
+    /**
+     * @param  array<string, mixed>  $group
+     */
+    private function groupMayMatchWithoutAttachments(array $group): bool
+    {
+        $operator = strtoupper((string) ($group['operator'] ?? 'AND'));
+        $conditions = $group['conditions'] ?? [];
+
+        if (! is_array($conditions) || $conditions === []) {
+            return true;
+        }
+
+        $results = [];
+
+        foreach ($conditions as $condition) {
+            if (! is_array($condition)) {
+                continue;
+            }
+
+            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
+                $results[] = $this->groupMayMatchWithoutAttachments($condition);
+
+                continue;
+            }
+
+            $results[] = $this->conditionMayMatchWithoutAttachments($condition);
+        }
+
+        return $operator === 'OR'
+            ? in_array(true, $results, true)
+            : ! in_array(false, $results, true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $condition
+     */
+    private function conditionMayMatchWithoutAttachments(array $condition): bool
+    {
+        $field = trim((string) ($condition['field'] ?? ''));
+
+        if ($field === '' || ! str_starts_with($field, 'attachment')) {
+            return true;
+        }
+
+        if ($field !== FilterableField::ATTACHMENT_COUNT->value) {
+            return false;
+        }
+
+        return $this->attachmentCountConditionMayMatchWithoutAttachments($condition);
+    }
+
+    /**
+     * @param  array<string, mixed>  $condition
+     */
+    private function attachmentCountConditionMayMatchWithoutAttachments(array $condition): bool
+    {
+        $operator = MatchOperator::tryFrom((string) ($condition['operator'] ?? ''));
+        $value = $condition['value'] ?? null;
+
+        if (! $operator instanceof MatchOperator) {
+            return true;
+        }
+
+        return match ($operator) {
+            MatchOperator::EQUALS => ($this->numericValue($value) ?? 0.0) === 0.0,
+            MatchOperator::GREATER_THAN => 0.0 > ($this->numericValue($value) ?? INF),
+            MatchOperator::LESS_THAN => 0.0 < ($this->numericValue($value) ?? -INF),
+            MatchOperator::BETWEEN => $this->zeroWithinRange($value),
+            default => true,
+        };
+    }
+
+    private function zeroWithinRange(mixed $value): bool
+    {
+        if (! is_array($value) || count($value) !== 2) {
+            return true;
+        }
+
+        $normalizedRange = array_values($value);
+        $minimum = $this->numericValue($normalizedRange[0]);
+        $maximum = $this->numericValue($normalizedRange[1]);
+
+        if ($minimum === null || $maximum === null) {
+            return true;
+        }
+
+        return $minimum <= 0.0 && $maximum >= 0.0;
+    }
+
+    private function numericValue(mixed $value): ?float
+    {
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+
+        if (is_bool($value)) {
+            return $value ? 1.0 : 0.0;
+        }
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        if ($trimmed === '' || ! is_numeric($trimmed)) {
+            return null;
+        }
+
+        return (float) $trimmed;
     }
 
     /**

@@ -176,6 +176,118 @@ it('uses provider operator tokens when applying sync filters', function (): void
     expect($query->whereCalls)->toContain(['field' => 'isRead', 'operator' => 'eq', 'value' => false]);
 });
 
+it('derives has attachments filter when rule tree cannot match messages without attachments', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Rule Tree Attachment Inference Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'rule-tree-attachment-inference@example.com',
+        'display_name' => 'Rule Tree Attachment Inference Mailbox',
+        'is_active' => true,
+    ]);
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'attachmentName', 'operator' => 'contains', 'value' => 'invoice'],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($query->whereCalls)->toContain(['field' => 'hasAttachments', 'operator' => 'eq', 'value' => true]);
+});
+
+it('does not derive has attachments filter for zero-count attachment rule tree', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Rule Tree Zero Count Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'rule-tree-zero-count@example.com',
+        'display_name' => 'Rule Tree Zero Count Mailbox',
+        'is_active' => true,
+    ]);
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'attachmentCount', 'operator' => 'equals', 'value' => 0],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($query->whereCalls)->not->toContain(['field' => 'hasAttachments', 'operator' => 'eq', 'value' => true]);
+});
+
+it('does not derive has attachments filter when rule tree can match without attachments', function (): void {
+    $connection = MailboxConnection::query()->create([
+        'name' => 'Rule Tree Optional Attachment Connection',
+        'driver' => 'ms-graph',
+        'status' => ConnectionStatus::CONNECTED,
+        'config' => [],
+    ]);
+
+    $mailbox = Mailbox::query()->create([
+        'mailbox_connection_id' => $connection->id,
+        'email_address' => 'rule-tree-optional-attachment@example.com',
+        'display_name' => 'Rule Tree Optional Attachment Mailbox',
+        'is_active' => true,
+    ]);
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    MailboxFacade::shouldReceive('forMailbox')
+        ->once()
+        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->andReturn($resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'OR',
+            'conditions' => [
+                ['field' => 'attachmentName', 'operator' => 'contains', 'value' => 'invoice'],
+                ['field' => 'subject', 'operator' => 'contains', 'value' => 'newsletter'],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($query->whereCalls)->not->toContain(['field' => 'hasAttachments', 'operator' => 'eq', 'value' => true]);
+});
+
 it('prefers runtime rule tree over stored rule tree when applying pushdown filters', function (): void {
     $connection = MailboxConnection::query()->create([
         'name' => 'Rule Tree Precedence Connection',
