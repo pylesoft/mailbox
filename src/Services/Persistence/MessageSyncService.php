@@ -30,7 +30,7 @@ class MessageSyncService
     public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         $mailbox->loadMissing('connection');
-        $driver = trim((string) ($mailbox->connection?->driver ?? ''));
+        $driver = trim((string) $mailbox->connection->driver);
 
         if ($driver === '') {
             throw new RuntimeException('Mailbox connection driver is required.');

@@ -173,9 +173,9 @@ class MessageMatcher
 
         if (str_contains($subtype, '+')) {
             $suffix = explode('+', $subtype);
-            $candidate = end($suffix);
+            $candidate = (string) end($suffix);
 
-            if (is_string($candidate) && preg_match('/^[a-z0-9]+$/', $candidate) === 1) {
+            if (preg_match('/^[a-z0-9]+$/', $candidate) === 1) {
                 return $candidate;
             }
         }
