@@ -31,30 +31,68 @@ class MessageSyncService
      */
     public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
+        $driver = $this->driverForMailbox($mailbox);
+        $savedFilters = $this->savedFilters($options);
+        $ruleTree = $this->ruleTree->extract($options['rule_tree'] ?? null, $savedFilters['rule_tree'] ?? null);
+        unset($savedFilters['rule_tree']);
+
+        $filters = $this->buildSyncFilters($options, $savedFilters, $ruleTree, Carbon::now('UTC'));
+        $mailboxResource = MailboxFacade::forMailbox($mailbox);
+        $matcher = $this->buildMatcher($savedFilters, $ruleTree);
+        $requiresAttachmentMetadata = $this->requiresAttachmentMetadata($savedFilters, $ruleTree);
+        $persistAttachments = ! array_key_exists('include_attachments', $options)
+            || (bool) $options['include_attachments'];
+        $messages = $this->messagesForSync($mailboxResource, $filters, $ruleTree, $driver);
+        $persisted = $this->persistMessages(
+            $mailboxResource,
+            $mailbox->id,
+            $messages,
+            $matcher,
+            $requiresAttachmentMetadata,
+            $persistAttachments,
+        );
+
+        $mailbox->update(['last_synced_at' => now()]);
+
+        return $persisted
+            ->unique('id')
+            ->sortBy('received_at')
+            ->values();
+    }
+
+    private function driverForMailbox(Mailbox $mailbox): string
+    {
         $mailbox->loadMissing('connection');
+
         $driver = trim((string) $mailbox->connection->driver);
 
         if ($driver === '') {
             throw new RuntimeException('Mailbox connection driver is required.');
         }
 
-        $savedFilters = isset($options['filters']) && is_array($options['filters']) ? $options['filters'] : [];
-        $ruleTree = $this->ruleTree->extract($options['rule_tree'] ?? null, $savedFilters['rule_tree'] ?? null);
-        unset($savedFilters['rule_tree']);
+        return $driver;
+    }
 
-        $folderReference = null;
-        if (isset($options['folder']) && is_string($options['folder'])) {
-            $folderReference = $options['folder'];
-        } elseif (isset($options['folder_reference']) && is_string($options['folder_reference'])) {
-            $folderReference = $options['folder_reference'];
-        }
+    /**
+     * @param  array<string, mixed>  $options
+     * @return array<string, mixed>
+     */
+    private function savedFilters(array $options): array
+    {
+        return isset($options['filters']) && is_array($options['filters'])
+            ? $options['filters']
+            : [];
+    }
 
-        $referenceTime = Carbon::now('UTC');
-        $hasAttachmentNamePrefix = ! empty($savedFilters['attachment_name_prefix']);
-        $requiresAttachmentsFromRuleTree = $this->ruleTree->requiresHasAttachmentsTrue($ruleTree);
-        $hasAttachmentFilters = $hasAttachmentNamePrefix || $requiresAttachmentsFromRuleTree;
-
-        if ($hasAttachmentFilters && ! isset($savedFilters['has_attachments'])) {
+    /**
+     * @param  array<string, mixed>  $options
+     * @param  array<string, mixed>  $savedFilters
+     * @param  array<string, mixed>  $ruleTree
+     * @return array<string, mixed>
+     */
+    private function buildSyncFilters(array $options, array $savedFilters, array $ruleTree, Carbon $referenceTime): array
+    {
+        if ($this->requiresAttachmentFilter($savedFilters, $ruleTree) && ! isset($savedFilters['has_attachments'])) {
             $savedFilters['has_attachments'] = true;
         }
 
@@ -63,60 +101,58 @@ class MessageSyncService
             'page_size' => $savedFilters['page_size'] ?? 25,
             'limit' => $savedFilters['limit'] ?? 100,
             'received_before' => $savedFilters['received_before'] ?? $referenceTime->toIso8601String(),
+            'received_after' => $this->receivedAfterFilter($savedFilters, $referenceTime),
         ];
 
-        if (! empty($savedFilters['received_after'])) {
-            $filters['received_after'] = $savedFilters['received_after'];
-        } elseif (! empty($savedFilters['lookback_hours']) && is_numeric($savedFilters['lookback_hours'])) {
-            $filters['received_after'] = $referenceTime->copy()->subHours((int) $savedFilters['lookback_hours'])->toIso8601String();
-        } else {
-            $filters['received_after'] = $referenceTime->copy()->subHours(6)->toIso8601String();
-        }
+        $folderReference = $this->folderReference($options);
 
         if ($folderReference !== null && $folderReference !== '') {
             $filters['mail_folder_id'] = $this->normalizeStoredFolderReference($folderReference);
         }
 
-        $mailboxResource = MailboxFacade::forMailbox($mailbox);
-        $matcher = $this->buildMatcher($savedFilters, $ruleTree);
-        $requiresAttachmentMetadata = $this->requiresAttachmentMetadata($savedFilters, $ruleTree);
-        $persistAttachments = ! array_key_exists('include_attachments', $options)
-            || (bool) $options['include_attachments'];
-        $messages = $this->fetchMessages($mailboxResource, $filters, $ruleTree, $driver)
-            ->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)
-            ->values();
+        return $filters;
+    }
 
-        $persisted = collect();
+    /**
+     * @param  array<string, mixed>  $savedFilters
+     * @param  array<string, mixed>  $ruleTree
+     */
+    private function requiresAttachmentFilter(array $savedFilters, array $ruleTree): bool
+    {
+        return ! empty($savedFilters['attachment_name_prefix'])
+            || $this->ruleTree->requiresHasAttachmentsTrue($ruleTree);
+    }
 
-        foreach ($messages as $message) {
-            $messageResource = null;
-            $attachments = collect();
-
-            if ($requiresAttachmentMetadata && $message->hasAttachments) {
-                $messageResource = $mailboxResource->message($message->id);
-                $attachments = $messageResource->attachments();
-            }
-
-            if ($matcher instanceof MessageMatcher && ! $matcher->matches($message, $attachments)) {
-                continue;
-            }
-
-            $persisted->push($this->persister->upsert(
-                $mailboxResource,
-                $mailbox->id,
-                $message,
-                $messageResource,
-                $requiresAttachmentMetadata ? $attachments : null,
-                $persistAttachments,
-            ));
+    /**
+     * @param  array<string, mixed>  $options
+     */
+    private function folderReference(array $options): ?string
+    {
+        if (isset($options['folder']) && is_string($options['folder'])) {
+            return $options['folder'];
         }
 
-        $mailbox->update(['last_synced_at' => now()]);
+        if (isset($options['folder_reference']) && is_string($options['folder_reference'])) {
+            return $options['folder_reference'];
+        }
 
-        return $persisted
-            ->unique('id')
-            ->sortBy('received_at')
-            ->values();
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $savedFilters
+     */
+    private function receivedAfterFilter(array $savedFilters, Carbon $referenceTime): string
+    {
+        if (! empty($savedFilters['received_after'])) {
+            return (string) $savedFilters['received_after'];
+        }
+
+        if (! empty($savedFilters['lookback_hours']) && is_numeric($savedFilters['lookback_hours'])) {
+            return $referenceTime->copy()->subHours((int) $savedFilters['lookback_hours'])->toIso8601String();
+        }
+
+        return $referenceTime->copy()->subHours(6)->toIso8601String();
     }
 
     /**
@@ -145,6 +181,22 @@ class MessageSyncService
         $this->applyFilters($query, $filters, $ruleTree, $driver);
 
         return $query->get();
+    }
+
+    /**
+     * @param  array<string, mixed>  $filters
+     * @param  array<string, mixed>  $ruleTree
+     * @return Collection<int, MessageDto>
+     */
+    private function messagesForSync(
+        MailboxResource $mailboxResource,
+        array $filters,
+        array $ruleTree,
+        string $driver,
+    ): Collection {
+        return $this->fetchMessages($mailboxResource, $filters, $ruleTree, $driver)
+            ->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)
+            ->values();
     }
 
     /**
@@ -226,6 +278,46 @@ class MessageSyncService
             fn (mixed $item): string => trim((string) $item),
             $value,
         ), fn (string $item): bool => $item !== ''));
+    }
+
+    /**
+     * @param  Collection<int, MessageDto>  $messages
+     * @return Collection<int, MailboxMessage>
+     */
+    private function persistMessages(
+        MailboxResource $mailboxResource,
+        int $mailboxId,
+        Collection $messages,
+        ?MessageMatcher $matcher,
+        bool $requiresAttachmentMetadata,
+        bool $persistAttachments,
+    ): Collection {
+        $persisted = collect();
+
+        foreach ($messages as $message) {
+            $messageResource = null;
+            $attachments = collect();
+
+            if ($requiresAttachmentMetadata && $message->hasAttachments) {
+                $messageResource = $mailboxResource->message($message->id);
+                $attachments = $messageResource->attachments();
+            }
+
+            if ($matcher instanceof MessageMatcher && ! $matcher->matches($message, $attachments)) {
+                continue;
+            }
+
+            $persisted->push($this->persister->upsert(
+                $mailboxResource,
+                $mailboxId,
+                $message,
+                $messageResource,
+                $requiresAttachmentMetadata ? $attachments : null,
+                $persistAttachments,
+            ));
+        }
+
+        return $persisted;
     }
 
     /**

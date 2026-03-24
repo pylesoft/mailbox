@@ -67,12 +67,11 @@ function mailboxClassesInNamespace(string $namespace): array
             continue;
         }
 
-        $relative = substr($file->getPathname(), strlen($srcRoot) + 1);
-        if (! is_string($relative)) {
+        $class = mailboxClassLikeInFile($file->getPathname());
+
+        if (! is_string($class) || ! str_starts_with($class, $namespace.'\\')) {
             continue;
         }
-
-        $class = $namespace.'\\'.str_replace(['/', '.php'], ['\\', ''], $relative);
 
         if (class_exists($class) || interface_exists($class) || trait_exists($class) || enum_exists($class)) {
             $classes[] = $class;
@@ -82,6 +81,25 @@ function mailboxClassesInNamespace(string $namespace): array
     sort($classes);
 
     return array_values(array_unique($classes));
+}
+
+function mailboxClassLikeInFile(string $path): ?string
+{
+    $contents = file_get_contents($path);
+
+    if (! is_string($contents)) {
+        return null;
+    }
+
+    if (! preg_match('/^namespace\s+([^;]+);/m', $contents, $namespaceMatch)) {
+        return null;
+    }
+
+    if (! preg_match('/^(?:final\s+|abstract\s+)?(class|interface|trait|enum)\s+([A-Za-z_][A-Za-z0-9_]*)/m', $contents, $classLikeMatch)) {
+        return null;
+    }
+
+    return trim($namespaceMatch[1]).'\\'.$classLikeMatch[2];
 }
 
 function shouldSkipMethodForCoverage(ReflectionMethod $method, string $class, string $srcRoot): bool
@@ -99,16 +117,20 @@ function shouldSkipMethodForCoverage(ReflectionMethod $method, string $class, st
         return true;
     }
 
-    try {
-        $prototype = $method->getPrototype();
-        $prototypeFile = $prototype->getFileName();
+    $prototypeFile = prototypeFile($method);
 
-        if (is_string($prototypeFile) && ! str_starts_with($prototypeFile, $srcRoot)) {
-            return true;
-        }
-    } catch (ReflectionException) {
-        // No prototype means this method originates in the current class contract.
+    if (is_string($prototypeFile) && ! str_starts_with($prototypeFile, $srcRoot)) {
+        return true;
     }
 
     return false;
+}
+
+function prototypeFile(ReflectionMethod $method): ?string
+{
+    try {
+        return $method->getPrototype()->getFileName() ?: null;
+    } catch (ReflectionException) {
+        return null;
+    }
 }

@@ -5,7 +5,17 @@
   "license": "MIT",
   "autoload": {
     "psr-4": {
-      "Pyle\\Mailbox\\": "src/"
+      "Pyle\\Mailbox\\": "src/",
+      "Pyle\\Mailbox\\Commands\\": "src/Application/Commands/",
+      "Pyle\\Mailbox\\Facades\\": "src/Application/Facades/",
+      "Pyle\\Mailbox\\Http\\": "src/Application/Http/",
+      "Pyle\\Mailbox\\Services\\": "src/Application/Services/",
+      "Pyle\\Mailbox\\Contracts\\": "src/Domain/Contracts/",
+      "Pyle\\Mailbox\\DTOs\\": "src/Domain/DTOs/",
+      "Pyle\\Mailbox\\Enums\\": "src/Domain/Enums/",
+      "Pyle\\Mailbox\\Events\\": "src/Domain/Events/",
+      "Pyle\\Mailbox\\Exceptions\\": "src/Domain/Exceptions/",
+      "Pyle\\Mailbox\\Models\\": "src/Domain/Models/"
     }
   },
   "autoload-dev": {
