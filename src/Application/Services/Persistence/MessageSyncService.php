@@ -15,8 +15,6 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxMessage;
-use Pyle\Mailbox\Services\Persistence\MailboxMessagePersister;
-use Pyle\Mailbox\Services\Persistence\MessageSyncRuleTree;
 use Pyle\Mailbox\Support\MessageMatcher;
 use RuntimeException;
 

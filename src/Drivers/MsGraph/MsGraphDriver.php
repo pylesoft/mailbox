@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsRawClient;
-use Pyle\Mailbox\Drivers\MsGraph\MsGraphMailboxResource;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Events\ConnectionTestCompleted;

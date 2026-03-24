@@ -12,7 +12,6 @@ use Pyle\Mailbox\Events\DeltaSyncStarted;
 use Pyle\Mailbox\Events\DeltaTokenExpired;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\DeltaTokenExpiredException;
-use Pyle\Mailbox\Drivers\MsGraph\MsGraphDeltaCollector;
 
 class MsGraphDeltaSync
 {
@@ -65,8 +64,7 @@ class MsGraphDeltaSync
         string $mailbox,
         string $folderId,
         ?DeltaTokenExpiredException $exception = null,
-    ): DeltaResultDto
-    {
+    ): DeltaResultDto {
         Event::dispatch(new DeltaTokenExpired('ms-graph', $mailbox, $folderId));
 
         $this->logInfo('MS Graph delta token expired', [

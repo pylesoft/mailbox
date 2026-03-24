@@ -17,8 +17,8 @@ use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
-use Pyle\Mailbox\MailboxManager;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\MailboxManager;
 
 beforeEach(function (): void {
     config()->set('mailbox.default', 'healthy-fake');

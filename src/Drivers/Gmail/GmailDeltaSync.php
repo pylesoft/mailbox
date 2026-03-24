@@ -229,8 +229,7 @@ class GmailDeltaSync
         string $mailbox,
         string $folderId,
         ?DeltaTokenExpiredException $exception = null,
-    ): DeltaResultDto
-    {
+    ): DeltaResultDto {
         Event::dispatch(new DeltaTokenExpired('gmail', $mailbox, $folderId));
 
         $this->logInfo('Gmail delta token expired', [

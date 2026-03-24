@@ -6,7 +6,6 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\DTOs\MessageDto;
-use Pyle\Mailbox\Drivers\Gmail\GmailMessageFilterer;
 
 final class GmailMessagePageCollector
 {
