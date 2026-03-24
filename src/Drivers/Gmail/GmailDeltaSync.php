@@ -13,6 +13,7 @@ use Pyle\Mailbox\Events\DeltaSyncCompleted;
 use Pyle\Mailbox\Events\DeltaSyncStarted;
 use Pyle\Mailbox\Events\DeltaTokenExpired;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\DeltaTokenExpiredException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 
 class GmailDeltaSync
@@ -35,7 +36,16 @@ class GmailDeltaSync
             $changes = $this->collectHistoryChanges($mailbox, $folderId, $deltaToken);
         } catch (ApiRequestException|ResourceNotFoundException $e) {
             if ($e instanceof ResourceNotFoundException || $e->status === 404) {
-                return $this->expiredDeltaResult($mailbox, $folderId);
+                return $this->expiredDeltaResult(
+                    $mailbox,
+                    $folderId,
+                    new DeltaTokenExpiredException(
+                        mailbox: $mailbox,
+                        folderId: $folderId,
+                        message: 'Gmail delta token expired. A full sync is required.',
+                        previous: $e,
+                    ),
+                );
             }
 
             throw $e;
@@ -215,9 +225,19 @@ class GmailDeltaSync
         return $deleted;
     }
 
-    private function expiredDeltaResult(string $mailbox, string $folderId): DeltaResultDto
+    private function expiredDeltaResult(
+        string $mailbox,
+        string $folderId,
+        ?DeltaTokenExpiredException $exception = null,
+    ): DeltaResultDto
     {
         Event::dispatch(new DeltaTokenExpired('gmail', $mailbox, $folderId));
+
+        $this->logInfo('Gmail delta token expired', [
+            'mailbox' => $mailbox,
+            'folder' => $folderId,
+            'error' => $exception?->getMessage(),
+        ]);
 
         return new DeltaResultDto(
             created: collect(),

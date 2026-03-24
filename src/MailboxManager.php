@@ -20,7 +20,9 @@ use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Services\Folders\FolderLookupService;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
+use Pyle\Mailbox\Services\Persistence\MessageSyncRequest;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
+use Pyle\Mailbox\Support\FilterableFields;
 use RuntimeException;
 
 class MailboxManager extends Manager
@@ -70,15 +72,15 @@ class MailboxManager extends Manager
     }
 
     /**
-     * @param  array<string, mixed>  $options
+     * @param  MessageSyncRequest|array<string, mixed>|null  $request
      * @return Collection<int, MailboxMessage>
      */
-    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
+    public function syncMailbox(Mailbox $mailbox, MessageSyncRequest|array|null $request = null): Collection
     {
         /** @var MessageSyncService $service */
         $service = $this->container->make(MessageSyncService::class);
 
-        return $service->syncMailbox($mailbox, $options);
+        return $service->syncMailbox($mailbox, $request);
     }
 
     public function moveMessage(MailboxMessage $message, string|WellKnownFolder $destinationFolder): MailboxMessage
@@ -119,7 +121,7 @@ class MailboxManager extends Manager
     public function filterableFields(): Collection
     {
         /** @var Collection<int, FilterableField> $fields */
-        $fields = collect(FilterableField::cases());
+        $fields = FilterableFields::all();
 
         return $fields;
     }

@@ -6,6 +6,7 @@ use Illuminate\Support\Collection;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\Models\MailboxAttachment;
 use Pyle\Mailbox\Models\MailboxMessage;
+use Pyle\Mailbox\Services\Persistence\MessageSyncRequest;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 
 require_once __DIR__.'/Support/MessagePersistenceTestSupport.php';
@@ -68,19 +69,19 @@ it('syncs and upserts mailbox messages and attachments using canonical keys', fu
 
     $service = new MessageSyncService;
 
-    $firstPersisted = $service->syncMailbox($mailbox, [
-        'folder_reference' => 'wk:inbox',
-        'filters' => ['limit' => 25],
-    ]);
+    $firstPersisted = $service->syncMailbox($mailbox, new MessageSyncRequest(
+        folderReference: 'wk:inbox',
+        filters: ['limit' => 25],
+    ));
 
     expect($firstPersisted)->toHaveCount(1);
     expect(MailboxMessage::query()->count())->toBe(1);
     expect(MailboxAttachment::query()->count())->toBe(1);
 
-    $secondPersisted = $service->syncMailbox($mailbox, [
-        'folder_reference' => 'wk:inbox',
-        'filters' => ['limit' => 25],
-    ]);
+    $secondPersisted = $service->syncMailbox($mailbox, new MessageSyncRequest(
+        folderReference: 'wk:inbox',
+        filters: ['limit' => 25],
+    ));
 
     expect($secondPersisted)->toHaveCount(1);
     expect(MailboxMessage::query()->count())->toBe(1);

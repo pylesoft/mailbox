@@ -11,6 +11,8 @@ use Pyle\Mailbox\Commands\ListFoldersCommand;
 use Pyle\Mailbox\Commands\StatusCommand;
 use Pyle\Mailbox\Commands\SyncCommand;
 use Pyle\Mailbox\Commands\TestAccessCommand;
+use Pyle\Mailbox\Contracts\MailboxDriverResolver;
+use Pyle\Mailbox\Contracts\MailboxResourceResolver;
 
 class MailboxServiceProvider extends ServiceProvider
 {
@@ -20,6 +22,12 @@ class MailboxServiceProvider extends ServiceProvider
 
         $this->app->singleton(MailboxManager::class, function ($app): MailboxManager {
             return new MailboxManager($app);
+        });
+        $this->app->singleton(MailboxResourceResolver::class, function ($app): MailboxManager {
+            return $app->make(MailboxManager::class);
+        });
+        $this->app->singleton(MailboxDriverResolver::class, function ($app): MailboxManager {
+            return $app->make(MailboxManager::class);
         });
 
         $this->app->alias(MailboxManager::class, 'mailbox');

@@ -11,6 +11,8 @@ use Pyle\Mailbox\Events\DeltaSyncCompleted;
 use Pyle\Mailbox\Events\DeltaSyncStarted;
 use Pyle\Mailbox\Events\DeltaTokenExpired;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\DeltaTokenExpiredException;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphDeltaCollector;
 
 class MsGraphDeltaSync
 {
@@ -36,7 +38,16 @@ class MsGraphDeltaSync
             $result = $this->collector->collect($mailbox, $folderId, $deltaToken);
         } catch (ApiRequestException $e) {
             if ($e->status === 410) {
-                return $this->expiredDeltaResult($mailbox, $folderId);
+                return $this->expiredDeltaResult(
+                    $mailbox,
+                    $folderId,
+                    new DeltaTokenExpiredException(
+                        mailbox: $mailbox,
+                        folderId: $folderId,
+                        message: 'Microsoft Graph delta token expired. A full sync is required.',
+                        previous: $e,
+                    ),
+                );
             }
 
             throw $e;
@@ -50,13 +61,18 @@ class MsGraphDeltaSync
         );
     }
 
-    private function expiredDeltaResult(string $mailbox, string $folderId): DeltaResultDto
+    private function expiredDeltaResult(
+        string $mailbox,
+        string $folderId,
+        ?DeltaTokenExpiredException $exception = null,
+    ): DeltaResultDto
     {
         Event::dispatch(new DeltaTokenExpired('ms-graph', $mailbox, $folderId));
 
         $this->logInfo('MS Graph delta token expired', [
             'mailbox' => $mailbox,
             'folder' => $folderId,
+            'error' => $exception?->getMessage(),
         ]);
 
         return new DeltaResultDto(

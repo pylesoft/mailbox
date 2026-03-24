@@ -15,6 +15,8 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxMessage;
+use Pyle\Mailbox\Services\Persistence\MailboxMessagePersister;
+use Pyle\Mailbox\Services\Persistence\MessageSyncRuleTree;
 use Pyle\Mailbox\Support\MessageMatcher;
 use RuntimeException;
 
@@ -26,30 +28,21 @@ class MessageSyncService
     ) {}
 
     /**
-     * @param  array<string, mixed>  $options
+     * @param  MessageSyncRequest|array<string, mixed>|null  $request
      * @return Collection<int, MailboxMessage>
      */
-    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
+    public function syncMailbox(Mailbox $mailbox, MessageSyncRequest|array|null $request = null): Collection
     {
+        $request = MessageSyncRequest::from($request, $this->ruleTree);
         $driver = $this->driverForMailbox($mailbox);
-        $savedFilters = $this->savedFilters($options);
-        $ruleTree = $this->ruleTree->extract($options['rule_tree'] ?? null, $savedFilters['rule_tree'] ?? null);
-        unset($savedFilters['rule_tree']);
-
-        $filters = $this->buildSyncFilters($options, $savedFilters, $ruleTree, Carbon::now('UTC'));
+        $plan = $this->buildPlan($request, Carbon::now('UTC'));
         $mailboxResource = MailboxFacade::forMailbox($mailbox);
-        $matcher = $this->buildMatcher($savedFilters, $ruleTree);
-        $requiresAttachmentMetadata = $this->requiresAttachmentMetadata($savedFilters, $ruleTree);
-        $persistAttachments = ! array_key_exists('include_attachments', $options)
-            || (bool) $options['include_attachments'];
-        $messages = $this->messagesForSync($mailboxResource, $filters, $ruleTree, $driver);
+        $messages = $this->messagesForSync($mailboxResource, $plan, $driver);
         $persisted = $this->persistMessages(
             $mailboxResource,
             $mailbox->id,
             $messages,
-            $matcher,
-            $requiresAttachmentMetadata,
-            $persistAttachments,
+            $plan,
         );
 
         $mailbox->update(['last_synced_at' => now()]);
@@ -74,43 +67,24 @@ class MessageSyncService
     }
 
     /**
-     * @param  array<string, mixed>  $options
      * @return array<string, mixed>
      */
-    private function savedFilters(array $options): array
+    private function buildQueryFilters(MessageSyncRequest $request, Carbon $referenceTime): array
     {
-        return isset($options['filters']) && is_array($options['filters'])
-            ? $options['filters']
-            : [];
-    }
+        $savedFilters = $request->filters();
+        $ruleTree = $request->ruleTree();
 
-    /**
-     * @param  array<string, mixed>  $options
-     * @param  array<string, mixed>  $savedFilters
-     * @param  array<string, mixed>  $ruleTree
-     * @return array<string, mixed>
-     */
-    private function buildSyncFilters(array $options, array $savedFilters, array $ruleTree, Carbon $referenceTime): array
-    {
         if ($this->requiresAttachmentFilter($savedFilters, $ruleTree) && ! isset($savedFilters['has_attachments'])) {
             $savedFilters['has_attachments'] = true;
         }
 
-        $filters = [
+        return [
             ...$savedFilters,
             'page_size' => $savedFilters['page_size'] ?? 25,
             'limit' => $savedFilters['limit'] ?? 100,
             'received_before' => $savedFilters['received_before'] ?? $referenceTime->toIso8601String(),
             'received_after' => $this->receivedAfterFilter($savedFilters, $referenceTime),
         ];
-
-        $folderReference = $this->folderReference($options);
-
-        if ($folderReference !== null && $folderReference !== '') {
-            $filters['mail_folder_id'] = $this->normalizeStoredFolderReference($folderReference);
-        }
-
-        return $filters;
     }
 
     /**
@@ -121,22 +95,6 @@ class MessageSyncService
     {
         return ! empty($savedFilters['attachment_name_prefix'])
             || $this->ruleTree->requiresHasAttachmentsTrue($ruleTree);
-    }
-
-    /**
-     * @param  array<string, mixed>  $options
-     */
-    private function folderReference(array $options): ?string
-    {
-        if (isset($options['folder']) && is_string($options['folder'])) {
-            return $options['folder'];
-        }
-
-        if (isset($options['folder_reference']) && is_string($options['folder_reference'])) {
-            return $options['folder_reference'];
-        }
-
-        return null;
     }
 
     /**
@@ -156,55 +114,45 @@ class MessageSyncService
     }
 
     /**
-     * @param  array<string, mixed>  $filters
-     * @param  array<string, mixed>  $ruleTree
      * @return Collection<int, MessageDto>
      */
-    private function fetchMessages(MailboxResource $mailbox, array $filters, array $ruleTree, string $driver): Collection
+    private function fetchMessages(MailboxResource $mailbox, MessageSyncPlan $plan, string $driver): Collection
     {
-        $folderReference = $this->parseFolderReference($filters['mail_folder_id'] ?? null);
-
+        $folderReference = $plan->folderReference();
         if ($folderReference !== null) {
-            return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $filters, $ruleTree, $driver);
+            return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $plan, $driver);
         }
 
-        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $filters, $ruleTree, $driver);
+        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $plan, $driver);
     }
 
     /**
-     * @param  array<string, mixed>  $filters
-     * @param  array<string, mixed>  $ruleTree
      * @return Collection<int, MessageDto>
      */
-    private function fetchUsingQuery(MessageQueryBuilder $query, array $filters, array $ruleTree, string $driver): Collection
+    private function fetchUsingQuery(MessageQueryBuilder $query, MessageSyncPlan $plan, string $driver): Collection
     {
-        $this->applyFilters($query, $filters, $ruleTree, $driver);
+        $this->applyFilters($query, $plan, $driver);
 
         return $query->get();
     }
 
     /**
-     * @param  array<string, mixed>  $filters
-     * @param  array<string, mixed>  $ruleTree
      * @return Collection<int, MessageDto>
      */
     private function messagesForSync(
         MailboxResource $mailboxResource,
-        array $filters,
-        array $ruleTree,
+        MessageSyncPlan $plan,
         string $driver,
     ): Collection {
-        return $this->fetchMessages($mailboxResource, $filters, $ruleTree, $driver)
+        return $this->fetchMessages($mailboxResource, $plan, $driver)
             ->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)
             ->values();
     }
 
-    /**
-     * @param  array<string, mixed>  $filters
-     * @param  array<string, mixed>  $ruleTree
-     */
-    private function applyFilters(MessageQueryBuilder $query, array $filters, array $ruleTree, string $driver): void
+    private function applyFilters(MessageQueryBuilder $query, MessageSyncPlan $plan, string $driver): void
     {
+        $filters = $plan->filters();
+
         if (! empty($filters['received_after'])) {
             $query->where(FilterableField::RECEIVED_AT, 'ge', Carbon::parse((string) $filters['received_after'])->utc());
         }
@@ -262,7 +210,7 @@ class MessageSyncService
             $query->take($limit);
         }
 
-        $this->ruleTree->applyPushdown($query, $ruleTree, $driver);
+        $this->ruleTree->applyPushdown($query, $plan->ruleTree(), $driver);
     }
 
     /**
@@ -288,9 +236,7 @@ class MessageSyncService
         MailboxResource $mailboxResource,
         int $mailboxId,
         Collection $messages,
-        ?MessageMatcher $matcher,
-        bool $requiresAttachmentMetadata,
-        bool $persistAttachments,
+        MessageSyncPlan $plan,
     ): Collection {
         $persisted = collect();
 
@@ -298,10 +244,12 @@ class MessageSyncService
             $messageResource = null;
             $attachments = collect();
 
-            if ($requiresAttachmentMetadata && $message->hasAttachments) {
+            if ($plan->requiresAttachmentMetadata() && $message->hasAttachments) {
                 $messageResource = $mailboxResource->message($message->id);
                 $attachments = $messageResource->attachments();
             }
+
+            $matcher = $plan->matcher();
 
             if ($matcher instanceof MessageMatcher && ! $matcher->matches($message, $attachments)) {
                 continue;
@@ -312,8 +260,8 @@ class MessageSyncService
                 $mailboxId,
                 $message,
                 $messageResource,
-                $requiresAttachmentMetadata ? $attachments : null,
-                $persistAttachments,
+                $plan->requiresAttachmentMetadata() ? $attachments : null,
+                $plan->persistAttachments(),
             ));
         }
 
@@ -434,25 +382,19 @@ class MessageSyncService
         return trim((string) ($filters['attachment_name_prefix'] ?? '')) !== '';
     }
 
-    private function normalizeStoredFolderReference(string $reference): string
+    private function buildPlan(MessageSyncRequest $request, Carbon $referenceTime): MessageSyncPlan
     {
-        $trimmed = trim($reference);
-        if ($trimmed === '') {
-            return $trimmed;
-        }
+        $filters = $this->buildQueryFilters($request, $referenceTime);
+        $ruleTree = $request->ruleTree();
 
-        $normalized = strtolower($trimmed);
-        if ($normalized === 'inbox' || $normalized === 'wk:inbox') {
-            return WellKnownFolder::INBOX->value;
-        }
-
-        if (str_starts_with($normalized, 'wk:')) {
-            $wellKnown = substr($normalized, 3);
-
-            return $wellKnown !== '' ? $wellKnown : $trimmed;
-        }
-
-        return $trimmed;
+        return new MessageSyncPlan(
+            filters: $filters,
+            ruleTree: $ruleTree,
+            folderReference: $this->parseFolderReference($request->folderReference()),
+            matcher: $this->buildMatcher($filters, $ruleTree),
+            requiresAttachmentMetadata: $this->requiresAttachmentMetadata($filters, $ruleTree),
+            persistAttachments: $request->persistAttachments(),
+        );
     }
 
     private function parseFolderReference(mixed $reference): string|WellKnownFolder|null

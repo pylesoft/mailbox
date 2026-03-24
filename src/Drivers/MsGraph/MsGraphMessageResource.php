@@ -11,6 +11,7 @@ use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\Drivers\MsGraph\FolderIdResolver;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
 class MsGraphMessageResource implements MessageResource

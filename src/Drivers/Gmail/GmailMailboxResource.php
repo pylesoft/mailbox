@@ -9,6 +9,8 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Drivers\Gmail\GmailFolderResource;
+use Pyle\Mailbox\Drivers\Gmail\GmailLabelResolver;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
 class GmailMailboxResource implements MailboxResource

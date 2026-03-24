@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsRawClient;
+use Pyle\Mailbox\Drivers\Gmail\GmailMailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;

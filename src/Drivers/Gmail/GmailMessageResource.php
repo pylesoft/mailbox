@@ -11,6 +11,7 @@ use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\Drivers\Gmail\GmailLabelResolver;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
 

@@ -9,6 +9,8 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Drivers\MsGraph\FolderIdResolver;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphFolderResource;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
 class MsGraphMailboxResource implements MailboxResource

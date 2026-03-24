@@ -9,6 +9,9 @@ use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Drivers\Gmail\GmailLabelResolver;
+use Pyle\Mailbox\Drivers\Gmail\GmailMessageFilterer;
+use Pyle\Mailbox\Drivers\Gmail\GmailMessagePageCollector;
 
 class GmailMessageQuery implements MessageQueryBuilder
 {

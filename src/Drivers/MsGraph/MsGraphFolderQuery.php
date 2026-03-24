@@ -8,6 +8,7 @@ use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Drivers\MsGraph\FolderIdResolver;
 
 class MsGraphFolderQuery implements FolderQueryBuilder
 {

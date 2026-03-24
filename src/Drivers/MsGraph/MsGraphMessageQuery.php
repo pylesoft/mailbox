@@ -9,6 +9,7 @@ use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Drivers\MsGraph\FolderIdResolver;
 
 class MsGraphMessageQuery implements MessageQueryBuilder
 {
