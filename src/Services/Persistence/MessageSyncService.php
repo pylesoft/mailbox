@@ -8,9 +8,6 @@ use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
-use Pyle\Mailbox\Contracts\MessageResource;
-use Pyle\Mailbox\DTOs\AttachmentDto;
-use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
@@ -23,6 +20,11 @@ use RuntimeException;
 
 class MessageSyncService
 {
+    public function __construct(
+        private readonly MessageSyncRuleTree $ruleTree = new MessageSyncRuleTree,
+        private readonly MailboxMessagePersister $persister = new MailboxMessagePersister,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $options
      * @return Collection<int, MailboxMessage>
@@ -37,7 +39,7 @@ class MessageSyncService
         }
 
         $savedFilters = isset($options['filters']) && is_array($options['filters']) ? $options['filters'] : [];
-        $ruleTree = $this->extractRuleTree($options['rule_tree'] ?? null, $savedFilters['rule_tree'] ?? null);
+        $ruleTree = $this->ruleTree->extract($options['rule_tree'] ?? null, $savedFilters['rule_tree'] ?? null);
         unset($savedFilters['rule_tree']);
 
         $folderReference = null;
@@ -49,7 +51,7 @@ class MessageSyncService
 
         $referenceTime = Carbon::now('UTC');
         $hasAttachmentNamePrefix = ! empty($savedFilters['attachment_name_prefix']);
-        $requiresAttachmentsFromRuleTree = $this->ruleTreeRequiresHasAttachmentsTrue($ruleTree);
+        $requiresAttachmentsFromRuleTree = $this->ruleTree->requiresHasAttachmentsTrue($ruleTree);
         $hasAttachmentFilters = $hasAttachmentNamePrefix || $requiresAttachmentsFromRuleTree;
 
         if ($hasAttachmentFilters && ! isset($savedFilters['has_attachments'])) {
@@ -99,7 +101,7 @@ class MessageSyncService
                 continue;
             }
 
-            $persisted->push($this->upsertMessage(
+            $persisted->push($this->persister->upsert(
                 $mailboxResource,
                 $mailbox->id,
                 $message,
@@ -164,6 +166,7 @@ class MessageSyncService
             if ($messageId !== '' && ! str_starts_with($messageId, '<')) {
                 $messageId = "<{$messageId}>";
             }
+
             $query->where('internetMessageId', 'eq', $messageId);
         }
 
@@ -207,7 +210,7 @@ class MessageSyncService
             $query->take($limit);
         }
 
-        $this->applyRuleTreePushdown($query, $ruleTree, $driver);
+        $this->ruleTree->applyPushdown($query, $ruleTree, $driver);
     }
 
     /**
@@ -219,7 +222,10 @@ class MessageSyncService
             return [];
         }
 
-        return array_values(array_filter(array_map(fn (mixed $item): string => trim((string) $item), $value), fn (string $item): bool => $item !== ''));
+        return array_values(array_filter(array_map(
+            fn (mixed $item): string => trim((string) $item),
+            $value,
+        ), fn (string $item): bool => $item !== ''));
     }
 
     /**
@@ -329,133 +335,11 @@ class MessageSyncService
      */
     private function requiresAttachmentMetadata(array $filters, array $ruleTree): bool
     {
-        if ($this->ruleTreeRequiresAttachmentMetadata($ruleTree)) {
+        if ($this->ruleTree->requiresAttachmentMetadata($ruleTree)) {
             return true;
         }
 
         return trim((string) ($filters['attachment_name_prefix'] ?? '')) !== '';
-    }
-
-    /**
-     * @param  Collection<int, AttachmentDto>|null  $prefetchedAttachments
-     */
-    private function upsertMessage(
-        MailboxResource $mailboxResource,
-        int $mailboxId,
-        MessageDto $message,
-        ?MessageResource $resource = null,
-        ?Collection $prefetchedAttachments = null,
-        bool $persistAttachments = true,
-    ): MailboxMessage {
-        $mailboxMessage = MailboxMessage::query()->updateOrCreate(
-            [
-                'mailbox_id' => $mailboxId,
-                'canonical_message_key' => $this->canonicalMessageKey($message),
-            ],
-            [
-                'provider_message_id' => $message->id,
-                'internet_message_id' => $message->internetMessageId,
-                'parent_folder_id' => $message->parentFolderId,
-                'subject' => $message->subject,
-                'body' => $message->body?->toArray(),
-                'body_preview' => $message->bodyPreview,
-                'from_address' => $this->normalizeAddress($message->from),
-                'sender' => $this->normalizeAddress($message->sender),
-                'to_recipients' => $this->normalizeAddressList($message->toRecipients),
-                'cc_recipients' => $this->normalizeAddressList($message->ccRecipients),
-                'bcc_recipients' => $this->normalizeAddressList($message->bccRecipients),
-                'received_at' => $message->receivedAt,
-                'sent_at' => $message->sentAt,
-                'is_read' => $message->isRead,
-                'is_draft' => $message->isDraft,
-                'has_attachments' => $message->hasAttachments,
-                'importance' => $message->importance->value,
-                'conversation_id' => $message->conversationId,
-                'raw_payload' => $message->raw,
-            ],
-        );
-
-        if (! $persistAttachments) {
-            return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;
-        }
-
-        if (! $message->hasAttachments) {
-            $mailboxMessage->attachments()->delete();
-
-            return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;
-        }
-
-        $resource ??= $mailboxResource->message($message->id);
-        $attachments = $prefetchedAttachments ?? $resource->attachments();
-        $persistedAttachmentIds = [];
-
-        foreach ($attachments as $attachment) {
-            if ($attachment->id === '') {
-                continue;
-            }
-
-            $persistedAttachmentIds[] = $attachment->id;
-            $content = (string) $resource->attachment($attachment->id)->stream();
-
-            $mailboxMessage->attachments()->updateOrCreate(
-                [
-                    'mailbox_message_id' => $mailboxMessage->id,
-                    'provider_attachment_id' => $attachment->id,
-                ],
-                [
-                    'name' => $attachment->name,
-                    'content_type' => $attachment->contentType,
-                    'size' => $attachment->size,
-                    'is_inline' => $attachment->isInline,
-                    'content_id' => $attachment->contentId,
-                    'content_bytes' => base64_encode($content),
-                ],
-            );
-        }
-
-        if ($persistedAttachmentIds === []) {
-            $mailboxMessage->attachments()->delete();
-        } else {
-            $mailboxMessage->attachments()
-                ->whereNotIn('provider_attachment_id', array_values(array_unique($persistedAttachmentIds)))
-                ->delete();
-        }
-
-        return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;
-    }
-
-    private function canonicalMessageKey(MessageDto $message): string
-    {
-        $internetMessageId = trim((string) ($message->internetMessageId ?? ''));
-        if ($internetMessageId !== '') {
-            return "internet:{$internetMessageId}";
-        }
-
-        return "provider:{$message->id}";
-    }
-
-    /**
-     * @return array{name: string, address: string}|null
-     */
-    private function normalizeAddress(?EmailAddressDto $address): ?array
-    {
-        if ($address === null) {
-            return null;
-        }
-
-        return ['name' => $address->name, 'address' => $address->address];
-    }
-
-    /**
-     * @param  array<int, EmailAddressDto>  $addresses
-     * @return array<int, array{name: string, address: string}>
-     */
-    private function normalizeAddressList(array $addresses): array
-    {
-        return array_values(array_map(fn (EmailAddressDto $address): array => [
-            'name' => $address->name,
-            'address' => $address->address,
-        ], $addresses));
     }
 
     private function normalizeStoredFolderReference(string $reference): string
@@ -503,350 +387,5 @@ class MessageSyncService
         $wellKnown = WellKnownFolder::tryFrom(substr($normalized, 3));
 
         return $wellKnown ?? $trimmed;
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function extractRuleTree(mixed $runtimeRuleTree, mixed $storedRuleTree): array
-    {
-        if ($this->isRuleTree($runtimeRuleTree)) {
-            return $this->normalizeRuleTree($runtimeRuleTree);
-        }
-
-        if ($this->isRuleTree($storedRuleTree)) {
-            return $this->normalizeRuleTree($storedRuleTree);
-        }
-
-        return [];
-    }
-
-    /**
-     * @param  array<string, mixed>  $ruleTree
-     */
-    private function ruleTreeRequiresAttachmentMetadata(array $ruleTree): bool
-    {
-        foreach ($this->collectRuleTreeFields($ruleTree) as $field) {
-            if (str_starts_with($field, 'attachment')) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @param  array<string, mixed>  $ruleTree
-     */
-    private function ruleTreeRequiresHasAttachmentsTrue(array $ruleTree): bool
-    {
-        if ($ruleTree === []) {
-            return false;
-        }
-
-        return ! $this->groupMayMatchWithoutAttachments($ruleTree);
-    }
-
-    /**
-     * @param  array<string, mixed>  $ruleTree
-     * @return array<int, string>
-     */
-    private function collectRuleTreeFields(array $ruleTree): array
-    {
-        $conditions = $ruleTree['conditions'] ?? null;
-
-        if (! is_array($conditions)) {
-            return [];
-        }
-
-        $fields = [];
-
-        foreach ($conditions as $condition) {
-            if (! is_array($condition)) {
-                continue;
-            }
-
-            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
-                $fields = [...$fields, ...$this->collectRuleTreeFields($condition)];
-
-                continue;
-            }
-
-            $field = trim((string) ($condition['field'] ?? ''));
-            if ($field !== '') {
-                $fields[] = $field;
-            }
-        }
-
-        return $fields;
-    }
-
-    /**
-     * @param  array<string, mixed>  $group
-     */
-    private function groupMayMatchWithoutAttachments(array $group): bool
-    {
-        $operator = strtoupper((string) ($group['operator'] ?? 'AND'));
-        $conditions = $group['conditions'] ?? [];
-
-        if (! is_array($conditions) || $conditions === []) {
-            return true;
-        }
-
-        $results = [];
-
-        foreach ($conditions as $condition) {
-            if (! is_array($condition)) {
-                continue;
-            }
-
-            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
-                $results[] = $this->groupMayMatchWithoutAttachments($condition);
-
-                continue;
-            }
-
-            $results[] = $this->conditionMayMatchWithoutAttachments($condition);
-        }
-
-        return $operator === 'OR'
-            ? in_array(true, $results, true)
-            : ! in_array(false, $results, true);
-    }
-
-    /**
-     * @param  array<string, mixed>  $condition
-     */
-    private function conditionMayMatchWithoutAttachments(array $condition): bool
-    {
-        $field = trim((string) ($condition['field'] ?? ''));
-
-        if ($field === '' || ! str_starts_with($field, 'attachment')) {
-            return true;
-        }
-
-        if ($field !== FilterableField::ATTACHMENT_COUNT->value) {
-            return false;
-        }
-
-        return $this->attachmentCountConditionMayMatchWithoutAttachments($condition);
-    }
-
-    /**
-     * @param  array<string, mixed>  $condition
-     */
-    private function attachmentCountConditionMayMatchWithoutAttachments(array $condition): bool
-    {
-        $operator = MatchOperator::tryFrom((string) ($condition['operator'] ?? ''));
-        $value = $condition['value'] ?? null;
-
-        if (! $operator instanceof MatchOperator) {
-            return true;
-        }
-
-        return match ($operator) {
-            MatchOperator::EQUALS => ($this->numericValue($value) ?? 0.0) === 0.0,
-            MatchOperator::GREATER_THAN => 0.0 > ($this->numericValue($value) ?? INF),
-            MatchOperator::LESS_THAN => 0.0 < ($this->numericValue($value) ?? -INF),
-            MatchOperator::BETWEEN => $this->zeroWithinRange($value),
-            default => true,
-        };
-    }
-
-    private function zeroWithinRange(mixed $value): bool
-    {
-        if (! is_array($value) || count($value) !== 2) {
-            return true;
-        }
-
-        $normalizedRange = array_values($value);
-        $minimum = $this->numericValue($normalizedRange[0]);
-        $maximum = $this->numericValue($normalizedRange[1]);
-
-        if ($minimum === null || $maximum === null) {
-            return true;
-        }
-
-        return $minimum <= 0.0 && $maximum >= 0.0;
-    }
-
-    private function numericValue(mixed $value): ?float
-    {
-        if (is_int($value) || is_float($value)) {
-            return (float) $value;
-        }
-
-        if (is_bool($value)) {
-            return $value ? 1.0 : 0.0;
-        }
-
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $trimmed = trim($value);
-
-        if ($trimmed === '' || ! is_numeric($trimmed)) {
-            return null;
-        }
-
-        return (float) $trimmed;
-    }
-
-    /**
-     * @param  array<string, mixed>  $ruleTree
-     */
-    private function applyRuleTreePushdown(MessageQueryBuilder $query, array $ruleTree, string $driver): void
-    {
-        if ($ruleTree === []) {
-            return;
-        }
-
-        $conditions = $this->collectAndOnlyConditions($ruleTree);
-
-        if ($conditions === null || $conditions === []) {
-            return;
-        }
-
-        foreach ($conditions as $condition) {
-            $field = trim((string) ($condition['field'] ?? ''));
-            $operator = trim((string) ($condition['operator'] ?? ''));
-            $value = $condition['value'] ?? null;
-
-            $filterableField = FilterableField::tryFrom($field);
-            $matchOperator = MatchOperator::tryFrom($operator);
-
-            if (! $filterableField instanceof FilterableField || ! $matchOperator instanceof MatchOperator) {
-                continue;
-            }
-
-            if (! $filterableField->isServerPushable($driver)) {
-                continue;
-            }
-
-            if (! in_array($matchOperator, $filterableField->operators(), true)) {
-                continue;
-            }
-
-            if ($matchOperator === MatchOperator::BETWEEN && is_array($value) && count($value) === 2) {
-                [$min, $max] = array_values($value);
-                $query->where($field, 'ge', $min);
-                $query->where($field, 'le', $max);
-
-                continue;
-            }
-
-            $providerOperator = match ($matchOperator) {
-                MatchOperator::EQUALS => 'eq',
-                MatchOperator::CONTAINS => 'contains',
-                MatchOperator::STARTS_WITH => 'starts_with',
-                MatchOperator::ENDS_WITH => 'ends_with',
-                MatchOperator::GREATER_THAN => 'gt',
-                MatchOperator::LESS_THAN => 'lt',
-                MatchOperator::BEFORE => 'lt',
-                MatchOperator::AFTER => 'gt',
-                default => null,
-            };
-
-            if (! is_string($providerOperator)) {
-                continue;
-            }
-
-            $query->where($field, $providerOperator, $value);
-        }
-    }
-
-    private function isRuleTree(mixed $value): bool
-    {
-        return is_array($value)
-            && isset($value['operator'])
-            && is_array($value['conditions'] ?? null);
-    }
-
-    /**
-     * @param  array<string, mixed>  $ruleTree
-     * @return array<string, mixed>
-     */
-    private function normalizeRuleTree(array $ruleTree): array
-    {
-        $operator = strtoupper((string) ($ruleTree['operator'] ?? 'AND'));
-        $conditions = $ruleTree['conditions'] ?? [];
-
-        if (! is_array($conditions)) {
-            $conditions = [];
-        }
-
-        $normalizedConditions = [];
-
-        foreach ($conditions as $condition) {
-            if (! is_array($condition)) {
-                continue;
-            }
-
-            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
-                $normalizedConditions[] = $this->normalizeRuleTree($condition);
-
-                continue;
-            }
-
-            $field = trim((string) ($condition['field'] ?? ''));
-            $conditionOperator = trim((string) ($condition['operator'] ?? ''));
-
-            if ($field === '' || $conditionOperator === '') {
-                continue;
-            }
-
-            $normalizedConditions[] = [
-                'field' => $field,
-                'operator' => $conditionOperator,
-                'value' => $condition['value'] ?? null,
-            ];
-        }
-
-        return [
-            'operator' => $operator === 'OR' ? 'OR' : 'AND',
-            'conditions' => $normalizedConditions,
-        ];
-    }
-
-    /**
-     * @param  array<string, mixed>  $group
-     * @return array<int, array<string, mixed>>|null
-     */
-    private function collectAndOnlyConditions(array $group): ?array
-    {
-        if (strtoupper((string) ($group['operator'] ?? 'AND')) !== 'AND') {
-            return null;
-        }
-
-        $conditions = $group['conditions'] ?? [];
-
-        if (! is_array($conditions)) {
-            return null;
-        }
-
-        $flattened = [];
-
-        foreach ($conditions as $condition) {
-            if (! is_array($condition)) {
-                return null;
-            }
-
-            if (isset($condition['conditions']) && is_array($condition['conditions'])) {
-                $subConditions = $this->collectAndOnlyConditions($condition);
-
-                if ($subConditions === null) {
-                    return null;
-                }
-
-                $flattened = [...$flattened, ...$subConditions];
-
-                continue;
-            }
-
-            $flattened[] = $condition;
-        }
-
-        return $flattened;
     }
 }
