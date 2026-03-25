@@ -95,7 +95,7 @@ function mailboxClassLikeInFile(string $path): ?string
         return null;
     }
 
-    if (! preg_match('/^(?:final\s+|abstract\s+)?(class|interface|trait|enum)\s+([A-Za-z_][A-Za-z0-9_]*)/m', $contents, $classLikeMatch)) {
+    if (! preg_match('/^(?:(?:final|abstract|readonly)\s+)*(class|interface|trait|enum)\s+([A-Za-z_][A-Za-z0-9_]*)/m', $contents, $classLikeMatch)) {
         return null;
     }
 
