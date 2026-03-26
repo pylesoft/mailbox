@@ -11,7 +11,7 @@ expect()->extend('toHaveReturnTypes', function (): Expectation {
     /** @var string $namespace */
     $namespace = $this->value;
     $missing = [];
-    $srcRoot = dirname(__DIR__).'/src';
+    $srcRoot = normalizePath(dirname(__DIR__).'/src');
 
     foreach (mailboxClassesInNamespace($namespace) as $class) {
         $reflection = new ReflectionClass($class);
@@ -34,7 +34,7 @@ expect()->extend('toHaveParameterTypes', function (): Expectation {
     /** @var string $namespace */
     $namespace = $this->value;
     $missing = [];
-    $srcRoot = dirname(__DIR__).'/src';
+    $srcRoot = normalizePath(dirname(__DIR__).'/src');
 
     foreach (mailboxClassesInNamespace($namespace) as $class) {
         $reflection = new ReflectionClass($class);
@@ -58,7 +58,7 @@ expect()->extend('toHaveParameterTypes', function (): Expectation {
 /** @return array<int, class-string> */
 function mailboxClassesInNamespace(string $namespace): array
 {
-    $srcRoot = dirname(__DIR__).'/src';
+    $srcRoot = normalizePath(dirname(__DIR__).'/src');
     $classes = [];
     $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($srcRoot));
 
@@ -112,8 +112,13 @@ function shouldSkipMethodForCoverage(ReflectionMethod $method, string $class, st
         return true;
     }
 
-    $methodFile = $method->getFileName();
+    $methodFile = normalizePath($method->getFileName());
     if (! is_string($methodFile) || ! str_starts_with($methodFile, $srcRoot)) {
+        return true;
+    }
+
+    // Framework-constrained overrides cannot always add stricter native types.
+    if (hasExternalAncestorMethod($method, $srcRoot)) {
         return true;
     }
 
@@ -129,8 +134,63 @@ function shouldSkipMethodForCoverage(ReflectionMethod $method, string $class, st
 function prototypeFile(ReflectionMethod $method): ?string
 {
     try {
-        return $method->getPrototype()->getFileName() ?: null;
+        return normalizePath($method->getPrototype()->getFileName() ?: null);
     } catch (ReflectionException) {
         return null;
     }
+}
+
+function hasExternalAncestorMethod(ReflectionMethod $method, string $srcRoot): bool
+{
+    $declaringClass = $method->getDeclaringClass();
+    $methodName = $method->getName();
+    $queue = [];
+    $parentClass = $declaringClass->getParentClass();
+
+    if ($parentClass instanceof ReflectionClass) {
+        $queue[] = $parentClass;
+    }
+
+    foreach ($declaringClass->getInterfaces() as $interface) {
+        $queue[] = $interface;
+    }
+
+    $seen = [];
+
+    while ($queue !== []) {
+        /** @var ReflectionClass $candidate */
+        $candidate = array_shift($queue);
+        $candidateName = $candidate->getName();
+
+        if (isset($seen[$candidateName])) {
+            continue;
+        }
+
+        $seen[$candidateName] = true;
+
+        if ($candidate->hasMethod($methodName)) {
+            $candidateFile = normalizePath($candidate->getMethod($methodName)->getFileName());
+
+            if (! is_string($candidateFile) || ! str_starts_with($candidateFile, $srcRoot)) {
+                return true;
+            }
+        }
+
+        $candidateParent = $candidate->getParentClass();
+
+        if ($candidateParent instanceof ReflectionClass) {
+            $queue[] = $candidateParent;
+        }
+
+        foreach ($candidate->getInterfaces() as $interface) {
+            $queue[] = $interface;
+        }
+    }
+
+    return false;
+}
+
+function normalizePath(string|false|null $path): ?string
+{
+    return is_string($path) ? str_replace('\\', '/', $path) : null;
 }
