@@ -6,11 +6,11 @@ namespace Pyle\Mailbox;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Manager;
-use Pyle\Mailbox\Contracts\MailboxDriverResolver;
 use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxDriver;
-use Pyle\Mailbox\Contracts\MailboxResourceResolver;
+use Pyle\Mailbox\Contracts\MailboxDriverResolver;
 use Pyle\Mailbox\Contracts\MailboxResource;
+use Pyle\Mailbox\Contracts\MailboxResourceResolver;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
