@@ -5,11 +5,11 @@ declare(strict_types=1);
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\MailboxManager;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Services\Folders\FolderLookupService;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
-use Pyle\Mailbox\Services\Persistence\MessageSyncRequest;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 
 it('delegates sync and move APIs through the facade manager', function (): void {
@@ -37,9 +37,9 @@ it('delegates sync and move APIs through the facade manager', function (): void 
     app()->instance(MessageSyncService::class, $syncService);
     app()->instance(MessageMoveService::class, $moveService);
 
-    $request = new MessageSyncRequest(filters: ['limit' => 10]);
+    $options = ['filters' => ['limit' => 10]];
 
-    $syncedMessages = MailboxFacade::syncMailbox($mailbox, $request);
+    $syncedMessages = MailboxFacade::syncMailbox($mailbox, $options);
     $movedMessage = MailboxFacade::moveMessage($message, WellKnownFolder::ARCHIVE);
 
     expect($syncedMessages)->toBeInstanceOf(Collection::class);
@@ -47,7 +47,7 @@ it('delegates sync and move APIs through the facade manager', function (): void 
     expect($syncedMessages->first())->toBe($message);
     expect($syncService->calls)->toHaveCount(1);
     expect($syncService->calls[0]['mailbox'])->toBe($mailbox);
-    expect($syncService->calls[0]['request'])->toBe($request);
+    expect($syncService->calls[0]['request'])->toBe($options);
     expect($movedMessage)->toBeInstanceOf(MailboxMessage::class);
     expect($movedMessage)->toBe($message);
     expect($moveService->calls)->toHaveCount(1);
@@ -107,9 +107,28 @@ it('delegates folder lookup APIs through the facade manager', function (): void 
     ]);
 });
 
+it('keeps array-based sync signatures for backward compatibility', function (): void {
+    $managerMethod = new ReflectionMethod(MailboxManager::class, 'syncMailbox');
+    $serviceMethod = new ReflectionMethod(MessageSyncService::class, 'syncMailbox');
+
+    expect(reflectionParameterTypeName($managerMethod->getParameters()[1]))->toBe('array');
+    expect(reflectionParameterTypeName($serviceMethod->getParameters()[1]))->toBe('array');
+});
+
+function reflectionParameterTypeName(ReflectionParameter $parameter): string
+{
+    $type = $parameter->getType();
+
+    if (! $type instanceof ReflectionNamedType) {
+        return $type::class;
+    }
+
+    return $type->getName();
+}
+
 final class RecordingMessageSyncService extends MessageSyncService
 {
-    /** @var array<int, array{mailbox: Mailbox, request: MessageSyncRequest|array<string, mixed>|null}> */
+    /** @var array<int, array{mailbox: Mailbox, request: array<string, mixed>}> */
     public array $calls = [];
 
     /**
@@ -119,11 +138,12 @@ final class RecordingMessageSyncService extends MessageSyncService
         private readonly Collection $result,
     ) {}
 
-    public function syncMailbox(Mailbox $mailbox, MessageSyncRequest|array|null $request = null): Collection
+    /** @param array<string, mixed> $options */
+    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         $this->calls[] = [
             'mailbox' => $mailbox,
-            'request' => $request,
+            'request' => $options,
         ];
 
         return $this->result;

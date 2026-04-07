@@ -22,7 +22,6 @@ use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Services\Folders\FolderLookupService;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
-use Pyle\Mailbox\Services\Persistence\MessageSyncRequest;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 use Pyle\Mailbox\Support\FilterableFields;
 use RuntimeException;
@@ -74,15 +73,15 @@ class MailboxManager extends Manager implements MailboxDriverResolver, MailboxRe
     }
 
     /**
-     * @param  MessageSyncRequest|array<string, mixed>|null  $request
+     * @param  array<string, mixed>  $options
      * @return Collection<int, MailboxMessage>
      */
-    public function syncMailbox(Mailbox $mailbox, MessageSyncRequest|array|null $request = null): Collection
+    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         /** @var MessageSyncService $service */
         $service = $this->container->make(MessageSyncService::class);
 
-        return $service->syncMailbox($mailbox, $request);
+        return $service->syncMailbox($mailbox, $options);
     }
 
     public function moveMessage(MailboxMessage $message, string|WellKnownFolder $destinationFolder): MailboxMessage

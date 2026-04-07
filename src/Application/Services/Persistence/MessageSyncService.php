@@ -26,12 +26,12 @@ class MessageSyncService
     ) {}
 
     /**
-     * @param  MessageSyncRequest|array<string, mixed>|null  $request
+     * @param  array<string, mixed>  $options
      * @return Collection<int, MailboxMessage>
      */
-    public function syncMailbox(Mailbox $mailbox, MessageSyncRequest|array|null $request = null): Collection
+    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
-        $request = MessageSyncRequest::from($request, $this->ruleTree);
+        $request = MessageSyncRequest::from($options, $this->ruleTree);
         $driver = $this->driverForMailbox($mailbox);
         $plan = $this->buildPlan($request, Carbon::now('UTC'));
         $mailboxResource = MailboxFacade::forMailbox($mailbox);

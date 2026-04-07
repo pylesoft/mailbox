@@ -11,10 +11,10 @@ use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\MailboxManager;
 use Pyle\Mailbox\Models\Folder;
 use Pyle\Mailbox\Models\Mailbox as MailboxModel;
 use Pyle\Mailbox\Models\MailboxMessage;
-use Pyle\Mailbox\Services\Persistence\MessageSyncRequest;
 
 /**
  * @method static MailboxDriver driver(string $name = null)
@@ -23,7 +23,7 @@ use Pyle\Mailbox\Services\Persistence\MessageSyncRequest;
  * @method static \Pyle\Mailbox\Contracts\FolderResource forFolder(Folder $folder)
  * @method static ConnectionTestResult testConnection(?string $emailAddress = null)
  * @method static HealthCheckResult healthCheck()
- * @method static \Illuminate\Support\Collection<int, MailboxMessage> syncMailbox(MailboxModel $mailbox, MessageSyncRequest|array<string, mixed>|null $request = null)
+ * @method static \Illuminate\Support\Collection<int, MailboxMessage> syncMailbox(MailboxModel $mailbox, array<string, mixed> $options = [])
  * @method static MailboxMessage moveMessage(MailboxMessage $message, string|WellKnownFolder $destinationFolder)
  * @method static \Illuminate\Support\Collection<int, array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}> listFolderTree(MailboxModel $mailbox, int $maxDepth = 10)
  * @method static array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}|null findFolderByName(MailboxModel $mailbox, string $folderName, string|WellKnownFolder|null $root = null, bool $caseSensitive = true)
@@ -33,6 +33,6 @@ class Mailbox extends Facade
 {
     protected static function getFacadeAccessor(): string
     {
-        return 'mailbox';
+        return MailboxManager::class;
     }
 }

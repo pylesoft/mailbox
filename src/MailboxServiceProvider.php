@@ -23,10 +23,10 @@ class MailboxServiceProvider extends ServiceProvider
         $this->app->singleton(MailboxManager::class, function ($app): MailboxManager {
             return new MailboxManager($app);
         });
-        $this->app->singleton(MailboxResourceResolver::class, function ($app): MailboxManager {
+        $this->app->bind(MailboxResourceResolver::class, function ($app): MailboxManager {
             return $app->make(MailboxManager::class);
         });
-        $this->app->singleton(MailboxDriverResolver::class, function ($app): MailboxManager {
+        $this->app->bind(MailboxDriverResolver::class, function ($app): MailboxManager {
             return $app->make(MailboxManager::class);
         });
 
