@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Contracts\MailboxDriver;
-use Pyle\Mailbox\Contracts\MailboxDriverResolver;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\Contracts\FolderResource;
+use Pyle\Mailbox\Contracts\MailboxDriver;
+use Pyle\Mailbox\Contracts\MailboxDriverResolver;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MailboxResourceResolver;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
