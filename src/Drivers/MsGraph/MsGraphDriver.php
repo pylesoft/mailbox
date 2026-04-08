@@ -90,8 +90,8 @@ class MsGraphDriver implements MailboxDriver, SupportsRawClient
             $this->probeGraph();
             $apiReachable = true;
             $latency = (int) round((microtime(true) - $start) * 1000);
-        } catch (\Throwable) {
-            // best effort
+        } catch (\Throwable $e) {
+            report($e);
         }
 
         $secretExpiresAt = $this->tokenManager->secretExpiresAt();

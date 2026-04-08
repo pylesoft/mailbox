@@ -32,3 +32,6 @@ auth.json
 workbench/storage/*
 workbench/bootstrap/cache/*
 workbench/database/*.sqlite
+.desloppify/
+.agents/
+scorecard.png

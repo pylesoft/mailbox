@@ -8,7 +8,9 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Manager;
 use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxDriver;
+use Pyle\Mailbox\Contracts\MailboxDriverResolver;
 use Pyle\Mailbox\Contracts\MailboxResource;
+use Pyle\Mailbox\Contracts\MailboxResourceResolver;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
@@ -21,9 +23,10 @@ use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Services\Folders\FolderLookupService;
 use Pyle\Mailbox\Services\Persistence\MessageMoveService;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
+use Pyle\Mailbox\Support\FilterableFields;
 use RuntimeException;
 
-class MailboxManager extends Manager
+class MailboxManager extends Manager implements MailboxDriverResolver, MailboxResourceResolver
 {
     public function getDefaultDriver(): string
     {
@@ -119,7 +122,7 @@ class MailboxManager extends Manager
     public function filterableFields(): Collection
     {
         /** @var Collection<int, FilterableField> $fields */
-        $fields = collect(FilterableField::cases());
+        $fields = FilterableFields::all();
 
         return $fields;
     }

@@ -10,8 +10,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 use Pyle\Mailbox\Contracts\MailboxDriver;
+use Pyle\Mailbox\Contracts\MailboxDriverResolver;
 use Pyle\Mailbox\Enums\ConnectionStatus;
-use Pyle\Mailbox\MailboxManager;
 
 /**
  * @property int $id
@@ -65,10 +65,10 @@ class MailboxConnection extends Model
 
     public function resolveDriver(): MailboxDriver
     {
-        /** @var MailboxManager $manager */
-        $manager = app(MailboxManager::class);
+        /** @var MailboxDriverResolver $resolver */
+        $resolver = app(MailboxDriverResolver::class);
 
-        return $manager->driver($this->driver);
+        return $resolver->driver($this->driver);
     }
 
     /** @param Builder<self> $query

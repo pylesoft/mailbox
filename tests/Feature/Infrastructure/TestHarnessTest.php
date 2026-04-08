@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Illuminate\Support\ServiceProvider;
+use Pyle\Mailbox\Contracts\MailboxDriverResolver;
+use Pyle\Mailbox\Contracts\MailboxResourceResolver;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\MailboxManager;
 use Pyle\Mailbox\MailboxServiceProvider;
@@ -11,7 +13,11 @@ use Workbench\App\Providers\WorkbenchServiceProvider;
 
 it('boots package provider and resolves mailbox services', function (): void {
     expect(app()->bound(MailboxManager::class))->toBeTrue();
+    expect(app()->bound(MailboxResourceResolver::class))->toBeTrue();
+    expect(app()->bound(MailboxDriverResolver::class))->toBeTrue();
     expect(app('mailbox'))->toBeInstanceOf(MailboxManager::class);
+    expect(app(MailboxResourceResolver::class))->toBeInstanceOf(MailboxManager::class);
+    expect(app(MailboxDriverResolver::class))->toBeInstanceOf(MailboxManager::class);
     expect(Mailbox::getFacadeRoot())->toBeInstanceOf(MailboxManager::class);
 });
 

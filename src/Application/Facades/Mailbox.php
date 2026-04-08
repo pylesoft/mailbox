@@ -28,8 +28,6 @@ use Pyle\Mailbox\Models\MailboxMessage;
  * @method static \Illuminate\Support\Collection<int, array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}> listFolderTree(MailboxModel $mailbox, int $maxDepth = 10)
  * @method static array{id: string, display_name: string, path: string, parent_id: string|null, child_folder_count: int|null}|null findFolderByName(MailboxModel $mailbox, string $folderName, string|WellKnownFolder|null $root = null, bool $caseSensitive = true)
  * @method static \Illuminate\Support\Collection<int, FilterableField> filterableFields()
- *
- * @see MailboxManager
  */
 class Mailbox extends Facade
 {

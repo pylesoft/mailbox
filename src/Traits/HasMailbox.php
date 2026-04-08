@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 use Pyle\Mailbox\Contracts\MailboxResource;
-use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
+use Pyle\Mailbox\Contracts\MailboxResourceResolver;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxConnection;
 use RuntimeException;
@@ -46,7 +46,10 @@ trait HasMailbox
             throw new RuntimeException('No mailbox is associated with this model.');
         }
 
-        return MailboxFacade::forMailbox($mailbox);
+        /** @var MailboxResourceResolver $resolver */
+        $resolver = app(MailboxResourceResolver::class);
+
+        return $resolver->forMailbox($mailbox);
     }
 
     /** @param Builder<self> $query

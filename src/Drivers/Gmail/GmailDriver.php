@@ -94,8 +94,8 @@ class GmailDriver implements MailboxDriver, SupportsRawClient
                 $this->client->get(sprintf('users/%s/profile', rawurlencode($mailbox)), mailbox: $mailbox);
                 $apiReachable = true;
                 $latency = (int) round((microtime(true) - $start) * 1000);
-            } catch (\Throwable) {
-                // best effort
+            } catch (\Throwable $e) {
+                report($e);
             }
         }
 
