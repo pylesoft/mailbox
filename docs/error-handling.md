@@ -16,6 +16,7 @@ RuntimeException
         ├── RateLimitException
         ├── ApiRequestException
         ├── ProviderServerException
+        ├── ProviderTransportException
         ├── DeltaTokenExpiredException
         ├── ResourceNotFoundException
         └── DriverNotConfiguredException
@@ -201,6 +202,37 @@ try {
     // Safe to retry later -- the provider is having a bad day
     SyncMailboxJob::dispatch('invoices@acme.com')
         ->delay(now()->addMinutes(5));
+}
+```
+
+### `ProviderTransportException`
+
+Thrown when the provider request fails before an HTTP response is available, such as a connection reset, DNS failure, or cURL timeout, and Mailbox has released the current queue job or exhausted its retry budget. This behavior is controlled by the `retry_transport_failures` [config](configuration.md) value and is enabled by default.
+
+```php
+use Pyle\Mailbox\Exceptions\ProviderTransportException;
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `$endpoint` | `?string` | The API endpoint that was being called. |
+| `$mailbox` | `?string` | The mailbox email address or mailbox key. |
+| `$attemptsExhausted` | `int` | The attempt number that triggered the exception. |
+| `$retryDelay` | `?int` | Seconds before retrying when Mailbox released a queued job, or `null` after retries are exhausted. |
+
+```php
+try {
+    $messages = Mailbox::mailbox('invoices@acme.com')
+        ->folder('inbox')
+        ->messages()
+        ->list();
+} catch (ProviderTransportException $e) {
+    Log::warning('Provider transport failure', [
+        'mailbox' => $e->mailbox,
+        'endpoint' => $e->endpoint,
+        'attempts' => $e->attemptsExhausted,
+        'retry_delay' => $e->retryDelay,
+    ]);
 }
 ```
 
@@ -553,6 +585,7 @@ This table summarizes every exception, whether it is retryable, and the matching
 | `RateLimitException` | Yes | `RateLimitHit` | Too many API calls |
 | `ApiRequestException` | No | `ApiError` | Bad request, invalid parameters |
 | `ProviderServerException` | Yes | `ApiError` | Provider outage (5xx) |
+| `ProviderTransportException` | Yes | -- | Connection reset, DNS failure, or timeout before an HTTP response |
 | `DeltaTokenExpiredException` | Full re-sync | `DeltaTokenExpired` | Stale delta link / history ID |
 | `ResourceNotFoundException` | No | -- | Deleted message, folder, or attachment |
 | `DriverNotConfiguredException` | No | -- | Missing config entry |

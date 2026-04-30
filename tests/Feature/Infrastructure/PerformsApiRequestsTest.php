@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
@@ -12,6 +13,7 @@ use GuzzleHttp\Psr7\Response;
 use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\ProviderTransportException;
 
 it('sends json and query requests through the shared api request pipeline', function (): void {
     $history = [];
@@ -82,6 +84,153 @@ it('exposes retry helpers for retry-after parsing, backoff calculation, and queu
     expect($state->releasedDelay)->toBe(5);
 
     app()->forgetInstance('queue.job');
+});
+
+it('retries connect exceptions and succeeds', function (): void {
+    $request = new Request('GET', 'https://api.example.test/v1/messages');
+    $history = [];
+    $handler = HandlerStack::create(new MockHandler([
+        new ConnectException('Connection reset by peer', $request),
+        new Response(200, [], json_encode(['value' => ['message-1']])),
+    ]));
+    $handler->push(Middleware::history($history));
+
+    $client = new Client([
+        'handler' => $handler,
+        'base_uri' => 'https://api.example.test/v1/',
+    ]);
+
+    $api = new TestPerformsApiRequestsClient([
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'sleep',
+        'retry_backoff_base' => 0,
+    ], $client);
+
+    expect($api->get('messages', mailbox: 'Inbox@example.com'))->toBe(['value' => ['message-1']]);
+    expect($history)->toHaveCount(2);
+});
+
+it('retries request exceptions without responses and succeeds', function (): void {
+    $request = new Request('GET', 'https://api.example.test/v1/messages');
+    $history = [];
+    $handler = HandlerStack::create(new MockHandler([
+        new RequestException('cURL error 28: Operation timed out', $request),
+        new Response(200, [], json_encode(['value' => ['message-1']])),
+    ]));
+    $handler->push(Middleware::history($history));
+
+    $client = new Client([
+        'handler' => $handler,
+        'base_uri' => 'https://api.example.test/v1/',
+    ]);
+
+    $api = new TestPerformsApiRequestsClient([
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'sleep',
+        'retry_backoff_base' => 0,
+    ], $client);
+
+    expect($api->get('messages', mailbox: 'Inbox@example.com'))->toBe(['value' => ['message-1']]);
+    expect($history)->toHaveCount(2);
+});
+
+it('throws provider transport exception after exhausting transport retries', function (): void {
+    $request = new Request('GET', 'https://api.example.test/v1/messages');
+    $handler = HandlerStack::create(new MockHandler([
+        new ConnectException('Connection reset by peer', $request),
+        new ConnectException('Connection reset by peer', $request),
+    ]));
+
+    $client = new Client([
+        'handler' => $handler,
+        'base_uri' => 'https://api.example.test/v1/',
+    ]);
+
+    $api = new TestPerformsApiRequestsClient([
+        'max_retries' => 1,
+        'queue_retry_strategy' => 'sleep',
+        'retry_backoff_base' => 0,
+    ], $client);
+
+    expect(fn () => $api->get('messages', mailbox: 'Inbox@example.com'))
+        ->toThrow(ProviderTransportException::class);
+});
+
+it('releases queued jobs for retryable transport failures', function (): void {
+    $request = new Request('GET', 'https://api.example.test/v1/messages');
+    $handler = HandlerStack::create(new MockHandler([
+        new ConnectException('Connection reset by peer', $request),
+    ]));
+
+    $client = new Client([
+        'handler' => $handler,
+        'base_uri' => 'https://api.example.test/v1/',
+    ]);
+
+    $state = (object) ['releasedDelay' => null];
+    app()->instance('queue.job', new TestQueueJob($state));
+
+    $api = new TestPerformsApiRequestsClient([
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'release',
+        'retry_backoff_base' => 3,
+    ], $client);
+
+    expect(fn () => $api->get('messages', mailbox: 'Inbox@example.com'))
+        ->toThrow(ProviderTransportException::class);
+
+    expect($state->releasedDelay)->toBe(1);
+
+    app()->forgetInstance('queue.job');
+});
+
+it('does not retry transport failures when disabled', function (): void {
+    $request = new Request('GET', 'https://api.example.test/v1/messages');
+    $history = [];
+    $handler = HandlerStack::create(new MockHandler([
+        new ConnectException('Connection reset by peer', $request),
+    ]));
+    $handler->push(Middleware::history($history));
+
+    $client = new Client([
+        'handler' => $handler,
+        'base_uri' => 'https://api.example.test/v1/',
+    ]);
+
+    $api = new TestPerformsApiRequestsClient([
+        'retry_transport_failures' => false,
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'sleep',
+    ], $client);
+
+    expect(fn () => $api->get('messages', mailbox: 'Inbox@example.com'))
+        ->toThrow(ApiRequestException::class);
+
+    expect($history)->toHaveCount(1);
+});
+
+it('does not retry request exceptions with client error responses', function (): void {
+    $request = new Request('GET', 'https://api.example.test/v1/messages');
+    $history = [];
+    $handler = HandlerStack::create(new MockHandler([
+        new RequestException('Bad request', $request, new Response(400)),
+    ]));
+    $handler->push(Middleware::history($history));
+
+    $client = new Client([
+        'handler' => $handler,
+        'base_uri' => 'https://api.example.test/v1/',
+    ]);
+
+    $api = new TestPerformsApiRequestsClient([
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'sleep',
+    ], $client);
+
+    expect(fn () => $api->get('messages', mailbox: 'Inbox@example.com'))
+        ->toThrow(ApiRequestException::class);
+
+    expect($history)->toHaveCount(1);
 });
 
 final class TestPerformsApiRequestsClient

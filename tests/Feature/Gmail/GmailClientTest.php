@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\Gmail\GmailClient;
@@ -56,6 +58,51 @@ it('retries gmail requests on 429 then succeeds', function (): void {
 
     expect($gmail->get('users/test/messages', mailbox: 'test@example.com'))->toHaveKey('messages');
     Event::assertDispatched(RateLimitHit::class);
+});
+
+it('retries gmail transport failures then succeeds', function (): void {
+    $handler = new MockHandler([
+        new ConnectException('Connection reset by peer', new Request('GET', 'https://gmail.googleapis.com/gmail/v1/users/test/messages')),
+        new Response(200, [], json_encode(['messages' => []])),
+    ]);
+
+    $client = new Client(['handler' => HandlerStack::create($handler), 'base_uri' => 'https://gmail.googleapis.com/gmail/v1/']);
+
+    $token = new class([]) extends GmailTokenManager
+    {
+        public function __construct(array $config = [])
+        {
+            parent::__construct($config);
+        }
+
+        public function getToken(string $mailbox, bool $forceRefresh = false): string
+        {
+            return 'token';
+        }
+
+        public function invalidateToken(?string $mailbox = null): void {}
+    };
+
+    $rateLimiter = new class([]) extends RateLimiter
+    {
+        public function __construct(array $config = [])
+        {
+            parent::__construct($config);
+        }
+
+        public function forMailbox(string $driver, string $mailbox, callable $callback): Response
+        {
+            return $callback();
+        }
+    };
+
+    $gmail = new GmailClient([
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'sleep',
+        'retry_backoff_base' => 0,
+    ], $token, $rateLimiter, $client);
+
+    expect($gmail->get('users/test/messages', mailbox: 'test@example.com'))->toHaveKey('messages');
 });
 
 it('throws mailbox access denied for gmail 403', function (): void {

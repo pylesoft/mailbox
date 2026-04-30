@@ -183,12 +183,14 @@ These settings control how Mailbox handles transient failures, rate limits, and 
 ```php
 'max_retries'        => 3,
 'retry_backoff_base' => 2,
+'retry_transport_failures' => env('MAILBOX_RETRY_TRANSPORT_FAILURES', true),
 ```
 
 | Key | Env | Default | Description |
 |---|---|---|---|
 | `max_retries` | -- | `3` | Maximum number of retry attempts for transient API failures (429 rate limits, 5xx server errors). After exhausting retries, Mailbox throws a `RateLimitException` or `ProviderServerException`. |
 | `retry_backoff_base` | -- | `2` | Base for exponential backoff between retries, in seconds. With the default of `2`, retries wait approximately 2s, 4s, 8s before giving up. |
+| `retry_transport_failures` | `MAILBOX_RETRY_TRANSPORT_FAILURES` | `true` | Whether connection-level provider failures, such as connection resets and cURL timeouts without an HTTP response, should use the same retry and queue-release behavior as other transient provider failures. |
 
 ### Concurrency Control
 
