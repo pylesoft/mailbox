@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\Concerns;
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Support\Facades\Log;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\ProviderTransportException;
 
 trait PerformsApiRequests
 {
@@ -103,8 +105,18 @@ trait PerformsApiRequests
 
                 try {
                     return $this->sendRequest($method, $endpoint, $options, $mailboxKey, $attempt, $startedAt);
+                } catch (ConnectException $e) {
+                    if ($this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
+                        continue;
+                    }
+
+                    throw $this->wrapUnexpectedThrowable($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt);
                 } catch (RequestException $e) {
                     $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+
+                    if ($e->getResponse() === null && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
+                        continue;
+                    }
 
                     if ($this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
                         continue;
@@ -143,6 +155,87 @@ trait PerformsApiRequests
         ]);
 
         return $response;
+    }
+
+    private function retryTransportFailure(
+        \Throwable $e,
+        string $method,
+        string $endpoint,
+        string $mailboxKey,
+        int $attempt,
+        float $startedAt,
+    ): bool {
+        if (! $this->shouldRetryTransportFailure($attempt)) {
+            if ($this->transportFailuresAreRetryable()) {
+                $this->throwTransportRetriesExhausted($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt);
+            }
+
+            return false;
+        }
+
+        $backoff = $this->backoffSeconds($attempt);
+        $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+
+        $this->logInfo($this->providerLabel().' transport failure; scheduling retry', [
+            'method' => $method,
+            'endpoint' => $endpoint,
+            'mailbox' => $mailboxKey,
+            'attempt' => $attempt,
+            'backoff_seconds' => $backoff,
+            'duration_ms' => $durationMs,
+            'error' => $e->getMessage(),
+        ]);
+
+        if ($this->handleQueueRetry($backoff, 'transport failure')) {
+            throw new ProviderTransportException(
+                message: sprintf('%s transport failure. Queue job released for retry in %d seconds.', $this->providerLabel(), $backoff),
+                endpoint: $endpoint,
+                mailbox: $mailboxKey,
+                attemptsExhausted: $attempt,
+                retryDelay: $backoff,
+                previous: $e,
+            );
+        }
+
+        sleep($backoff);
+
+        return true;
+    }
+
+    private function shouldRetryTransportFailure(int $attempt): bool
+    {
+        return $this->transportFailuresAreRetryable() && $attempt <= $this->maxRetries;
+    }
+
+    private function transportFailuresAreRetryable(): bool
+    {
+        return (bool) ($this->config['retry_transport_failures'] ?? config('mailbox.retry_transport_failures', true));
+    }
+
+    private function throwTransportRetriesExhausted(
+        \Throwable $e,
+        string $method,
+        string $endpoint,
+        string $mailboxKey,
+        int $attempt,
+        float $startedAt,
+    ): never {
+        $this->logInfo($this->providerLabel().' transport failure retries exhausted', [
+            'method' => $method,
+            'endpoint' => $endpoint,
+            'mailbox' => $mailboxKey,
+            'attempt' => $attempt,
+            'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            'error' => $e->getMessage(),
+        ]);
+
+        throw new ProviderTransportException(
+            message: sprintf('%s transport failure after %d attempts: %s', $this->providerLabel(), $attempt, $e->getMessage()),
+            endpoint: $endpoint,
+            mailbox: $mailboxKey,
+            attemptsExhausted: $attempt,
+            previous: $e,
+        );
     }
 
     private function resolveTarget(string $endpoint): string

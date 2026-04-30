@@ -87,6 +87,7 @@ return [
 
     'max_retries' => 3,
     'retry_backoff_base' => 2,
+    'retry_transport_failures' => env('MAILBOX_RETRY_TRANSPORT_FAILURES', true),
     'max_concurrent_per_mailbox' => 4,
     'concurrency_lock_timeout' => 30,
     // 'release' avoids blocking queue workers by releasing active jobs on retryable responses.

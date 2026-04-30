@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
@@ -56,6 +58,51 @@ it('retries on 429 then succeeds', function (): void {
 
     expect($graph->get('users/test/messages'))->toHaveKey('value');
     Event::assertDispatched(RateLimitHit::class);
+});
+
+it('retries graph transport failures then succeeds', function (): void {
+    $handler = new MockHandler([
+        new ConnectException('Connection reset by peer', new Request('GET', 'https://graph.microsoft.com/v1.0/users/test/messages')),
+        new Response(200, [], json_encode(['value' => []])),
+    ]);
+
+    $client = new Client(['handler' => HandlerStack::create($handler), 'base_uri' => 'https://graph.microsoft.com/v1.0/']);
+
+    $token = new class([]) extends TokenManager
+    {
+        public function __construct(array $config = [])
+        {
+            parent::__construct($config);
+        }
+
+        public function getToken(bool $forceRefresh = false): string
+        {
+            return 'token';
+        }
+
+        public function invalidateToken(): void {}
+    };
+
+    $rateLimiter = new class([]) extends RateLimiter
+    {
+        public function __construct(array $config = [])
+        {
+            parent::__construct($config);
+        }
+
+        public function forMailbox(string $driver, string $mailbox, callable $callback): Response
+        {
+            return $callback();
+        }
+    };
+
+    $graph = new GraphClient([
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'sleep',
+        'retry_backoff_base' => 0,
+    ], $token, $rateLimiter, $client);
+
+    expect($graph->get('users/test/messages'))->toHaveKey('value');
 });
 
 it('throws mailbox access denied for 403', function (): void {
