@@ -11,7 +11,7 @@ use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 require_once __DIR__.'/Support/MessagePersistenceTestSupport.php';
 
 afterEach(function (): void {
-    \Mockery::close();
+    Mockery::close();
 });
 
 it('syncs and upserts mailbox messages and attachments using canonical keys', function (): void {
@@ -184,5 +184,5 @@ it('requires an explicit mailbox connection driver when syncing', function (): v
 
     expect(fn (): Collection => $service->syncMailbox($mailbox, [
         'filters' => ['limit' => 10],
-    ]))->toThrow(\RuntimeException::class, 'Mailbox connection driver is required.');
+    ]))->toThrow(RuntimeException::class, 'Mailbox connection driver is required.');
 });

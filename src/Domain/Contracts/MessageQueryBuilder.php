@@ -7,10 +7,11 @@ namespace Pyle\Mailbox\Contracts;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\WellKnownFolder;
 
 interface MessageQueryBuilder
 {
-    public function inFolder(string|\Pyle\Mailbox\Enums\WellKnownFolder $folder): static;
+    public function inFolder(string|WellKnownFolder $folder): static;
 
     public function allFolders(): static;
 
@@ -44,5 +45,5 @@ interface MessageQueryBuilder
     public function markAsUnread(array $messageIds): void;
 
     /** @param array<string> $messageIds */
-    public function moveTo(string|\Pyle\Mailbox\Enums\WellKnownFolder $folder, array $messageIds): void;
+    public function moveTo(string|WellKnownFolder $folder, array $messageIds): void;
 }

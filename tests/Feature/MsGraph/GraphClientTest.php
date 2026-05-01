@@ -8,6 +8,7 @@ use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Contracts\Queue\Job;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
@@ -181,7 +182,7 @@ it('releases queue jobs instead of sleeping when configured', function (): void 
     };
 
     $state = (object) ['releasedDelay' => null];
-    $job = new class($state) implements \Illuminate\Contracts\Queue\Job
+    $job = new class($state) implements Job
     {
         public function __construct(private object $state) {}
 

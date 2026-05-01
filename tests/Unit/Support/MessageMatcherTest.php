@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
 use Pyle\Mailbox\DTOs\AttachmentDto;
+use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Support\MessageMatcher;
 
 it('evaluates simple contains condition', function (): void {
@@ -63,7 +64,7 @@ it('evaluates matcher operators', function (string $operator, mixed $actual, mix
         $data['subject'] = 'ignored';
         $data['raw'] = ['subject' => $actual];
         $message = messageDto();
-        $message = new \Pyle\Mailbox\DTOs\MessageDto(
+        $message = new MessageDto(
             id: $message->id,
             subject: (string) $actual,
             bodyPreview: $message->bodyPreview,

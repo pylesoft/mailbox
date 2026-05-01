@@ -7,7 +7,7 @@ use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 require_once __DIR__.'/Support/MessagePersistenceTestSupport.php';
 
 afterEach(function (): void {
-    \Mockery::close();
+    Mockery::close();
 });
 
 it('uses provider operator tokens when applying sync filters', function (): void {
