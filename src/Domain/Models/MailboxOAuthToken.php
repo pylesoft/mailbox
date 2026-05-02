@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Models;
 
-use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -20,9 +19,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string|null $refresh_token
  * @property string $token_type
  * @property array<int, string>|null $scopes
- * @property CarbonImmutable|null $expires_at
- * @property CarbonImmutable|null $last_refreshed_at
- * @property CarbonImmutable|null $revoked_at
+ * @property \Carbon\CarbonImmutable|null $expires_at
+ * @property \Carbon\CarbonImmutable|null $last_refreshed_at
+ * @property \Carbon\CarbonImmutable|null $revoked_at
  * @property array<string, mixed>|null $meta
  * @property MailboxConnection|null $connection
  */

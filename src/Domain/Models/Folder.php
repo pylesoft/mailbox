@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Models;
 
-use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -22,7 +21,7 @@ use Pyle\Mailbox\Traits\HasMailbox;
  * @property WellKnownFolder|null $well_known_name
  * @property bool $is_active
  * @property string|null $delta_token
- * @property CarbonImmutable|null $last_synced_at
+ * @property \Carbon\CarbonImmutable|null $last_synced_at
  * @property SyncStatus $sync_status
  * @property string|null $last_sync_error
  * @property Mailbox|null $mailbox

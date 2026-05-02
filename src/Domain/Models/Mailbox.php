@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Models;
 
-use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -19,10 +17,10 @@ use Illuminate\Support\Carbon;
  * @property string $email_address
  * @property string|null $display_name
  * @property bool $is_active
- * @property CarbonImmutable|null $last_synced_at
+ * @property \Carbon\CarbonImmutable|null $last_synced_at
  * @property MailboxConnection $connection
- * @property Collection<int, Folder> $folders
- * @property Collection<int, MailboxMessage> $messages
+ * @property \Illuminate\Database\Eloquent\Collection<int, Folder> $folders
+ * @property \Illuminate\Database\Eloquent\Collection<int, MailboxMessage> $messages
  */
 class Mailbox extends Model
 {

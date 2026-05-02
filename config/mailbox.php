@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 use Pyle\Mailbox\Drivers\Gmail\GmailDriver;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphDriver;
 

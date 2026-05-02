@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Models;
 
-use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -21,10 +19,10 @@ use Pyle\Mailbox\Enums\ConnectionStatus;
  * @property string $driver
  * @property ConnectionStatus $status
  * @property array<string, mixed>|null $config
- * @property CarbonImmutable|null $last_connected_at
+ * @property \Carbon\CarbonImmutable|null $last_connected_at
  * @property string|null $last_error
- * @property Collection<int, Mailbox> $mailboxes
- * @property Collection<int, MailboxOAuthToken> $oauthTokens
+ * @property \Illuminate\Database\Eloquent\Collection<int, Mailbox> $mailboxes
+ * @property \Illuminate\Database\Eloquent\Collection<int, MailboxOAuthToken> $oauthTokens
  */
 class MailboxConnection extends Model
 {
