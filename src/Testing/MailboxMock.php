@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Testing;
 
+use Mockery\MockInterface;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsRawClient as SupportsGmailRawClient;
@@ -20,13 +21,13 @@ final class MailboxMock
     /**
      * Bind a mock raw Microsoft Graph client to `Mailbox::driver('ms-graph')`.
      *
-     * @return \Mockery\MockInterface&GraphClient
+     * @return MockInterface&GraphClient
      */
     public static function mockMsGraphRawClient(string $driver = 'ms-graph'): object
     {
         self::ensureMockeryInstalled();
 
-        /** @var \Mockery\MockInterface&GraphClient $rawClientMock */
+        /** @var MockInterface&GraphClient $rawClientMock */
         $rawClientMock = \Mockery::mock(GraphClient::class);
 
         $driverInstance = new class($rawClientMock) implements MailboxDriver, SupportsRawClient
@@ -70,13 +71,13 @@ final class MailboxMock
     /**
      * Bind a mock raw Gmail client to `Mailbox::driver('gmail')`.
      *
-     * @return \Mockery\MockInterface&GmailClient
+     * @return MockInterface&GmailClient
      */
     public static function mockGmailRawClient(string $driver = 'gmail'): object
     {
         self::ensureMockeryInstalled();
 
-        /** @var \Mockery\MockInterface&GmailClient $rawClientMock */
+        /** @var MockInterface&GmailClient $rawClientMock */
         $rawClientMock = \Mockery::mock(GmailClient::class);
 
         $driverInstance = new class($rawClientMock) implements MailboxDriver, SupportsGmailRawClient
