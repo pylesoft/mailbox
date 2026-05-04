@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Models;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -23,8 +24,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property array<int, array<string, mixed>>|null $to_recipients
  * @property array<int, array<string, mixed>>|null $cc_recipients
  * @property array<int, array<string, mixed>>|null $bcc_recipients
- * @property \Carbon\CarbonImmutable|null $received_at
- * @property \Carbon\CarbonImmutable|null $sent_at
+ * @property CarbonImmutable|null $received_at
+ * @property CarbonImmutable|null $sent_at
  * @property bool $is_read
  * @property bool $is_draft
  * @property bool $has_attachments

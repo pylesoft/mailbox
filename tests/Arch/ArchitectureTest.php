@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Eloquent\Model;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
@@ -17,6 +18,7 @@ use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\MailboxException;
 
 arch('contracts are interfaces')
     ->expect('Pyle\\Mailbox\\Contracts')
@@ -43,7 +45,7 @@ arch('enums are enums')
 
 arch('models extend eloquent model')
     ->expect('Pyle\\Mailbox\\Models')
-    ->toExtend(\Illuminate\Database\Eloquent\Model::class);
+    ->toExtend(Model::class);
 
 arch('events are final classes')
     ->expect('Pyle\\Mailbox\\Events')
@@ -51,8 +53,8 @@ arch('events are final classes')
 
 arch('exceptions extend mailbox exception')
     ->expect('Pyle\\Mailbox\\Exceptions')
-    ->toExtend(\Pyle\Mailbox\Exceptions\MailboxException::class)
-    ->ignoring(\Pyle\Mailbox\Exceptions\MailboxException::class);
+    ->toExtend(MailboxException::class)
+    ->ignoring(MailboxException::class);
 
 arch('no debugging statements')
     ->expect(['dd', 'dump', 'ray', 'var_dump'])

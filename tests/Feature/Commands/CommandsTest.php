@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Collection;
+use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Contracts\AttachmentResource;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\Contracts\FolderResource;
@@ -19,6 +21,7 @@ use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\ConnectionStatus;
+use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
@@ -157,12 +160,12 @@ class FakeMessageQueryBuilder implements MessageQueryBuilder
         return $this;
     }
 
-    public function where(\Pyle\Mailbox\Enums\FilterableField|string $field, mixed $operator, mixed $value = null): static
+    public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static
     {
         return $this;
     }
 
-    public function whereAny(\Pyle\Mailbox\Enums\FilterableField|string $field, mixed $operator, array $values): static
+    public function whereAny(FilterableField|string $field, mixed $operator, array $values): static
     {
         return $this;
     }
@@ -307,9 +310,9 @@ class FakeMessageResource implements MessageResource
                 return new AttachmentFileDto('a', 'a.txt', 'text/plain', 1, false, null, 'x', 'local', true);
             }
 
-            public function stream(): \Psr\Http\Message\StreamInterface
+            public function stream(): StreamInterface
             {
-                return \GuzzleHttp\Psr7\Utils::streamFor('');
+                return Utils::streamFor('');
             }
         };
     }

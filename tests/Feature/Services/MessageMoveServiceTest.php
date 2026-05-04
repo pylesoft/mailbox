@@ -9,7 +9,7 @@ use Pyle\Mailbox\Services\Persistence\MessageMoveService;
 require_once __DIR__.'/Support/MessagePersistenceTestSupport.php';
 
 afterEach(function (): void {
-    \Mockery::close();
+    Mockery::close();
 });
 
 it('moves a mailbox message and updates provider id and folder metadata', function (): void {

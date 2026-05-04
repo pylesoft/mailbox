@@ -27,12 +27,12 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-php-${{ matrix.php }}-composer-latest-${{ hashFiles('composer.lock') }}
+          key: ${{ runner.os }}-php-${{ matrix.php }}-composer-latest-${{ hashFiles('composer.json') }}
           restore-keys: |
             ${{ runner.os }}-php-${{ matrix.php }}-composer-latest-
             ${{ runner.os }}-php-${{ matrix.php }}-composer-
 
-      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: composer update --no-interaction --prefer-dist --no-progress
       - run: vendor/bin/pest
 
   qa-static-style:
@@ -43,7 +43,7 @@ jobs:
 
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: '8.4'
           coverage: none
 
       - name: Get Composer cache directory
@@ -53,10 +53,10 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-php-8.2-composer-qa-${{ hashFiles('composer.lock') }}
+          key: ${{ runner.os }}-php-8.4-composer-qa-${{ hashFiles('composer.lock') }}
           restore-keys: |
-            ${{ runner.os }}-php-8.2-composer-qa-
-            ${{ runner.os }}-php-8.2-composer-
+            ${{ runner.os }}-php-8.4-composer-qa-
+            ${{ runner.os }}-php-8.4-composer-
 
       - run: composer install --no-interaction --prefer-dist --no-progress
       - run: vendor/bin/phpstan analyse --no-progress

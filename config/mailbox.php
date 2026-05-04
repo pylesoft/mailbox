@@ -2,12 +2,15 @@
 
 declare(strict_types=1);
 
+use Pyle\Mailbox\Drivers\Gmail\GmailDriver;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphDriver;
+
 return [
     'default' => env('MAILBOX_DRIVER', 'ms-graph'),
 
     'driver_classes' => [
-        'ms-graph' => \Pyle\Mailbox\Drivers\MsGraph\MsGraphDriver::class,
-        'gmail' => \Pyle\Mailbox\Drivers\Gmail\GmailDriver::class,
+        'ms-graph' => MsGraphDriver::class,
+        'gmail' => GmailDriver::class,
     ],
 
     'drivers' => [

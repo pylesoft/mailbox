@@ -38,7 +38,7 @@ function expectMailboxFacadeForMailbox(Mailbox $mailbox, MailboxResource ...$res
 {
     MailboxFacade::shouldReceive('forMailbox')
         ->times(count($resources))
-        ->with(\Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
+        ->with(Mockery::on(fn (Mailbox $model): bool => $model->is($mailbox)))
         ->andReturn(...$resources);
 }
 

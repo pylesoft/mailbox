@@ -23,7 +23,7 @@ class MessageMoveService
             ->message($message->provider_message_id)
             ->moveTo($destinationFolder);
 
-        $newProviderMessageId = trim((string) ($moved->id ?? ''));
+        $newProviderMessageId = trim($moved->id);
 
         if ($newProviderMessageId !== '' && $newProviderMessageId !== $message->provider_message_id) {
             $message->provider_message_id = $newProviderMessageId;

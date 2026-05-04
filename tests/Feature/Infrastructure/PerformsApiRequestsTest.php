@@ -10,6 +10,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Contracts\Queue\Job;
 use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
@@ -331,7 +332,7 @@ final class TestPerformsApiRequestsRateLimiter
     }
 }
 
-final class TestQueueJob implements \Illuminate\Contracts\Queue\Job
+final class TestQueueJob implements Job
 {
     public function __construct(private object $state) {}
 

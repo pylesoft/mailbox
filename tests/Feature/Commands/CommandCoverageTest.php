@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Pyle\Mailbox\Commands\HealthCheckCommand;
 use Pyle\Mailbox\Commands\ListFoldersCommand;
@@ -19,6 +20,7 @@ use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\MailboxManager;
+use Symfony\Component\Console\Command\Command;
 
 beforeEach(function (): void {
     config()->set('mailbox.default', 'healthy-fake');
@@ -159,7 +161,7 @@ it('fails mailbox:find-folder when the driver cannot find the requested folder',
     ]);
     $output = Artisan::output();
 
-    expect($exitCode)->toBe(\Symfony\Component\Console\Command\Command::FAILURE);
+    expect($exitCode)->toBe(Command::FAILURE);
     expect($output)->toContain('Folder "Missing" was not found.');
     expect($output)->not->toContain('Found folder:');
 });
@@ -247,19 +249,19 @@ final class CommandCoverageMailboxResource implements MailboxResource
 final class CommandCoverageFolderQueryBuilder implements FolderQueryBuilder
 {
     /**
-     * @param  \Illuminate\Support\Collection<int, FolderDto>  $tree
+     * @param  Collection<int, FolderDto>  $tree
      */
     public function __construct(
-        private readonly \Illuminate\Support\Collection $tree,
+        private readonly Collection $tree,
         private readonly ?FolderDto $foundFolder,
     ) {}
 
-    public function get(): \Illuminate\Support\Collection
+    public function get(): Collection
     {
         return $this->tree;
     }
 
-    public function tree(int $maxDepth = 10): \Illuminate\Support\Collection
+    public function tree(int $maxDepth = 10): Collection
     {
         return $this->tree;
     }

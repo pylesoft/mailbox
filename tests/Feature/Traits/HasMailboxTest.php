@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Contracts\Container\Container;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxDriver;
@@ -10,6 +11,8 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MailboxResourceResolver;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\ConnectionStatus;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
@@ -145,12 +148,12 @@ final class NullMailboxDriver implements MailboxDriver
         throw new RuntimeException('Not used in HasMailbox tests.');
     }
 
-    public function testConnection(?string $emailAddress = null): \Pyle\Mailbox\DTOs\ConnectionTestResult
+    public function testConnection(?string $emailAddress = null): ConnectionTestResult
     {
         throw new RuntimeException('Not used in HasMailbox tests.');
     }
 
-    public function healthCheck(): \Pyle\Mailbox\DTOs\HealthCheckResult
+    public function healthCheck(): HealthCheckResult
     {
         throw new RuntimeException('Not used in HasMailbox tests.');
     }
@@ -159,7 +162,7 @@ final class NullMailboxDriver implements MailboxDriver
 final class SwappableMailboxManager extends MailboxManager
 {
     public function __construct(
-        \Illuminate\Contracts\Container\Container $container,
+        Container $container,
         private readonly MailboxResource $resource,
         private readonly MailboxDriver $driver,
     ) {

@@ -14,7 +14,7 @@ use Pyle\Mailbox\Services\Persistence\MessageSyncService;
 require_once __DIR__.'/Support/MessagePersistenceTestSupport.php';
 
 afterEach(function (): void {
-    \Mockery::close();
+    Mockery::close();
 });
 
 it('resolves backward-compatible folder references for mailbox sync requests', function (array $request, ?string $expectedFolder): void {
