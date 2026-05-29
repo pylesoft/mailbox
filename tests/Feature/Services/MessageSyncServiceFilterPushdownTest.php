@@ -200,6 +200,35 @@ it('normalizes rule trees and only pushes down supported AND conditions', functi
     expect($query->whereCalls)->not->toContain(['field' => 'subject', 'operator' => 'matches_regex', 'value' => '/invoice/i']);
 });
 
+it('uses the query builder when deciding rule-tree pushdown safety', function (): void {
+    $mailbox = createTestMailbox(
+        connectionName: 'Graph Rule Tree Operator Safety Connection',
+        emailAddress: 'graph-rule-tree-operator-safety@example.com',
+        displayName: 'Graph Rule Tree Operator Safety Mailbox',
+        driver: 'ms-graph',
+    );
+
+    $query = new RecordingMessageQueryBuilder;
+    $resource = new TestMailboxResource($query, []);
+
+    expectMailboxFacadeForMailbox($mailbox, $resource);
+
+    $service = new MessageSyncService;
+    $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'from.address', 'operator' => 'equals', 'value' => 'sender@example.com'],
+                ['field' => 'from.address', 'operator' => 'ends_with', 'value' => '@biyorkcanada.com'],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($query->whereCalls)->toContain(['field' => 'from.address', 'operator' => 'eq', 'value' => 'sender@example.com']);
+    expect($query->whereCalls)->not->toContain(['field' => 'from.address', 'operator' => 'ends_with', 'value' => '@biyorkcanada.com']);
+});
+
 it('does not push down rule-tree conditions when any OR group is present', function (): void {
     $mailbox = createTestMailbox(
         connectionName: 'Rule Tree OR Connection',

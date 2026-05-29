@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Services\Persistence;
 
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\SupportsMessageSyncRulePushdown;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 
@@ -55,8 +56,12 @@ final class MessageSyncRuleTree
     /**
      * @param  array<string, mixed>  $ruleTree
      */
-    public function applyPushdown(MessageQueryBuilder $query, array $ruleTree, string $driver): void
+    public function applyPushdown(MessageQueryBuilder $query, array $ruleTree): void
     {
+        if (! $query instanceof SupportsMessageSyncRulePushdown) {
+            return;
+        }
+
         if ($ruleTree === []) {
             return;
         }
@@ -79,11 +84,7 @@ final class MessageSyncRuleTree
                 continue;
             }
 
-            if (! $filterableField->isServerPushable($driver)) {
-                continue;
-            }
-
-            if (! in_array($matchOperator, $filterableField->operators(), true)) {
+            if (! $query->supportsRulePushdown($filterableField, $matchOperator)) {
                 continue;
             }
 

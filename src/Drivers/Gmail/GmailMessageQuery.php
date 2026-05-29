@@ -6,11 +6,13 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\SupportsMessageSyncRulePushdown;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
-class GmailMessageQuery implements MessageQueryBuilder
+class GmailMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRulePushdown
 {
     private const MAX_PAGES = 100;
 
@@ -61,6 +63,37 @@ class GmailMessageQuery implements MessageQueryBuilder
         $this->queryAllFolders = true;
 
         return $this;
+    }
+
+    public function supportsRulePushdown(FilterableField $field, MatchOperator $operator): bool
+    {
+        if (! in_array($operator, $field->operators(), true)) {
+            return false;
+        }
+
+        return match ($field) {
+            FilterableField::SUBJECT,
+            FilterableField::FROM_ADDRESS,
+            FilterableField::SENDER_ADDRESS,
+            FilterableField::TO_ADDRESS,
+            FilterableField::CC_ADDRESS,
+            FilterableField::RECEIVED_AT,
+            FilterableField::IS_READ,
+            FilterableField::IS_DRAFT,
+            FilterableField::HAS_ATTACHMENTS,
+            FilterableField::IMPORTANCE => in_array($operator, [
+                MatchOperator::EQUALS,
+                MatchOperator::CONTAINS,
+                MatchOperator::STARTS_WITH,
+                MatchOperator::ENDS_WITH,
+                MatchOperator::GREATER_THAN,
+                MatchOperator::LESS_THAN,
+                MatchOperator::BEFORE,
+                MatchOperator::AFTER,
+                MatchOperator::BETWEEN,
+            ], true),
+            default => false,
+        };
     }
 
     public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static

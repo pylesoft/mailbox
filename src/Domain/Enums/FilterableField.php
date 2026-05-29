@@ -83,6 +83,9 @@ enum FilterableField: string
         };
     }
 
+    /**
+     * @deprecated Runtime sync pushdown support is now defined by driver query builders.
+     */
     public function isServerPushable(string $driver = 'ms-graph'): bool
     {
         return match (strtolower($driver)) {

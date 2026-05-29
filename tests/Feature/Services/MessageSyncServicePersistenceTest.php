@@ -172,6 +172,52 @@ it('does not resolve message resources for attachment rules when message has no 
     expect($resource->messageCalls)->toBe(0);
 });
 
+it('applies non-pushed rule-tree conditions after provider fetch', function (): void {
+    $mailbox = createTestMailbox(
+        connectionName: 'Local Rule Tree Matcher Connection',
+        emailAddress: 'local-rule-tree-matcher@example.com',
+        displayName: 'Local Rule Tree Matcher Mailbox',
+    );
+
+    $matchingMessage = testMailboxMessageDto(
+        id: 'provider-message-biyork',
+        internetMessageId: '<internet-biyork@example.com>',
+        parentFolderId: 'inbox',
+        hasAttachments: false,
+        fromAddress: 'ap@biyorkcanada.com',
+    );
+
+    $nonMatchingMessage = testMailboxMessageDto(
+        id: 'provider-message-other',
+        internetMessageId: '<internet-other@example.com>',
+        parentFolderId: 'inbox',
+        hasAttachments: false,
+        fromAddress: 'ap@example.com',
+    );
+
+    $resource = new TestMailboxResource(
+        query: new TestMessageQueryBuilder(collect([$matchingMessage, $nonMatchingMessage])),
+        messages: [],
+    );
+
+    expectMailboxFacadeForMailbox($mailbox, $resource);
+
+    $service = new MessageSyncService;
+    $persisted = $service->syncMailbox($mailbox, [
+        'rule_tree' => [
+            'operator' => 'AND',
+            'conditions' => [
+                ['field' => 'from.address', 'operator' => 'ends_with', 'value' => '@biyorkcanada.com'],
+            ],
+        ],
+        'filters' => ['limit' => 10],
+    ]);
+
+    expect($persisted)->toHaveCount(1)
+        ->and($persisted->first()?->provider_message_id)->toBe('provider-message-biyork')
+        ->and(MailboxMessage::query()->pluck('provider_message_id')->all())->toBe(['provider-message-biyork']);
+});
+
 it('requires an explicit mailbox connection driver when syncing', function (): void {
     $mailbox = createTestMailbox(
         connectionName: 'Missing Driver Connection',

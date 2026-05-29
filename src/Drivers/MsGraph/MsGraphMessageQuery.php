@@ -6,11 +6,13 @@ namespace Pyle\Mailbox\Drivers\MsGraph;
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\SupportsMessageSyncRulePushdown;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
-class MsGraphMessageQuery implements MessageQueryBuilder
+class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRulePushdown
 {
     private const MAX_PAGES = 100;
 
@@ -65,6 +67,32 @@ class MsGraphMessageQuery implements MessageQueryBuilder
         $this->queryAllFolders = true;
 
         return $this;
+    }
+
+    public function supportsRulePushdown(FilterableField $field, MatchOperator $operator): bool
+    {
+        if (! in_array($operator, $field->operators(), true)) {
+            return false;
+        }
+
+        return match ($field) {
+            FilterableField::SUBJECT => in_array($operator, [
+                MatchOperator::EQUALS,
+                MatchOperator::CONTAINS,
+                MatchOperator::STARTS_WITH,
+            ], true),
+            FilterableField::RECEIVED_AT => in_array($operator, [
+                MatchOperator::BEFORE,
+                MatchOperator::AFTER,
+                MatchOperator::BETWEEN,
+            ], true),
+            FilterableField::IS_READ,
+            FilterableField::IS_DRAFT,
+            FilterableField::HAS_ATTACHMENTS,
+            FilterableField::IMPORTANCE,
+            FilterableField::FROM_ADDRESS => $operator === MatchOperator::EQUALS,
+            default => false,
+        };
     }
 
     public function where(FilterableField|string $field, mixed $operator, mixed $value = null): static

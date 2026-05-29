@@ -59,6 +59,7 @@ class ODataFilterCompiler
     public function compile(): string
     {
         $parts = [];
+        $seenExpressions = [];
 
         foreach ($this->clauses as $clause) {
             if ($clause['type'] === 'single') {
@@ -87,6 +88,11 @@ class ODataFilterCompiler
             }
 
             if ($expression !== null && $expression !== '') {
+                if (isset($seenExpressions[$expression])) {
+                    continue;
+                }
+
+                $seenExpressions[$expression] = true;
                 $parts[] = $expression;
             }
         }

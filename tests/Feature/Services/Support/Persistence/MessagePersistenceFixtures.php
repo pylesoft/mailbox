@@ -47,14 +47,15 @@ function testMailboxMessageDto(
     ?string $internetMessageId,
     ?string $parentFolderId,
     bool $hasAttachments = true,
+    string $fromAddress = 'sender@example.com',
 ): MessageDto {
     return new MessageDto(
         id: $id,
         subject: 'Invoice',
         bodyPreview: 'Preview',
         body: new BodyDto(contentType: 'text', content: 'Body'),
-        from: new EmailAddressDto(name: 'Sender', address: 'sender@example.com'),
-        sender: new EmailAddressDto(name: 'Sender', address: 'sender@example.com'),
+        from: new EmailAddressDto(name: 'Sender', address: $fromAddress),
+        sender: new EmailAddressDto(name: 'Sender', address: $fromAddress),
         toRecipients: [new EmailAddressDto(name: 'Receiver', address: 'receiver@example.com')],
         ccRecipients: [],
         bccRecipients: [],
