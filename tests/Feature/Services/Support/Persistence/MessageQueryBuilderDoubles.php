@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\SupportsMessageSyncRulePushdown;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
+use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
 final class TestMessageQueryBuilder implements MessageQueryBuilder
@@ -82,13 +84,39 @@ final class TestMessageQueryBuilder implements MessageQueryBuilder
     public function moveTo(string|WellKnownFolder $folder, array $messageIds): void {}
 }
 
-final class RecordingMessageQueryBuilder implements MessageQueryBuilder
+final class RecordingMessageQueryBuilder implements MessageQueryBuilder, SupportsMessageSyncRulePushdown
 {
     /** @var array<int, array{field:string, operator:mixed, value:mixed}> */
     public array $whereCalls = [];
 
     /** @var array<int, array{field:string, operator:mixed, values:array<int, mixed>}> */
     public array $whereAnyCalls = [];
+
+    public function supportsRulePushdown(FilterableField $field, MatchOperator $operator): bool
+    {
+        if (! in_array($operator, $field->operators(), true)) {
+            return false;
+        }
+
+        return match ($field) {
+            FilterableField::SUBJECT => in_array($operator, [
+                MatchOperator::EQUALS,
+                MatchOperator::CONTAINS,
+                MatchOperator::STARTS_WITH,
+            ], true),
+            FilterableField::RECEIVED_AT => in_array($operator, [
+                MatchOperator::BEFORE,
+                MatchOperator::AFTER,
+                MatchOperator::BETWEEN,
+            ], true),
+            FilterableField::IS_READ,
+            FilterableField::IS_DRAFT,
+            FilterableField::HAS_ATTACHMENTS,
+            FilterableField::IMPORTANCE,
+            FilterableField::FROM_ADDRESS => $operator === MatchOperator::EQUALS,
+            default => false,
+        };
+    }
 
     public function inFolder(string|WellKnownFolder $folder): static
     {

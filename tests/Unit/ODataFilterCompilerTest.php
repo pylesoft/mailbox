@@ -20,3 +20,15 @@ it('compiles whereAny clauses to grouped odata OR filters', function (): void {
     expect($compiler->compile())
         ->toBe("(from/emailAddress/address eq 'first@example.com' or from/emailAddress/address eq 'second@example.com') and isRead eq false");
 });
+
+it('deduplicates duplicate single odata clauses', function (): void {
+    $compiler = new ODataFilterCompiler;
+    $compiler->where('hasAttachments', 'eq', true);
+    $compiler->where('subject', 'eq', 'Invoice(s)');
+    $compiler->where('hasAttachments', 'eq', true);
+
+    $filter = $compiler->compile();
+
+    expect(substr_count($filter, 'hasAttachments eq true'))->toBe(1);
+    expect($filter)->toContain("subject eq 'Invoice(s)'");
+});

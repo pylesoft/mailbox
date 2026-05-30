@@ -112,7 +112,7 @@ it('pushes down only flat server-supported conditions and expands between filter
                 'value' => [1, 5],
             ],
         ],
-    ], 'ms-graph');
+    ]);
 
     expect($query->whereCalls)->toBe([
         [
@@ -129,6 +129,34 @@ it('pushes down only flat server-supported conditions and expands between filter
             'field' => 'receivedAt',
             'operator' => 'le',
             'value' => '2026-01-31T23:59:59Z',
+        ],
+    ]);
+});
+
+it('does not push down unsafe Microsoft Graph field operator combinations', function (): void {
+    $query = new RecordingMessageQueryBuilder;
+
+    (new MessageSyncRuleTree)->applyPushdown($query, [
+        'operator' => 'AND',
+        'conditions' => [
+            [
+                'field' => 'from.address',
+                'operator' => 'equals',
+                'value' => 'sender@example.com',
+            ],
+            [
+                'field' => 'from.address',
+                'operator' => 'ends_with',
+                'value' => '@biyorkcanada.com',
+            ],
+        ],
+    ]);
+
+    expect($query->whereCalls)->toBe([
+        [
+            'field' => 'from.address',
+            'operator' => 'eq',
+            'value' => 'sender@example.com',
         ],
     ]);
 });

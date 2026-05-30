@@ -32,10 +32,10 @@ class MessageSyncService
     public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         $request = MessageSyncRequest::from($options, $this->ruleTree);
-        $driver = $this->driverForMailbox($mailbox);
+        $this->ensureMailboxHasDriver($mailbox);
         $plan = $this->buildPlan($request, Carbon::now('UTC'));
         $mailboxResource = MailboxFacade::forMailbox($mailbox);
-        $messages = $this->messagesForSync($mailboxResource, $plan, $driver);
+        $messages = $this->messagesForSync($mailboxResource, $plan);
         $persisted = $this->persistMessages(
             $mailboxResource,
             $mailbox->id,
@@ -51,7 +51,7 @@ class MessageSyncService
             ->values();
     }
 
-    private function driverForMailbox(Mailbox $mailbox): string
+    private function ensureMailboxHasDriver(Mailbox $mailbox): void
     {
         $mailbox->loadMissing('connection');
 
@@ -60,8 +60,6 @@ class MessageSyncService
         if ($driver === '') {
             throw new RuntimeException('Mailbox connection driver is required.');
         }
-
-        return $driver;
     }
 
     /**
@@ -114,22 +112,22 @@ class MessageSyncService
     /**
      * @return Collection<int, MessageDto>
      */
-    private function fetchMessages(MailboxResource $mailbox, MessageSyncPlan $plan, string $driver): Collection
+    private function fetchMessages(MailboxResource $mailbox, MessageSyncPlan $plan): Collection
     {
         $folderReference = $plan->folderReference();
         if ($folderReference !== null) {
-            return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $plan, $driver);
+            return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $plan);
         }
 
-        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $plan, $driver);
+        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $plan);
     }
 
     /**
      * @return Collection<int, MessageDto>
      */
-    private function fetchUsingQuery(MessageQueryBuilder $query, MessageSyncPlan $plan, string $driver): Collection
+    private function fetchUsingQuery(MessageQueryBuilder $query, MessageSyncPlan $plan): Collection
     {
-        $this->applyFilters($query, $plan, $driver);
+        $this->applyFilters($query, $plan);
 
         return $query->get();
     }
@@ -140,14 +138,13 @@ class MessageSyncService
     private function messagesForSync(
         MailboxResource $mailboxResource,
         MessageSyncPlan $plan,
-        string $driver,
     ): Collection {
-        return $this->fetchMessages($mailboxResource, $plan, $driver)
+        return $this->fetchMessages($mailboxResource, $plan)
             ->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)
             ->values();
     }
 
-    private function applyFilters(MessageQueryBuilder $query, MessageSyncPlan $plan, string $driver): void
+    private function applyFilters(MessageQueryBuilder $query, MessageSyncPlan $plan): void
     {
         $filters = $plan->filters();
 
@@ -208,7 +205,7 @@ class MessageSyncService
             $query->take($limit);
         }
 
-        $this->ruleTree->applyPushdown($query, $plan->ruleTree(), $driver);
+        $this->ruleTree->applyPushdown($query, $plan->ruleTree());
     }
 
     /**
