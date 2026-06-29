@@ -157,6 +157,33 @@ it('throws provider transport exception after exhausting transport retries', fun
         ->toThrow(ProviderTransportException::class);
 });
 
+it('wraps invalid json provider responses as provider transport failures', function (): void {
+    $handler = HandlerStack::create(new MockHandler([
+        new Response(200, ['Content-Type' => 'text/html'], '<html>temporarily unavailable</html>'),
+    ]));
+
+    $client = new Client([
+        'handler' => $handler,
+        'base_uri' => 'https://api.example.test/v1/',
+    ]);
+
+    $api = new TestPerformsApiRequestsClient([
+        'max_retries' => 2,
+        'queue_retry_strategy' => 'sleep',
+    ], $client);
+
+    try {
+        $api->get('messages', mailbox: 'Inbox@example.com');
+
+        $this->fail('Expected invalid provider JSON to be wrapped.');
+    } catch (ProviderTransportException $exception) {
+        expect($exception->endpoint)->toBe('messages')
+            ->and($exception->mailbox)->toBe('inbox@example.com')
+            ->and($exception->getPrevious())->toBeInstanceOf(JsonException::class)
+            ->and($exception->getMessage())->toContain('invalid JSON response');
+    }
+});
+
 it('releases queued jobs for retryable transport failures', function (): void {
     $request = new Request('GET', 'https://api.example.test/v1/messages');
     $handler = HandlerStack::create(new MockHandler([
