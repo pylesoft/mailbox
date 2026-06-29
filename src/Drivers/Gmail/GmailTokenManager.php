@@ -301,7 +301,13 @@ class GmailTokenManager
             return $this->metadataByMailbox[$this->normalizeMailbox($mailbox)] ?? [];
         }
 
-        return $this->metadataByMailbox[array_key_first($this->metadataByMailbox)] ?? [];
+        $firstMailbox = array_key_first($this->metadataByMailbox);
+
+        if ($firstMailbox === null) {
+            return [];
+        }
+
+        return $this->metadataByMailbox[$firstMailbox];
     }
 
     private function normalizeMailbox(string $mailbox): string

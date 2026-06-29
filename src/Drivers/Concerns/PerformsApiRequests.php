@@ -9,6 +9,7 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Support\Facades\Log;
+use JsonException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
@@ -87,7 +88,16 @@ trait PerformsApiRequests
             return [];
         }
 
-        return json_decode($body, true, flags: JSON_THROW_ON_ERROR);
+        try {
+            return json_decode($body, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new ProviderTransportException(
+                message: sprintf('%s returned an invalid JSON response for %s.', $this->providerLabel(), $endpoint),
+                endpoint: $endpoint,
+                mailbox: $this->mailboxKey($mailbox),
+                previous: $exception,
+            );
+        }
     }
 
     /** @param array<string, mixed> $options */
