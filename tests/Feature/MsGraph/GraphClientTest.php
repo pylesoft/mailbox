@@ -6,6 +6,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Queue\Job;
@@ -14,6 +15,7 @@ use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\Drivers\MsGraph\TokenManager;
 use Pyle\Mailbox\Events\RateLimitHit;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 
@@ -145,6 +147,54 @@ it('throws mailbox access denied for 403', function (): void {
 
     $graph->get('users/test/messages', mailbox: 'test@example.com');
 })->throws(MailboxAccessDeniedException::class);
+
+it('does not retry unsupported reference attachment raw content responses', function (): void {
+    $history = [];
+    $handler = new MockHandler([
+        new Response(405, [], ''),
+    ]);
+    $stack = HandlerStack::create($handler);
+    $stack->push(Middleware::history($history));
+
+    $client = new Client([
+        'handler' => $stack,
+        'base_uri' => 'https://graph.microsoft.com/v1.0/',
+    ]);
+
+    $token = new class([]) extends TokenManager
+    {
+        public function __construct(array $config = [])
+        {
+            parent::__construct($config);
+        }
+
+        public function getToken(bool $forceRefresh = false): string
+        {
+            return 'token';
+        }
+
+        public function invalidateToken(): void {}
+    };
+
+    $rateLimiter = new class([]) extends RateLimiter
+    {
+        public function __construct(array $config = [])
+        {
+            parent::__construct($config);
+        }
+
+        public function forMailbox(string $driver, string $mailbox, callable $callback): Response
+        {
+            return $callback();
+        }
+    };
+
+    $graph = new GraphClient(['max_retries' => 3], $token, $rateLimiter, $client);
+
+    expect(fn () => $graph->stream('users/test/messages/message/attachments/reference/$value', 'test@example.com'))
+        ->toThrow(fn (ApiRequestException $exception): bool => $exception->status === 405);
+    expect($history)->toHaveCount(1);
+});
 
 it('releases queue jobs instead of sleeping when configured', function (): void {
     $handler = new MockHandler([

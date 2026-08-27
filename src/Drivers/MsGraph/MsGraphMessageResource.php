@@ -15,6 +15,8 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 
 class MsGraphMessageResource implements MessageResource
 {
+    private const ATTACHMENT_METADATA_SELECT = 'id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId';
+
     public function __construct(
         private readonly GraphClient $client,
         private readonly string $mailbox,
@@ -71,7 +73,11 @@ class MsGraphMessageResource implements MessageResource
     /** @return Collection<int, AttachmentDto> */
     public function attachments(): Collection
     {
-        $payload = $this->client->get($this->messageEndpoint().'/attachments', mailbox: $this->mailbox);
+        $payload = $this->client->get(
+            $this->messageEndpoint().'/attachments',
+            ['$select' => self::ATTACHMENT_METADATA_SELECT],
+            $this->mailbox,
+        );
 
         return collect((array) ($payload['value'] ?? []))
             ->map(fn (mixed $attachment): AttachmentDto => AttachmentDto::fromMsGraph(is_array($attachment) ? $attachment : []))

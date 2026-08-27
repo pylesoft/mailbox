@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
-use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
 use Psr\Http\Message\StreamInterface;
@@ -16,6 +15,8 @@ use Pyle\Mailbox\Events\AttachmentSkipped;
 
 class MsGraphAttachmentResource implements AttachmentResource
 {
+    private const ATTACHMENT_METADATA_SELECT = 'id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId';
+
     public function __construct(
         private readonly GraphClient $client,
         private readonly string $mailbox,
@@ -25,16 +26,24 @@ class MsGraphAttachmentResource implements AttachmentResource
 
     public function metadata(): AttachmentDto
     {
-        $payload = $this->client->get($this->attachmentEndpoint(), mailbox: $this->mailbox);
+        $payload = $this->client->get(
+            $this->attachmentEndpoint(),
+            ['$select' => self::ATTACHMENT_METADATA_SELECT],
+            $this->mailbox,
+        );
 
         return AttachmentDto::fromMsGraph($payload);
     }
 
     public function download(): AttachmentFileDto
     {
-        $payload = $this->client->get($this->attachmentEndpoint(), mailbox: $this->mailbox);
+        $payload = $this->client->get(
+            $this->attachmentEndpoint(),
+            ['$select' => self::ATTACHMENT_METADATA_SELECT],
+            $this->mailbox,
+        );
         $attachment = AttachmentDto::fromMsGraph($payload);
-        $content = $this->resolveContent($payload);
+        $content = (string) $this->stream();
         $contentHash = hash('sha256', $content);
 
         $disk = (string) config('mailbox.attachment_disk', 'local');
@@ -92,12 +101,6 @@ class MsGraphAttachmentResource implements AttachmentResource
 
     public function stream(): StreamInterface
     {
-        $payload = $this->client->get($this->attachmentEndpoint(), mailbox: $this->mailbox);
-
-        if (isset($payload['contentBytes'])) {
-            return Utils::streamFor(base64_decode((string) $payload['contentBytes'], true) ?: '');
-        }
-
         return $this->client->stream($this->attachmentEndpoint().'/$value', $this->mailbox);
     }
 
@@ -116,16 +119,6 @@ class MsGraphAttachmentResource implements AttachmentResource
         $sanitized = preg_replace('/[^A-Za-z0-9._-]/', '_', $name);
 
         return $sanitized !== null && $sanitized !== '' ? $sanitized : 'attachment.bin';
-    }
-
-    /** @param array<string, mixed> $payload */
-    private function resolveContent(array $payload): string
-    {
-        if (isset($payload['contentBytes'])) {
-            return base64_decode((string) $payload['contentBytes'], true) ?: '';
-        }
-
-        return (string) $this->stream();
     }
 
     /**
