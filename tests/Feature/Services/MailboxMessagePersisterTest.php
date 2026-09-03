@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use GuzzleHttp\Psr7\Utils;
+use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\Services\Persistence\MailboxMessagePersister;
 
@@ -131,4 +133,72 @@ it('skips attachment hydration when disabled and clears stored attachments when 
 
     expect($cleared->parent_folder_id)->toBe('archive');
     expect($cleared->attachments)->toHaveCount(0);
+});
+
+it('does not retain raw attachment bytes while updating an existing attachment', function (): void {
+    $attachmentSize = 12_931_662;
+    $attachmentHash = '77896f2637288f1e096ac120f652ce5a4339593eb0409e8555e4c4eae68e9409';
+    $providerStreamMemory = null;
+    $attachmentSelectMemory = null;
+
+    $mailbox = createTestMailbox(
+        connectionName: 'Attachment Memory Connection',
+        emailAddress: 'memory@example.com',
+        displayName: 'Memory Mailbox',
+    );
+    $mailbox->getConnection()->beforeExecuting(function (string $sql) use (&$attachmentSelectMemory): void {
+        $sql = strtolower(ltrim($sql));
+
+        if (
+            str_starts_with($sql, 'select')
+            && str_contains($sql, 'mailbox_attachments')
+            && str_contains($sql, 'provider_attachment_id')
+        ) {
+            $attachmentSelectMemory = memory_get_usage();
+        }
+    });
+
+    $message = testMailboxMessageDto(
+        id: 'provider-memory',
+        internetMessageId: '<internet-memory@example.com>',
+        parentFolderId: 'inbox',
+    );
+    $resource = new TestMessageResource(
+        $message,
+        collect([new AttachmentDto('att-large', 'large.bin', 'application/octet-stream', $attachmentSize, false, null)]),
+        [
+            'att-large' => function () use (&$providerStreamMemory, $attachmentSize): StreamInterface {
+                $stream = Utils::streamFor(str_repeat('A', $attachmentSize));
+                $providerStreamMemory = memory_get_usage();
+
+                return $stream;
+            },
+        ],
+    );
+    $mailboxResource = new TrackingMailboxResource(
+        new TestMessageQueryBuilder(collect([$message])),
+        ['provider-memory' => $resource],
+    );
+    $persister = new MailboxMessagePersister;
+
+    $first = $persister->upsert($mailboxResource, $mailbox->id, $message);
+    unset($first);
+    gc_collect_cycles();
+    $providerStreamMemory = null;
+    $attachmentSelectMemory = null;
+
+    $stored = $persister->upsert($mailboxResource, $mailbox->id, $message);
+    $contentBytes = $stored->attachments->first()?->content_bytes;
+    $expectedContentBytesSize = 4 * intdiv($attachmentSize + 2, 3);
+
+    expect($providerStreamMemory)->toBeInt();
+    expect($attachmentSelectMemory)->toBeInt();
+    expect($attachmentSelectMemory - $providerStreamMemory)
+        ->toBeGreaterThanOrEqual(0)
+        ->toBeLessThan($expectedContentBytesSize + 2_000_000);
+    expect($contentBytes)->toBeString();
+    expect(strlen($contentBytes))->toBe($expectedContentBytesSize);
+    $decodedContent = base64_decode($contentBytes, true);
+    expect(strlen($decodedContent))->toBe($attachmentSize);
+    expect(hash('sha256', $decodedContent))->toBe($attachmentHash);
 });
