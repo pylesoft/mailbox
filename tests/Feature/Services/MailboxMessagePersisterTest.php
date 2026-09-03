@@ -193,9 +193,12 @@ it('does not retain raw attachment bytes while updating an existing attachment',
 
     expect($providerStreamMemory)->toBeInt();
     expect($attachmentSelectMemory)->toBeInt();
-    expect($attachmentSelectMemory - $providerStreamMemory)->toBeLessThan($expectedContentBytesSize + 2_000_000);
+    expect($attachmentSelectMemory - $providerStreamMemory)
+        ->toBeGreaterThanOrEqual(0)
+        ->toBeLessThan($expectedContentBytesSize + 2_000_000);
     expect($contentBytes)->toBeString();
     expect(strlen($contentBytes))->toBe($expectedContentBytesSize);
-    expect(strlen(base64_decode($contentBytes, true)))->toBe($attachmentSize);
-    expect(hash('sha256', base64_decode($contentBytes, true)))->toBe($attachmentHash);
+    $decodedContent = base64_decode($contentBytes, true);
+    expect(strlen($decodedContent))->toBe($attachmentSize);
+    expect(hash('sha256', $decodedContent))->toBe($attachmentHash);
 });
