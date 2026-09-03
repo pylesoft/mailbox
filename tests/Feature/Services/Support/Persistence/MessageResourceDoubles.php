@@ -17,7 +17,7 @@ final class TestMessageResource implements MessageResource
 {
     /**
      * @param  Collection<int, AttachmentDto>  $attachments
-     * @param  array<string, string>  $streams
+     * @param  array<string, string|Closure(): StreamInterface>  $streams
      */
     public function __construct(
         private readonly MessageDto $dto,
@@ -71,7 +71,8 @@ final class TestMessageResource implements MessageResource
 
 final class TestAttachmentResource implements AttachmentResource
 {
-    public function __construct(private readonly string $streamContent) {}
+    /** @param  string|Closure(): StreamInterface  $streamContent */
+    public function __construct(private readonly string|Closure $streamContent) {}
 
     public function metadata(): AttachmentDto
     {
@@ -85,6 +86,8 @@ final class TestAttachmentResource implements AttachmentResource
 
     public function stream(): StreamInterface
     {
-        return Utils::streamFor($this->streamContent);
+        return $this->streamContent instanceof Closure
+            ? ($this->streamContent)()
+            : Utils::streamFor($this->streamContent);
     }
 }

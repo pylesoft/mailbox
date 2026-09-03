@@ -73,8 +73,6 @@ final class MailboxMessagePersister
             }
 
             $persistedAttachmentIds[] = $attachment->id;
-            $content = (string) $resource->attachment($attachment->id)->stream();
-
             $mailboxMessage->attachments()->updateOrCreate(
                 [
                     'mailbox_message_id' => $mailboxMessage->id,
@@ -86,7 +84,7 @@ final class MailboxMessagePersister
                     'size' => $attachment->size,
                     'is_inline' => $attachment->isInline,
                     'content_id' => $attachment->contentId,
-                    'content_bytes' => base64_encode($content),
+                    'content_bytes' => base64_encode((string) $resource->attachment($attachment->id)->stream()),
                 ],
             );
         }
