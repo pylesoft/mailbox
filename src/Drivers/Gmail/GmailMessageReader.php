@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\Gmail;
 
+use Closure;
 use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\Exceptions\MailboxException;
@@ -24,7 +25,18 @@ final class GmailMessageReader
 
     private int $bodyBytes = 0;
 
-    public function __construct(private readonly GmailClient $client, private readonly string $mailbox) {}
+    /** @param (Closure(): void)|null $beforeHydration */
+    public function __construct(
+        private readonly GmailClient $client,
+        private readonly string $mailbox,
+        ?BodyReadLimits $limits = null,
+        ?ResponseBudget $responses = null,
+        private readonly ?Closure $beforeHydration = null,
+        private readonly bool $retry = true,
+    ) {
+        $this->limits = $limits ?? new BodyReadLimits;
+        $this->responses = $responses ?? new ResponseBudget($this->limits->maxResponseBytes);
+    }
 
     /** @return array<string, mixed> */
     public function get(string $messageId, ?BodyReadLimits $limits = null, ?ResponseBudget $responses = null): array
@@ -33,11 +45,24 @@ final class GmailMessageReader
         $this->responses = $responses ?? new ResponseBudget($this->limits->maxResponseBytes);
         $this->parts = $this->hydrations = $this->bodyBytes = 0;
         $endpoint = sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($messageId));
-        $message = $this->client->getBounded($endpoint, $this->responses, ['format' => 'full'], $this->mailbox, retry: true);
+        $message = $this->client->getBounded($endpoint, $this->responses, ['format' => 'full'], $this->mailbox, retry: $this->retry);
+
+        return $this->hydrateMessage($message, $messageId);
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array<string, mixed>
+     */
+    public function hydrateMessage(array $message, ?string $messageId = null): array
+    {
+        $endpoint = sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($messageId ?? (string) ($message['id'] ?? '')));
         if (is_array($message['payload'] ?? null)) {
+            $before = $this->bodyBytes;
             $message['payload'] = $this->hydrate($message['payload'], $endpoint);
             $body = GmailMime::body($message['payload']);
-            if ($body !== null && strlen($body->content) > $this->limits->maxBodyBytes) {
+            $this->bodyBytes += max(0, strlen($body->content ?? '') - ($this->bodyBytes - $before));
+            if ($this->bodyBytes > $this->limits->maxBodyBytes) {
                 throw new ResponseLimitExceededException('Gmail body read exceeded the combined content limit.');
             }
         }
@@ -66,7 +91,8 @@ final class GmailMessageReader
                 throw new ResponseLimitExceededException('Gmail body read exceeded the hydration limit.');
             }
             try {
-                $external = $this->client->getBounded($endpoint.'/attachments/'.rawurlencode($body['attachmentId']), $this->responses, mailbox: $this->mailbox, retry: true);
+                ($this->beforeHydration)?->__invoke();
+                $external = $this->client->getBounded($endpoint.'/attachments/'.rawurlencode($body['attachmentId']), $this->responses, mailbox: $this->mailbox, retry: $this->retry);
             } catch (ResourceNotFoundException) {
                 throw new MailboxException('External Gmail body content was not available.');
             }

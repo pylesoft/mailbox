@@ -65,6 +65,27 @@ trait PerformsApiRequests
      */
     public function getBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query = [], ?string $mailbox = null, bool $retry = false): array
     {
+        /** @var array<string, mixed> $response */
+        $response = $this->readBounded($endpoint, $budget, $query, $mailbox, $retry, true);
+
+        return $response;
+    }
+
+    /** @param array<string, mixed> $query */
+    public function getBoundedObject(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query = [], ?string $mailbox = null, bool $retry = false): \stdClass
+    {
+        /** @var \stdClass $response */
+        $response = $this->readBounded($endpoint, $budget, $query, $mailbox, $retry, false);
+
+        return $response;
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>|\stdClass
+     */
+    private function readBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $retry, bool $associative): array|\stdClass
+    {
         $queueReleaseAllowed = $this->queueReleaseAllowed;
         $this->queueReleaseAllowed = false;
         $attempt = 0;
@@ -80,7 +101,7 @@ trait PerformsApiRequests
                 $attempt++;
                 $startedAt = microtime(true);
                 try {
-                    return $this->requestBounded($endpoint, $budget, $query, $mailbox);
+                    return $this->requestBounded($endpoint, $budget, $query, $mailbox, $associative);
                 } catch (RequestException $e) {
                     $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
                     if ($retry && $this->shouldRetryRequest($e, 'GET', $safeEndpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
@@ -103,9 +124,9 @@ trait PerformsApiRequests
 
     /**
      * @param  array<string, mixed>  $query
-     * @return array<string, mixed>
+     * @return array<string, mixed>|\stdClass
      */
-    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox): array
+    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $associative): array|\stdClass
     {
         $budget->assertMemoryAvailable(65536);
         $options = $query === [] ? [] : ['query' => $query];
@@ -161,12 +182,12 @@ trait PerformsApiRequests
         }
 
         try {
-            $decoded = json_decode($body, true, flags: JSON_THROW_ON_ERROR);
+            $decoded = json_decode($body, $associative, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException) {
             throw new ApiRequestException('The provider returned invalid JSON for a bounded read.');
         }
 
-        if (! is_array($decoded) || ! str_starts_with(ltrim($body), '{')) {
+        if (! str_starts_with(ltrim($body), '{') || ($associative ? ! is_array($decoded) : ! ($decoded instanceof \stdClass))) {
             throw new ApiRequestException('The provider returned an invalid object for a bounded read.');
         }
 
