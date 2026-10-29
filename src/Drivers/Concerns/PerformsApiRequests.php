@@ -19,6 +19,7 @@ use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 trait PerformsApiRequests
@@ -64,19 +65,25 @@ trait PerformsApiRequests
         $body = '';
 
         try {
-            while (true) {
-                $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
-                if ($chunk === '') {
-                    if ($stream->eof()) {
-                        break;
+            try {
+                while (true) {
+                    $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
+                    if ($chunk === '') {
+                        if ($stream->eof()) {
+                            break;
+                        }
+                        throw new ApiRequestException('The provider response stream stopped making progress.');
                     }
-                    throw new ApiRequestException('The provider response stream stopped making progress.');
+                    $budget->consume(strlen($chunk));
+                    $body .= $chunk;
                 }
-                $budget->consume(strlen($chunk));
-                $body .= $chunk;
+            } finally {
+                $stream->close();
             }
-        } finally {
-            $stream->close();
+        } catch (ResponseLimitExceededException|ApiRequestException $e) {
+            throw $e;
+        } catch (\Throwable) {
+            throw new ApiRequestException('The provider response stream could not be read.');
         }
 
         if ($response->getStatusCode() >= 400) {

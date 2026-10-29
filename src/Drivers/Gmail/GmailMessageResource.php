@@ -10,10 +10,12 @@ use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Support\GmailMime;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 class GmailMessageResource implements MessageResource
 {
@@ -23,16 +25,16 @@ class GmailMessageResource implements MessageResource
         private readonly string $messageId,
     ) {}
 
-    public function get(): MessageDto
+    public function get(?BodyReadLimits $limits = null): MessageDto
     {
-        $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($this->messageId);
+        $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($this->messageId, $limits);
 
         return MessageDto::fromGmail($payload);
     }
 
-    public function body(): BodyDto
+    public function body(?BodyReadLimits $limits = null): BodyDto
     {
-        $message = $this->get();
+        $message = $this->get($limits);
 
         return $message->body ?? throw new MailboxException('Gmail did not return a text body.');
     }
@@ -93,7 +95,7 @@ class GmailMessageResource implements MessageResource
     /** @return Collection<int, AttachmentDto> */
     public function attachments(): Collection
     {
-        $message = $this->client->get($this->messageEndpoint(), ['format' => 'full'], $this->mailbox);
+        $message = $this->client->getBounded($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), ['format' => 'full'], $this->mailbox);
         $parts = GmailMime::files((array) ($message['payload'] ?? []));
 
         return collect($parts)

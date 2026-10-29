@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Drivers\Gmail\GmailClient;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageQuery;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 it('queries gmail messages and maps DTOs', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -39,7 +39,7 @@ it('queries gmail messages and maps DTOs', function (): void {
 });
 
 it('combines search and where into gmail q syntax', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public array $queries = [];
 
@@ -70,7 +70,7 @@ it('combines search and where into gmail q syntax', function (): void {
 });
 
 it('applies internetMessageId filter client-side when search is used', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -112,7 +112,7 @@ it('applies internetMessageId filter client-side when search is used', function 
 });
 
 it('sends bulk batch modify requests in chunks', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $batchPayloads = [];
@@ -148,7 +148,7 @@ it('sends bulk batch modify requests in chunks', function (): void {
 });
 
 it('marks gmail messages unread by adding the unread label', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $batchPayloads = [];
@@ -179,7 +179,7 @@ it('marks gmail messages unread by adding the unread label', function (): void {
 });
 
 it('removes source custom label when moving queried gmail messages', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $batchPayloads = [];
@@ -210,7 +210,7 @@ it('removes source custom label when moving queried gmail messages', function ()
 });
 
 it('queries across all folders when allFolders is used', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $queries = [];
@@ -237,7 +237,7 @@ it('queries across all folders when allFolders is used', function (): void {
 });
 
 it('builds grouped OR filters when whereAny is used', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $queries = [];
@@ -265,7 +265,7 @@ it('builds grouped OR filters when whereAny is used', function (): void {
 });
 
 it('rejects repeated page tokens instead of returning a completed collection', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $queries = [];

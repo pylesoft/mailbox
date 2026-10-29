@@ -67,10 +67,10 @@ final readonly class AttachmentDto implements Arrayable, JsonSerializable
 
             $value = strtolower((string) ($header['value'] ?? ''));
 
-            return str_contains($value, 'inline');
+            return preg_match('/^inline(?:\s*;|\s*$)/', trim($value)) === 1;
         }
 
-        return false;
+        return self::contentId($headers) !== null;
     }
 
     /** @param array<int, mixed> $headers */

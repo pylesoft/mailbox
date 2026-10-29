@@ -306,7 +306,7 @@ The `get()` method returns a complete `MessageDto` with all properties populated
 
 ## Reading the Message Body
 
-For list queries, message bodies are not included by default (for performance). To read the full HTML or plain-text body of a specific message, use the `body()` method on a message resource:
+To read the HTML or plain-text body of a specific message, use the `body()` method on a message resource:
 
 ```php
 $body = Mailbox::mailbox('invoices@acme.com')
@@ -336,7 +336,28 @@ echo $body->content;
 ```
 
 > **Note**
-> When a message was fetched via the single-message `get()` method, the `body` property on the `MessageDto` may already be populated. The dedicated `body()` method is guaranteed to return the full body content regardless of how the message was originally loaded.
+> A successful Gmail `get()` or `body()` read hydrates externalized text parts. Gmail list and legacy delta reads use the same body reader. Missing or malformed content throws an exception; `body()` does not replace missing text with an empty string. A valid zero-byte text part still returns an empty body.
+
+### Gmail Body Limits
+
+Gmail reads share an 8 MiB response budget across the message and its body fetches. They also allow up to 4 MiB of decoded body content, 32 external body fetches and 256 MIME parts per message. The byte limit includes all text alternatives, checks wire bytes and UTF-8 output, and checks the combined body. The limits apply to actual content, including responses whose declared length is wrong.
+
+You may pass different limits to the concrete Gmail message resource's `get()` or `body()` method:
+
+```php
+use Pyle\Mailbox\DTOs\BodyReadLimits;
+
+$body = $gmailMailbox->message($messageId)->body(new BodyReadLimits(
+    maxResponseBytes: 16 * 1024 * 1024,
+    maxBodyBytes: 8 * 1024 * 1024,
+    maxHydrations: 64,
+    maxParts: 512,
+));
+```
+
+Exceeding a limit throws `ResponseLimitExceededException`. No partial `MessageDto` or body is returned. The host may retry the read with suitable limits; these exceptions do not establish completed synchronization work.
+
+Gmail body data is decoded from base64url and its declared charset is converted to UTF-8. Missing charset declarations use UTF-8. MIME transfer-encoding headers are not decoded a second time: Gmail supplies parsed part bytes. Multipart alternatives prefer HTML, and multipart fragments with the same format are joined in order. Mixed sibling HTML and plain-text fragments cannot fit the single-format `BodyDto` contract and throw explicitly. Named parts and files with Content-ID metadata remain attachments, including text files. Sanitization, rendering and application file rules remain the host's responsibility.
 
 ## MessageDto Reference
 

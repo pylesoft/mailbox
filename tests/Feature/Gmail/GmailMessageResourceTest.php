@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Drivers\Gmail\GmailClient;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageResource;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
 
 it('performs gmail message operations', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $posts = [];
@@ -68,7 +68,7 @@ it('performs gmail message operations', function (): void {
 });
 
 it('throws when gmail copy raw payload is unavailable', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -91,7 +91,7 @@ it('throws when gmail copy raw payload is unavailable', function (): void {
 })->throws(MailboxException::class);
 
 it('removes source custom label when moving a gmail message', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $posts = [];

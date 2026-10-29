@@ -68,6 +68,12 @@ The [CHANGELOG](https://github.com/pylesoft/mailbox/blob/master/CHANGELOG.md) in
 
 ## Upgrade Template
 
+### Gmail Body Completeness
+
+Gmail single-message, query and legacy delta reads now hydrate externalized text and enforce response, decoded-content, MIME-part and hydration limits. Invalid base64url, inconsistent sizes, missing content and unsupported charsets throw instead of becoming empty text. `body()` also throws when no text body exists; valid empty text remains valid. See [Gmail body limits](messages.md#gmail-body-limits) for defaults and the optional concrete-resource limits.
+
+Externalized unnamed text is no longer advertised as an attachment. Named text files and inline files retain their metadata, and inline file parts may use their Gmail part ID when no external attachment ID exists. The mandatory resource contracts and DTO constructor fields are unchanged.
+
 When a new major version is released, its upgrade notes will follow this format:
 
 ### Updating Dependencies

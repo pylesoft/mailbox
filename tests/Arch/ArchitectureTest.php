@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
@@ -36,6 +37,7 @@ arch('DTOs are final readonly classes')
         AttachmentDto::class,
         AttachmentFileDto::class,
         BodyDto::class,
+        BodyReadLimits::class,
         ChangePage::class,
         ConnectionTestResult::class,
         DeltaResultDto::class,

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Drivers\Gmail\GmailClient;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageFilterer;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessagePageCollector;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 it('hydrates gmail pages, applies filters, deduplicates ids, and stops on repeated page tokens', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         /** @var array<int, array<string, mixed>> */
         public array $listQueries = [];
@@ -87,7 +87,7 @@ it('hydrates gmail pages, applies filters, deduplicates ids, and stops on repeat
 });
 
 it('rejects completion when the configured max page count is reached', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public int $listCalls = 0;
 

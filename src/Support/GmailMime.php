@@ -11,14 +11,14 @@ use ZBateson\MailMimeParser\Header\ParameterHeader;
 final class GmailMime
 {
     /** @param array<string, mixed> $part */
-    public static function isBody(array $part): bool
+    public static function isBody(array $part, bool $relatedRoot = false): bool
     {
         return in_array(strtolower((string) ($part['mimeType'] ?? '')), ['text/plain', 'text/html'], true)
-            && ! self::isFile($part);
+            && ! self::isFile($part, $relatedRoot);
     }
 
     /** @param array<string, mixed> $part */
-    public static function isFile(array $part): bool
+    public static function isFile(array $part, bool $relatedRoot = false): bool
     {
         if (self::filename($part) !== '') {
             return true;
@@ -28,7 +28,7 @@ final class GmailMime
                 && preg_match('/^attachment(?:\s*;|\s*$)/i', trim((string) ($header['value'] ?? ''))) === 1) {
                 return true;
             }
-            if (is_array($header) && strtolower((string) ($header['name'] ?? '')) === 'content-id' && trim((string) ($header['value'] ?? '')) !== '') {
+            if (! $relatedRoot && is_array($header) && strtolower((string) ($header['name'] ?? '')) === 'content-id' && trim((string) ($header['value'] ?? '')) !== '') {
                 return true;
             }
         }
@@ -39,17 +39,17 @@ final class GmailMime
     }
 
     /** @param array<string, mixed> $part */
-    public static function body(array $part): ?BodyDto
+    public static function body(array $part, bool $relatedRoot = false): ?BodyDto
     {
-        if (self::isFile($part)) {
+        if (self::isFile($part, $relatedRoot)) {
             return null;
         }
-        if (self::isBody($part)) {
+        if (self::isBody($part, $relatedRoot)) {
             return BodyDto::fromGmail($part);
         }
         $bodies = [];
-        foreach (self::children($part) as $child) {
-            $body = self::body($child);
+        foreach (self::children($part) as $index => $child) {
+            $body = self::body($child, self::isRelatedRoot($part, $child, $index));
             if ($body !== null) {
                 $bodies[] = $body;
             }
@@ -130,16 +130,43 @@ final class GmailMime
 
     /**
      * @param array<string, mixed> $part
+     * @param array<string, mixed> $child
+     */
+    public static function isRelatedRoot(array $part, array $child, int $index): bool
+    {
+        if (strtolower((string) ($part['mimeType'] ?? '')) !== 'multipart/related') {
+            return false;
+        }
+        $start = null;
+        foreach (self::headers($part) as $header) {
+            if (strtolower($header['name']) === 'content-type') {
+                $start = (new ParameterHeader('Content-Type', $header['value']))->getValueFor('start');
+            }
+        }
+        if ($start === null) {
+            return $index === 0;
+        }
+        foreach (self::headers($child) as $header) {
+            if (strtolower($header['name']) === 'content-id' && trim($header['value']) === $start) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, mixed> $part
      * @return list<array<string, mixed>>
      */
-    public static function files(array $part): array
+    public static function files(array $part, bool $relatedRoot = false): array
     {
-        if (self::isFile($part)) {
+        if (self::isFile($part, $relatedRoot)) {
             return [$part];
         }
         $files = [];
-        foreach (self::children($part) as $child) {
-            array_push($files, ...self::files($child));
+        foreach (self::children($part) as $index => $child) {
+            array_push($files, ...self::files($child, self::isRelatedRoot($part, $child, $index)));
         }
 
         return $files;

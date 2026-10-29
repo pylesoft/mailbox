@@ -7,9 +7,12 @@ use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\FnStream;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
 it('reads externalized Gmail text as body without advertising it as a file', function (): void {
@@ -66,7 +69,6 @@ it('selects nested HTML body while retaining named text and inline image metadat
             ['mimeType' => 'multipart/related', 'parts' => [
                 ['mimeType' => 'text/html', 'headers' => [['name' => 'Content-Type', 'value' => 'text/html; charset="windows-1252"']], 'body' => ['attachmentId' => 'html', 'size' => 11]],
                 ['mimeType' => 'image/png', 'filename' => 'logo.png', 'headers' => [
-                    ['name' => 'Content-Disposition', 'value' => 'inline; filename="logo.png"'],
                     ['name' => 'Content-ID', 'value' => '<logo>'],
                 ], 'body' => ['attachmentId' => 'logo', 'size' => 2]],
             ]],
@@ -173,11 +175,140 @@ it('reports malformed MIME structure explicitly', function (array $payload): voi
     [['mimeType' => 'text/plain', 'headers' => ['invalid'], 'body' => ['data' => 'T0s']]],
 ]);
 
+it('bounds the actual initial and external response bytes before decoding', function (bool $external): void {
+    $history = [];
+    $message = ['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'body', 'size' => 300]]];
+    $resource = gmailBodyResource($external
+        ? [$message, ['data' => str_repeat('YQ', 300), 'size' => 300]]
+        : [new Response(200, ['Content-Length' => '2'], '{"ignored":"'.str_repeat('x', 400).'"}')], $history);
+
+    expect(fn () => $resource->get(new BodyReadLimits(maxResponseBytes: 250)))->toThrow(MailboxException::class)
+        ->and($history)->toHaveCount($external ? 2 : 1);
+})->with([false, true]);
+
+it('bounds decoded bodies and hydration work without returning partial content', function (array $parts, BodyReadLimits $limits, int $requests): void {
+    $history = [];
+    $resource = gmailBodyResource([
+        ['id' => 'message', 'payload' => ['mimeType' => 'multipart/mixed', 'parts' => $parts]],
+        ['data' => 'T0s', 'size' => 2],
+    ], $history);
+
+    expect(fn () => $resource->get($limits))->toThrow(MailboxException::class)
+        ->and($history)->toHaveCount($requests);
+})->with([
+    'decoded bytes' => [[['mimeType' => 'text/plain', 'body' => ['data' => 'SGVsbG8', 'size' => 5]]], fn (): BodyReadLimits => new BodyReadLimits(maxBodyBytes: 4), 1],
+    'combined decoded bytes' => [[['mimeType' => 'text/plain', 'body' => ['data' => 'T0s']], ['mimeType' => 'text/plain', 'body' => ['data' => 'T0s']]], fn (): BodyReadLimits => new BodyReadLimits(maxBodyBytes: 3), 1],
+    'combined output bytes' => [[['mimeType' => 'text/plain', 'body' => ['data' => 'T0s']], ['mimeType' => 'text/plain', 'body' => ['data' => 'T0s']]], fn (): BodyReadLimits => new BodyReadLimits(maxBodyBytes: 4), 1],
+    'hydration count' => [[['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'first', 'size' => 2]], ['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'second', 'size' => 2]]], fn (): BodyReadLimits => new BodyReadLimits(maxHydrations: 1), 2],
+    'MIME parts' => [[['mimeType' => 'text/plain', 'body' => ['data' => 'T0s']]], fn (): BodyReadLimits => new BodyReadLimits(maxParts: 1), 1],
+]);
+
+it('counts decoded wire bytes even when charset conversion makes text smaller', function (): void {
+    $history = [];
+    $resource = gmailBodyResource([['id' => 'message', 'payload' => [
+        'mimeType' => 'text/plain', 'headers' => [['name' => 'Content-Type', 'value' => 'text/plain; charset=UTF-16BE']],
+        'body' => ['data' => 'AGE', 'size' => 2],
+    ]]], $history);
+
+    expect(fn () => $resource->body(new BodyReadLimits(maxBodyBytes: 1)))->toThrow(MailboxException::class);
+});
+
+it('never exposes an externalized body through the file resource', function (): void {
+    $history = [];
+    $resource = gmailBodyResource([['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'body', 'size' => 2]]]], $history);
+
+    expect(fn () => $resource->attachment('body')->metadata())->toThrow(MailboxException::class);
+});
+
+it('hydrates bodies through the Gmail listing and incremental delta paths', function (bool $delta): void {
+    $history = [];
+    $mailbox = gmailBodyMailbox([
+        $delta ? ['historyId' => '101', 'history' => [['messagesAdded' => [['message' => ['id' => 'message']]]]]] : ['messages' => [['id' => 'message']]],
+        ['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'body', 'size' => 2]]],
+        ['data' => 'T0s', 'size' => 2],
+    ], $history);
+
+    $messages = $delta ? $mailbox->folder('INBOX')->delta('100')->created : $mailbox->messages()->get();
+
+    expect($messages->first()?->body?->content)->toBe('OK')
+        ->and($messages->first()?->hasAttachments)->toBeFalse()
+        ->and($history)->toHaveCount(3);
+})->with([false, true]);
+
+it('fails an interrupted external body stream without returning partial text or retrying', function (): void {
+    $history = [];
+    $closed = false;
+    $stream = new FnStream([
+        'getSize' => fn (): ?int => null,
+        'eof' => fn (): bool => false,
+        'read' => function (int $length): string {
+            throw new RuntimeException('Private provider stream detail.');
+        },
+        'close' => function () use (&$closed): void {
+            $closed = true;
+        },
+    ]);
+    $resource = gmailBodyResource([
+        ['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'body', 'size' => 2]]],
+        new Response(200, [], $stream),
+    ], $history);
+
+    expect(fn () => $resource->body())->toThrow(ApiRequestException::class, 'The provider response stream could not be read.')
+        ->and($history)->toHaveCount(2)
+        ->and($closed)->toBeTrue();
+});
+
+it('uses the declared related root as body even when it has a Content-ID', function (): void {
+    $history = [];
+    $payload = ['mimeType' => 'multipart/related', 'headers' => [['name' => 'Content-Type', 'value' => 'multipart/related; start="<body>"']], 'parts' => [
+        ['partId' => 'file', 'mimeType' => 'text/plain', 'headers' => [
+            ['name' => 'Content-Disposition', 'value' => 'inline'], ['name' => 'Content-ID', 'value' => '<file>'],
+        ], 'body' => ['data' => 'RmlsZQ']],
+        ['mimeType' => 'text/html', 'headers' => [['name' => 'Content-ID', 'value' => '<body>']], 'body' => ['attachmentId' => 'body', 'size' => 9]],
+    ]];
+    $resource = gmailBodyResource([
+        ['id' => 'message', 'payload' => $payload], ['data' => 'PGI-T0s8L2I-', 'size' => 9], ['id' => 'message', 'payload' => $payload],
+    ], $history);
+
+    expect($resource->body()->content)->toBe('<b>OK</b>')
+        ->and($resource->attachments()->pluck('id')->all())->toBe(['file']);
+});
+
+it('uses Gmail parsed bytes without decoding the original MIME transfer encoding twice', function (): void {
+    $history = [];
+    $resource = gmailBodyResource([['id' => 'message', 'payload' => [
+        'mimeType' => 'text/plain', 'headers' => [['name' => 'Content-Transfer-Encoding', 'value' => 'base64']],
+        'body' => ['data' => 'WVE9PQ', 'size' => 4],
+    ]]], $history);
+
+    expect($resource->body()->content)->toBe('YQ==');
+});
+
+it('does not complete an incremental round when an external body is missing', function (): void {
+    $history = [];
+    $mailbox = gmailBodyMailbox([
+        ['historyId' => '101', 'history' => [['messagesAdded' => [['message' => ['id' => 'message']]]]]],
+        ['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'body', 'size' => 2]]],
+        new Response(404, [], '{}'),
+    ], $history);
+
+    expect(fn () => $mailbox->folder('INBOX')->delta('100'))->toThrow(MailboxException::class, 'External Gmail body content was not available.');
+});
+
 /**
  * @param array<int, array<string, mixed>|Response|Throwable> $responses
  * @param array<int, array<string, mixed>> $history
  */
 function gmailBodyResource(array $responses, array &$history): \Pyle\Mailbox\Contracts\MessageResource
+{
+    return gmailBodyMailbox($responses, $history)->message('message');
+}
+
+/**
+ * @param array<int, array<string, mixed>|Response|Throwable> $responses
+ * @param array<int, array<string, mixed>> $history
+ */
+function gmailBodyMailbox(array $responses, array &$history): \Pyle\Mailbox\Contracts\MailboxResource
 {
     $stack = HandlerStack::create(new MockHandler(array_map(
         static fn (array|Response|Throwable $response): Response|Throwable => is_array($response)
@@ -194,5 +325,5 @@ function gmailBodyResource(array $responses, array &$history): \Pyle\Mailbox\Con
         new GrantContext('connection', 'grant', '1', 'gmail', 'reader@example.com'),
         $tokens,
         new Client(['handler' => $stack, 'base_uri' => 'https://gmail.googleapis.com/gmail/v1/']),
-    )->message('message');
+    );
 }

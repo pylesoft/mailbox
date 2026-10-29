@@ -118,11 +118,7 @@ final class GmailMessagePageCollector
 
         $seenMessageIds[$id] = true;
 
-        $payload = $this->client->get(
-            sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($id)),
-            ['format' => 'full'],
-            $this->mailbox,
-        );
+        $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($id);
 
         return MessageDto::fromGmail($payload);
     }
