@@ -13,7 +13,7 @@ final readonly class SubmissionEvidence
         public string $provider,
         public GrantContext $context,
         public string $correlationId,
-        public string $artifactId,
+        public ?string $artifactId,
         public SubmissionEvidenceOutcome $outcome,
         public ?int $status,
         public array $headers = [],

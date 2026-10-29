@@ -7,8 +7,8 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
 use Pyle\Mailbox\DTOs\ConversationRead;
@@ -16,16 +16,16 @@ use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\PreparedMessage;
-use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\ReplyForwardContext;
+use Pyle\Mailbox\DTOs\SubmissionPreparation;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncIdentity;
 use Pyle\Mailbox\DTOs\SyncScope;
-use Pyle\Mailbox\DTOs\SyncContinuation;
-use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\Enums\PreparationOutcome;
 use Pyle\Mailbox\Enums\ReplyForwardOperation;
-use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
+use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
@@ -56,7 +56,8 @@ it('prepares an explicit native Graph reply without inheriting recipients or cha
         ->and($preparation->draftId)->toBe('new-draft=')
         ->and($preparation->correlationId)->toBe('native-operation');
     $result = $mailbox->submitPrepared($preparation, $message);
-    expect($result->outcome)->toBe(SubmissionOutcome::Accepted);
+    expect($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($result->context)->toBe($preparation->context);
     $requests = array_column($history, 'request');
     expect(array_map(static fn ($request): string => $request->getMethod(), $requests))->toBe(['GET', 'POST', 'GET', 'PATCH', 'GET', 'POST'])
         ->and($requests[0]->getUri()->getPath())->toEndWith('/mailFolders/Inbox/messages/source%3D')
@@ -481,6 +482,26 @@ it('requires the retained native provider conversation when reconstructing a pre
         ->and($history)->toHaveCount(4);
 })->with(['submitPrepared', 'inspectSubmission']);
 
+it('retains the same native intent when a reconstructed scope uses an equivalent cutoff timezone', function (): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(202),
+    ], $history);
+    $read = nativeGraphMessage()->context->conversation;
+    $original = new ConversationRead(new SyncIdentity('ms-graph', $read->identity->context, new SyncScope('Inbox', new DateTimeImmutable('2026-10-01T00:00:00+00:00'))), $read->conversationId, $read->messages, complete: true);
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Reply, $original, 'source=')]);
+    $preparation = $mailbox->prepareSubmission($message);
+    $restored = new ConversationRead(new SyncIdentity('ms-graph', $read->identity->context, new SyncScope('Inbox', new DateTimeImmutable('2026-09-30T20:00:00-04:00'))), $read->conversationId, $read->messages, complete: true);
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Reply, $restored, 'source=')]);
+
+    expect($mailbox->submitPrepared($preparation, $message)->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($history)->toHaveCount(6);
+});
+
 /** @param array<string, mixed> $changes */
 function nativeGraphMessage(array $changes = []): PreparedMessage
 {
@@ -516,8 +537,8 @@ function nativeGraphDraft(): array
 }
 
 /**
- * @param list<mixed> $responses
- * @param array<int, mixed> $history
+ * @param  list<mixed>  $responses
+ * @param  array<int, mixed>  $history
  */
 function nativeGraphMailbox(array $responses, array &$history, ?TestGrantTokenProvider $tokens = null): SupportsDraftSubmission
 {

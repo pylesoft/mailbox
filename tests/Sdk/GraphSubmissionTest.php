@@ -53,6 +53,7 @@ it('returns an immutable Graph draft before a separate verified send with empty 
         ->and($result->messageId)->toBeNull()
         ->and($result->threadId)->toBeNull()
         ->and($result->correlationId)->toBe('operation-1')
+        ->and($result->context)->toEqual($preparation->context)
         ->and($history)->toHaveCount(3)
         ->and($history[0]['request']->getMethod())->toBe('POST')
         ->and($history[0]['request']->getUri()->getPath())->toBe('/v1.0/users/sender%40example.com/messages')
@@ -222,6 +223,7 @@ it('rejects a retained handle from a different selected context before any furth
     );
 
     expect(fn () => $mailbox->submitPrepared($other, $message))->toThrow(InvalidArgumentException::class)
+        ->and(fn () => $mailbox->inspectSubmission($other, $message))->toThrow(InvalidArgumentException::class)
         ->and($history)->toHaveCount(1);
 })->with(['connectionId', 'grantId', 'lifecycleGeneration', 'driver', 'mailbox']);
 

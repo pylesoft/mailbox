@@ -13,8 +13,8 @@ use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\Enums\PreparationOutcome;
 use Pyle\Mailbox\Enums\ReplyForwardOperation;
-use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
+use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\PreparedMessageMime;
@@ -68,7 +68,7 @@ final readonly class MsGraphDraftSubmission
             $outcome = SubmissionOutcome::Rejected;
         }
 
-        return new SubmissionResult('ms-graph', $outcome, $preparation->correlationId, $response->status, $response->headers);
+        return new SubmissionResult('ms-graph', $outcome, $preparation->correlationId, $response->status, $response->headers, context: $preparation->context);
     }
 
     public function inspect(SubmissionPreparation $preparation, PreparedMessage $message): SubmissionEvidence
@@ -214,8 +214,11 @@ final readonly class MsGraphDraftSubmission
             return hash('sha256', $payload);
         }
 
+        $identity = $context->conversation->identity;
+
         return hash('sha256', $payload.serialize([$context->operation->value, $context->sourceMessageId,
-            $context->conversation->conversationId, $context->conversation->identity]));
+            $context->conversation->conversationId, $identity->provider, get_object_vars($identity->context), $identity->formatVersion,
+            $identity->scope->folderId, $identity->scope->importSince?->format('U.u')]));
     }
 
     private function payload(PreparedMessage $message, int $maxRequestBytes): string
