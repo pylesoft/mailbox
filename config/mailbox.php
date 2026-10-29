@@ -71,6 +71,7 @@ return [
                 'profile',
                 'email',
                 'offline_access',
+                'User.Read',
                 'Mail.ReadWrite',
             ],
         ],

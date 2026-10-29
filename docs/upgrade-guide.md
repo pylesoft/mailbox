@@ -4,6 +4,14 @@ Mailbox follows [semantic versioning](https://semver.org). Review the relevant u
 
 ## Unreleased Provider SDK
 
+### Host-Owned Microsoft Authorization
+
+Microsoft work/school and personal accounts may now use explicit host-owned enrollment and renewable grants. Existing configured application-permission access and legacy browser-service signatures remain available. New delegated reads use `Mailbox::forGrant()` with `RefreshingGrantTokenProvider` and `MsGraphGrantRefresher`; they do not discover or reassign legacy OAuth records or fall back to application authority. See [Microsoft enrollment and refresh](authentication/user-oauth.md#enrolling-and-refreshing-microsoft-with-host-owned-storage).
+
+Configure the app registration and an explicit tenant GUID, `common`, `organizations` or `consumers`. The new flow requires `openid`, `profile`, `offline_access` and `User.Read` scopes plus the intended mail scopes; the default Microsoft OAuth scopes now include `User.Read`. Host state adapters must preserve the trailing optional `OAuthState::authority` field. Grant adapters must preserve the verified identity, `metadata['object_id']`, credential revision and private nonce fingerprint.
+
+Delegated shared access requires the signed-in user's mailbox permissions and a successful read of that target. It supports delta-only discovery; required shared live read/send/watch has a separate application-grant setup contract. Enrollment, scopes and `/me` success do not establish mailbox permission or live readiness. Live-provider and shared-lock deployment acceptance remain separate gates.
+
 ### Received Addresses and Headers
 
 Gmail message mapping now parses received addresses and decodes encoded names and subjects. For example, `"Doe, Jane" <jane@example.com>` produces one recipient named `Doe, Jane`, and `=?ISO-8859-1?Q?Andr=E9?=` becomes `André`. Quoted local parts, comments, groups, repeated recipient headers and Unicode addresses retain their mailbox values. Empty groups add no recipients. Graph's structured names and addresses remain separate, and its already decoded text is preserved.
