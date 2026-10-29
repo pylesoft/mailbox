@@ -285,21 +285,33 @@ trait PerformsApiRequests
     }
 
     /** @param array<string, mixed> $options */
-    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes): ProviderWriteResponse
+    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null): ProviderWriteResponse
     {
         $attempted = false;
         try {
-            $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, &$attempted): ResponseInterface {
-                $requestOptions = $this->buildRequestOptions($options, $mailboxKey);
+            $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, $authenticated, $beforeRequest, &$attempted): ResponseInterface {
+                $client = $this->client;
+                $requestOptions = $options;
+                if ($authenticated) {
+                    $requestOptions = $this->buildRequestOptions($options, $mailboxKey);
+                } else {
+                    $configuration = $client->getConfig();
+                    foreach (['headers', 'auth', 'cookies', 'query', 'body', 'json', 'multipart', 'form_params'] as $name) {
+                        unset($configuration[$name]);
+                    }
+                    $configuration['headers'] = [];
+                    $client = new Client($configuration);
+                }
                 foreach (array_keys($requestOptions['headers']) as $name) {
                     if (is_string($name) && strcasecmp($name, 'Accept-Encoding') === 0) {
                         unset($requestOptions['headers'][$name]);
                     }
                 }
                 $requestOptions['headers']['Accept-Encoding'] = 'identity';
+                $beforeRequest?->__invoke();
                 $attempted = true;
 
-                return $this->client->request($method, $target, array_merge($requestOptions, [
+                return $client->request($method, $target, array_merge($requestOptions, [
                     'allow_redirects' => false, 'debug' => false, 'http_errors' => false, 'stream' => true, 'decode_content' => false,
                 ]));
             });
@@ -359,7 +371,10 @@ trait PerformsApiRequests
             return new ProviderWriteResponse($response->getStatusCode(), $headers);
         }
 
-        return new ProviderWriteResponse($response->getStatusCode(), $headers, $body);
+        $locations = $response->getHeader('Location');
+
+        return new ProviderWriteResponse($response->getStatusCode(), $headers, $body,
+            count($locations) === 1 && strlen($locations[0]) <= 16_384 ? $locations[0] : null);
     }
 
     /** @param array<string, mixed> $payload

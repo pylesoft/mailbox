@@ -16,5 +16,19 @@ final readonly class AttachmentPreparation
         public ?string $attachmentId,
         public ?int $status,
         public array $headers = [],
+        #[\SensitiveParameter] private ?GraphUploadSession $session = null,
     ) {}
+
+    public function session(): ?GraphUploadSession
+    {
+        return $this->session;
+    }
+
+    /** @return array<string, mixed> */
+    public function __debugInfo(): array
+    {
+        return ['fileIdentity' => $this->fileIdentity, 'outcome' => $this->outcome,
+            'acknowledgedBytes' => $this->acknowledgedBytes, 'attachmentId' => $this->attachmentId,
+            'status' => $this->status, 'headers' => $this->headers, 'expiresAt' => $this->session?->expiresAt];
+    }
 }

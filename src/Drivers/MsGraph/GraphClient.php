@@ -12,6 +12,8 @@ use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
+use Pyle\Mailbox\DTOs\GraphUploadSession;
+use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
@@ -55,6 +57,25 @@ class GraphClient
     protected function providerLabel(): string
     {
         return 'Graph';
+    }
+
+    public function uploadFileRange(GraphUploadSession $session, int $start, StreamInterface $range, int $length): ProviderWriteResponse
+    {
+        if ($this->grantAuthorization === null || $session->context->driver !== 'ms-graph') {
+            throw new UnsupportedCapabilityException('Outlook uploads require an explicit captured Graph authorization.');
+        }
+        $this->grantAuthorization->assertActive($session->context);
+        $target = $session->uploadUrl();
+        if ($session->expiresAt <= new DateTimeImmutable || $start < 0 || $length < 1 || $length >= 4_000_000
+            || $length > $session->byteLength - $start || ! $range->isReadable() || $range->getSize() !== $length) {
+            throw new \InvalidArgumentException('The Outlook upload range or session is unusable.');
+        }
+
+        return $this->exchangeOnce('PUT', $target, [
+            'body' => $range, 'headers' => ['Content-Type' => 'application/octet-stream', 'Content-Length' => (string) $length,
+                'Content-Range' => 'bytes '.$start.'-'.($start + $length - 1).'/'.$session->byteLength],
+        ], $this->mailboxKey($session->context->mailbox), 65_536, authenticated: false,
+            beforeRequest: fn () => $this->grantAuthorization->assertActive($session->context));
     }
 
     public function createBasicSubscription(GrantContext $context, GraphSubscriptionConfiguration $configuration, DateTimeImmutable $expiresAt): ProviderWriteResponse

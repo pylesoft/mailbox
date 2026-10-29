@@ -11,6 +11,7 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
+use Pyle\Mailbox\DTOs\GraphUploadSession;
 use Pyle\Mailbox\DTOs\SubmissionEvidence;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
@@ -25,6 +26,7 @@ use Pyle\Mailbox\Support\ProviderWriteResponse;
 use Pyle\Mailbox\Support\ResponseBudget;
 use Pyle\Mailbox\Support\SubmissionBody;
 use GuzzleHttp\Psr7\Utils;
+use GuzzleHttp\Psr7\LimitStream;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\MailboxException;
 
@@ -64,14 +66,30 @@ final readonly class MsGraphDraftSubmission
         }
         $remaining = $limits->maxTotalFileBytes;
         foreach ($message->files as $file) {
-            if ($file->byteLength > min($limits->maxFileBytes, $remaining)) {
+            if ($file->byteLength > min(150_000_000, $limits->maxFileBytes, $remaining)) {
                 throw new UnsupportedCapabilityException('The prepared files exceed the caller file byte limits.');
             }
             $remaining -= $file->byteLength;
         }
-        $file = $message->files[count($preparation->attachments)] ?? null;
-        if ($file === null || $file->byteLength >= 3_000_000) {
-            throw new UnsupportedCapabilityException('This preparation step requires a selected small file.');
+        $index = 0;
+        foreach ($preparation->attachments as $progress) {
+            if ($progress->fileIdentity !== ($message->files[$index]->identity ?? null)) {
+                throw new InvalidArgumentException('The attachment progress does not match the selected file manifest.');
+            }
+            if ($progress->outcome !== PreparationOutcome::Prepared) {
+                break;
+            }
+            $index++;
+        }
+        $file = $message->files[$index] ?? null;
+        if ($file === null) {
+            throw new InvalidArgumentException('Attachment preparation requires an unfinished selected file.');
+        }
+        $progress = $preparation->attachments[$index] ?? null;
+        if ($file->byteLength >= 3_000_000) {
+            $next = $this->largeFileStep($draftId, $file, $progress, $limits, $maxRequestBytes);
+
+            return $this->withAttachment($preparation, $message, $index, $next);
         }
         $body = $this->smallFilePayload($file, $limits, $maxRequestBytes);
         try {
@@ -85,13 +103,100 @@ final readonly class MsGraphDraftSubmission
         $attachmentId = $response->status === 201 && $data instanceof \stdClass && self::validId($data->id ?? null) ? $data->id : null;
         $outcome = $attachmentId !== null ? PreparationOutcome::Prepared
             : (self::rejected($response->status) ? PreparationOutcome::Rejected : PreparationOutcome::Uncertain);
-        $attachments = [...$preparation->attachments, new AttachmentPreparation($file->identity, $outcome,
-            $attachmentId === null ? 0 : $file->byteLength, $attachmentId, $response->status, $response->headers)];
+        return $this->withAttachment($preparation, $message, $index, new AttachmentPreparation($file->identity, $outcome,
+            $attachmentId === null ? 0 : $file->byteLength, $attachmentId, $response->status, $response->headers));
+    }
+
+    private function withAttachment(SubmissionPreparation $preparation, PreparedMessage $message, int $index, AttachmentPreparation $next): SubmissionPreparation
+    {
+        $attachments = $preparation->attachments;
+        $attachments[$index] = $next;
 
         return new SubmissionPreparation($preparation->context,
-            $outcome === PreparationOutcome::Prepared && count($attachments) < count($message->files) ? PreparationOutcome::Preparing : $outcome,
-            $preparation->correlationId, $draftId, $response->status, $response->headers,
+            $next->outcome === PreparationOutcome::Prepared && count($attachments) < count($message->files) ? PreparationOutcome::Preparing : $next->outcome,
+            $preparation->correlationId, $preparation->draftId, $next->status, $next->headers,
             $preparation->intentFingerprint(), $preparation->conversationId, $attachments);
+    }
+
+    private function largeFileStep(string $draftId, PreparedFile $file, ?AttachmentPreparation $progress, SubmissionLimits $limits, int $maxRequestBytes): AttachmentPreparation
+    {
+        $source = $file->openVerified();
+        try {
+            $session = $progress?->session();
+            if ($progress === null) {
+                $payload = json_encode(['AttachmentItem' => ['attachmentType' => 'file', 'name' => $file->name,
+                    'size' => $file->byteLength, 'contentType' => $file->mediaType, 'isInline' => $file->inline,
+                    'contentId' => $file->contentId]], JSON_THROW_ON_ERROR);
+                if (strlen($payload) > $maxRequestBytes || strlen($payload) >= 4_000_000) {
+                    throw new UnsupportedCapabilityException('The upload session request exceeds its write byte limit.');
+                }
+                $response = $this->client->requestOnce('POST', $this->endpoint().'/'.rawurlencode($draftId).'/attachments/createUploadSession', [
+                    'body' => $payload, 'headers' => ['Content-Type' => 'application/json', 'Prefer' => 'IdType="ImmutableId"'],
+                ], $this->context->mailbox);
+                $data = json_decode($response->body() ?? '');
+                if ($response->status === 201 && $data instanceof \stdClass && is_string($data->uploadUrl ?? null)
+                    && is_string($data->expirationDateTime ?? null) && in_array($data->nextExpectedRanges ?? null, [['0'], ['0-']], true)) {
+                    try {
+                        $expiry = $this->sessionExpiry($data->expirationDateTime);
+                        if ($expiry !== null) {
+                            $session = new GraphUploadSession($this->context, $draftId, $file->identity,
+                                $file->byteLength, $file->fingerprint(), $data->uploadUrl, $expiry);
+                        }
+                    } catch (InvalidArgumentException) {
+                        $session = null;
+                    }
+                }
+
+                return new AttachmentPreparation($file->identity, $session === null
+                    ? (self::rejected($response->status) ? PreparationOutcome::Rejected : PreparationOutcome::Uncertain)
+                    : ($session->expiresAt <= new \DateTimeImmutable ? PreparationOutcome::Expired : PreparationOutcome::Preparing),
+                    0, null, $response->status, $response->headers, $session);
+            }
+            if ($session === null || ! $session->matches($this->context, $draftId, $file)
+                || $progress->acknowledgedBytes < 0 || $progress->acknowledgedBytes >= $file->byteLength) {
+                throw new InvalidArgumentException('The file upload progress is missing its original immutable binding.');
+            }
+            if ($session->expiresAt <= new \DateTimeImmutable) {
+                return new AttachmentPreparation($file->identity, PreparationOutcome::Expired,
+                    $progress->acknowledgedBytes, null, $progress->status, $progress->headers, $session);
+            }
+            $length = min(3_000_000, $file->byteLength - $progress->acknowledgedBytes, $maxRequestBytes);
+            $budget = new ResponseBudget($length, $limits->maxMemoryBytes);
+            $budget->assertMemoryAvailable(65_536);
+            $range = new SubmissionBody(new LimitStream($source, $length, $progress->acknowledgedBytes), $budget);
+            $response = $this->client->uploadFileRange($session, $progress->acknowledgedBytes, $range, $length);
+            $end = $progress->acknowledgedBytes + $length;
+            $data = json_decode($response->body() ?? '');
+            $attachmentId = $response->status === 201 && $response->body() === '' && $end === $file->byteLength
+                ? $session->attachmentId($response->location()) : null;
+            $acknowledged = $attachmentId !== null || ($end < $file->byteLength && $response->status === 200 && $data instanceof \stdClass
+                && ($data->nextExpectedRanges ?? null) === [(string) $end]
+                && $this->sameSessionExpiry($data, $session));
+            $outcome = $acknowledged ? ($attachmentId === null ? PreparationOutcome::Preparing : PreparationOutcome::Prepared)
+                : (in_array($response->status, [401, 403, 404, 410], true) ? PreparationOutcome::Expired : PreparationOutcome::Uncertain);
+
+            return new AttachmentPreparation($file->identity, $outcome, $acknowledged ? $end : $progress->acknowledgedBytes,
+                $attachmentId, $response->status, $response->headers, $session);
+        } finally {
+            $source->close();
+        }
+    }
+
+    private function sessionExpiry(string $value): ?\DateTimeImmutable
+    {
+        if (preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)\z/', $value) !== 1
+            || date_parse($value)['warning_count'] !== 0 || date_parse($value)['error_count'] !== 0) {
+            return null;
+        }
+
+        return new \DateTimeImmutable($value);
+    }
+
+    private function sameSessionExpiry(\stdClass $data, GraphUploadSession $session): bool
+    {
+        $value = $data->expirationDateTime ?? $data->ExpirationDateTime ?? null;
+
+        return is_string($value) && $this->sessionExpiry($value) == $session->expiresAt;
     }
 
     private function smallFilePayload(PreparedFile $file, SubmissionLimits $limits, int $maxRequestBytes): StreamInterface
