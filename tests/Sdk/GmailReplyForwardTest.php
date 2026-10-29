@@ -44,8 +44,8 @@ it('submits a Gmail reply in its complete selected thread with only caller chose
     $rawMime = base64_decode(strtr($payload['raw'], '-_', '+/'), true);
     $mime = (new MailMimeParser)->parse($rawMime, false);
     expect($mime->getHeaderValue('Subject'))->toBe('Réunion à Montréal')
-        ->and($mime->getHeaderValue('In-Reply-To'))->toBe('<source@example.com>')
-        ->and($mime->getHeaderValue('References'))->toBe('<ancestor@example.com> <source@example.com>')
+        ->and($mime->getHeader('In-Reply-To')?->getRawValue())->toBe('<source@example.com>')
+        ->and($mime->getHeader('References')?->getRawValue())->toBe('<ancestor@example.com> <source@example.com>')
         ->and($mime->getTextContent())->toBe('Only the chosen reply')
         ->and($mime->getHeader('To')->getAddresses()[0]->getEmail())->toBe('chosen@example.com')
         ->and($mime->getHeader('Bcc')->getAddresses()[0]->getEmail())->toBe('chosen-private@example.com')
