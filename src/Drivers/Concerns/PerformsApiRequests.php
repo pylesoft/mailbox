@@ -18,6 +18,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
 use Pyle\Mailbox\Support\ResponseBudget;
 
@@ -233,7 +234,7 @@ trait PerformsApiRequests
                     }
 
                     $this->throwMappedException($e, $mailbox, $mailboxKey, $endpoint, $attempt);
-                } catch (GrantAccessDeniedException $e) {
+                } catch (GrantAccessDeniedException|GrantRefreshException $e) {
                     throw $e;
                 } catch (\Throwable $e) {
                     throw $this->wrapUnexpectedThrowable(new \RuntimeException($this->providerLabel().' request failed ('.$e::class.').'), $method, $endpoint, $mailbox, $mailboxKey, $attempt);
