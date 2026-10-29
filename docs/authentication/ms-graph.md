@@ -321,7 +321,7 @@ $registration = $mailbox->createSubscription(
 );
 ```
 
-The request targets the mailbox in the selected grant context. The host establishes the canonical mailbox ID and tenant mapping from trusted provider or setup evidence. A callback's resource path cannot establish that mapping. Canonical mailbox IDs are opaque provider identities; the SDK does not require an organizational GUID shape. Omit `folderId` to subscribe to all messages in the selected mailbox.
+The request targets the mailbox in the selected grant context. The host establishes the canonical mailbox ID and tenant mapping from trusted provider or setup evidence. A callback's resource path cannot establish that mapping. Canonical mailbox IDs are opaque provider identities; the SDK does not require an organizational GUID shape. Omit `folderId` to subscribe to all messages in the selected mailbox. Only known folder aliases normalize case; opaque folder IDs remain exact. Retain `clientState` privately: JSON and debug output omit that secret.
 
 ### Permissions and Endpoint Setup
 
@@ -336,7 +336,7 @@ $renewed = $mailbox->renewSubscription($registration, new DateTimeImmutable('+1 
 $removed = $mailbox->removeSubscription($renewed);
 ```
 
-Creation and renewal request a future expiry within the basic Outlook limit of seven days. Microsoft may normalize short requests to its minimum lifetime, so retain the returned expiry. Removal sends an empty-body `DELETE` and returns a registration whose status is `removed` after a confirmed empty `204` response. Your host owns scheduling and durable registration updates. See the [subscription lifetime reference](https://learn.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-1.0#subscription-lifetime).
+Creation and renewal request a future expiry within the basic Outlook limit of seven days. Microsoft may normalize short requests to its minimum lifetime, so retain the returned expiry. Renewal rejects expired or removed registrations before HTTP; reconcile and create a new registration explicitly. Removal sends an empty-body `DELETE` and returns a registration whose status is `removed` after a confirmed empty `204` response. Your host owns scheduling and durable registration updates. See the [subscription lifetime reference](https://learn.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-1.0#subscription-lifetime).
 
 These operations make one provider attempt. An unconfirmed acknowledgement throws `ApiRequestException` with the available status and safe response headers. The SDK does not replay a possibly completed write or release the enclosing host job. Keep the original attempt and reconcile uncertain provider state before creating another subscription.
 
