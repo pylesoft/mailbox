@@ -5,25 +5,39 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\Gmail;
 
 use GuzzleHttp\Psr7\Utils;
-use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Facades\Storage;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Contracts\AttachmentResource;
+use Pyle\Mailbox\Contracts\SupportsAttachmentReadLimits;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
-use Pyle\Mailbox\Events\AttachmentDownloaded;
-use Pyle\Mailbox\Events\AttachmentSkipped;
+use Pyle\Mailbox\DTOs\AttachmentReadLimits;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\AttachmentStorage;
 use Pyle\Mailbox\Support\GmailMime;
+use Pyle\Mailbox\Support\ResponseBudget;
 
-class GmailAttachmentResource implements AttachmentResource
+class GmailAttachmentResource implements AttachmentResource, SupportsAttachmentReadLimits
 {
+    private AttachmentReadLimits $limits;
+
     public function __construct(
         private readonly GmailClient $client,
         private readonly string $mailbox,
         private readonly string $messageId,
         private readonly string $attachmentId,
-    ) {}
+    ) {
+        $this->limits = new AttachmentReadLimits;
+    }
+
+    public function withReadLimits(AttachmentReadLimits $limits): AttachmentResource
+    {
+        $resource = clone $this;
+        $resource->limits = $limits;
+
+        return $resource;
+    }
 
     public function metadata(): AttachmentDto
     {
@@ -34,80 +48,32 @@ class GmailAttachmentResource implements AttachmentResource
 
     public function download(): AttachmentFileDto
     {
-        $part = $this->resolveAttachmentPart();
-        $attachment = AttachmentDto::fromGmail($part);
-        $content = $this->resolveContent($part);
-        $contentHash = hash('sha256', $content);
+        $responses = new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes);
+        $part = $this->resolveAttachmentPart($responses);
 
-        $disk = (string) config('mailbox.attachment_disk', 'local');
-        $basePath = trim((string) config('mailbox.attachment_path', 'mailbox-attachments'), '/');
-        $safeMailbox = strtolower(str_replace(['@', '.'], ['_', '_'], $this->mailbox));
-        $fileName = $this->sanitizeFileName($attachment->name !== '' ? $attachment->name : $attachment->id);
-        $preferredPath = sprintf('%s/%s/%s/%s', $basePath, $safeMailbox, $this->messageId, $fileName);
-        $resolvedPath = $this->resolveDestinationPath($disk, $preferredPath, $contentHash);
-
-        if ($resolvedPath['alreadyExisted']) {
-            Event::dispatch(new AttachmentSkipped(
-                driver: 'gmail',
-                mailbox: $this->mailbox,
-                messageId: $this->messageId,
-                attachmentId: $this->attachmentId,
-                path: $resolvedPath['path'],
-            ));
-
-            return new AttachmentFileDto(
-                id: $attachment->id,
-                name: $attachment->name,
-                contentType: $attachment->contentType,
-                size: $attachment->size,
-                isInline: $attachment->isInline,
-                contentId: $attachment->contentId,
-                path: $resolvedPath['path'],
-                disk: $disk,
-                alreadyExisted: true,
-            );
-        }
-
-        Storage::disk($disk)->put($resolvedPath['path'], $content);
-
-        Event::dispatch(new AttachmentDownloaded(
-            driver: 'gmail',
-            mailbox: $this->mailbox,
-            messageId: $this->messageId,
-            attachmentId: $this->attachmentId,
-            path: $resolvedPath['path'],
-            disk: $disk,
-        ));
-
-        return new AttachmentFileDto(
-            id: $attachment->id,
-            name: $attachment->name,
-            contentType: $attachment->contentType,
-            size: $attachment->size,
-            isInline: $attachment->isInline,
-            contentId: $attachment->contentId,
-            path: $resolvedPath['path'],
-            disk: $disk,
-            alreadyExisted: false,
-        );
+        return AttachmentStorage::store($this->resolveContent($part, $responses), AttachmentDto::fromGmail($part), $responses, 'gmail', $this->mailbox, $this->messageId, $this->attachmentId);
     }
 
     public function stream(): StreamInterface
     {
-        return Utils::streamFor($this->resolveContent($this->resolveAttachmentPart()));
+        $responses = new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes);
+
+        return $this->resolveContent($this->resolveAttachmentPart($responses), $responses);
     }
 
     /** @return array<string, mixed> */
-    private function resolveAttachmentPart(): array
+    private function resolveAttachmentPart(?ResponseBudget $responses = null): array
     {
-        $message = $this->client->get(
+        $responses ??= new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes);
+        $message = $this->client->getBounded(
             sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($this->messageId)),
+            $responses,
             ['format' => 'full'],
             $this->mailbox,
         );
 
         $payload = is_array($message['payload'] ?? null) ? $message['payload'] : [];
-        $part = $this->findPart($payload);
+        $part = $this->findPart($payload, $responses);
 
         if (! is_array($part)) {
             throw new ResourceNotFoundException(
@@ -123,16 +89,17 @@ class GmailAttachmentResource implements AttachmentResource
     /** @param array<string, mixed> $payload
      * @return array<string, mixed>|null
      */
-    private function findPart(array $payload, bool $relatedRoot = false): ?array
+    private function findPart(#[\SensitiveParameter] array $payload, ResponseBudget $responses, bool $relatedRoot = false): ?array
     {
+        $this->reserveMetadataMemory($payload, $responses);
         $body = is_array($payload['body'] ?? null) ? $payload['body'] : [];
 
-        if (GmailMime::isFile($payload, $relatedRoot) && ((string) ($body['attachmentId'] ?? '') === $this->attachmentId || (string) ($payload['partId'] ?? '') === $this->attachmentId)) {
+        if (GmailMime::isFile($payload, $relatedRoot) && (($body['attachmentId'] ?? null) === $this->attachmentId || ($payload['partId'] ?? null) === $this->attachmentId)) {
             return $payload;
         }
 
         foreach (GmailMime::children($payload) as $index => $part) {
-            $found = $this->findPart($part, GmailMime::isRelatedRoot($payload, $part, $index));
+            $found = $this->findPart($part, $responses, GmailMime::isRelatedRoot($payload, $part, $index));
 
             if ($found !== null) {
                 return $found;
@@ -143,102 +110,146 @@ class GmailAttachmentResource implements AttachmentResource
     }
 
     /** @param array<string, mixed> $part */
-    private function resolveContent(array $part): string
+    private function reserveMetadataMemory(#[\SensitiveParameter] array $part, ResponseBudget $responses): void
+    {
+        $reservation = 65536;
+        foreach (['filename', 'name', 'mimeType'] as $field) {
+            if (array_key_exists($field, $part) && ! is_string($part[$field])) {
+                throw new MailboxException('Malformed Gmail attachment metadata.');
+            }
+            $bytes = strlen($part[$field] ?? '');
+            if ($bytes > intdiv(PHP_INT_MAX - $reservation, 16)) {
+                throw new ResponseLimitExceededException('The attachment metadata allocation estimate exceeded its limit.');
+            }
+            $reservation += $bytes * 16;
+        }
+        foreach (GmailMime::headers($part) as $header) {
+            $factor = strcasecmp($header['name'], 'Content-Type') === 0 || strcasecmp($header['name'], 'Content-Disposition') === 0 ? 2048 : 16;
+            foreach ([$header['name'], $header['value']] as $value) {
+                $bytes = strlen($value);
+                if ($bytes > intdiv(PHP_INT_MAX - $reservation, $factor)) {
+                    throw new ResponseLimitExceededException('The attachment metadata allocation estimate exceeded its limit.');
+                }
+                $reservation += $bytes * $factor;
+            }
+        }
+        $responses->assertMemoryAvailable($reservation);
+    }
+
+    /** @param array<string, mixed> $part */
+    private function resolveContent(#[\SensitiveParameter] array $part, ResponseBudget $responses): StreamInterface
     {
         $body = is_array($part['body'] ?? null) ? $part['body'] : [];
-        $inlineData = (string) ($body['data'] ?? '');
+        $this->declaredSize($body);
+        if ((array_key_exists('data', $body) && ! is_string($body['data']))
+            || (array_key_exists('attachmentId', $body) && ! is_string($body['attachmentId']))) {
+            throw new MailboxException('Malformed Gmail attachment content.');
+        }
+        $inlineData = $body['data'] ?? '';
+        $attachmentId = $body['attachmentId'] ?? '';
+        if ($inlineData !== '' && $attachmentId !== '') {
+            throw new MailboxException('Gmail attachment content is ambiguous.');
+        }
 
         if ($inlineData !== '') {
-            return $this->decodeBase64Url($inlineData);
+            return $this->decodeBase64Url($inlineData, $responses, $body);
         }
-
-        $attachmentId = (string) ($body['attachmentId'] ?? '');
 
         if ($attachmentId === '') {
-            return '';
+            if (! array_key_exists('data', $body) && ($body['size'] ?? null) !== 0) {
+                throw new MailboxException('Gmail attachment content is missing.');
+            }
+
+            return $this->decodeBase64Url('', $responses, $body);
         }
 
-        $payload = $this->client->get(
+        $payload = $this->client->getBounded(
             sprintf(
                 'users/%s/messages/%s/attachments/%s',
                 rawurlencode($this->mailbox),
                 rawurlencode($this->messageId),
                 rawurlencode($attachmentId),
             ),
+            $responses,
             mailbox: $this->mailbox,
         );
 
-        return $this->decodeBase64Url((string) ($payload['data'] ?? ''));
+        if ((! array_key_exists('data', $payload) && ($payload['size'] ?? null) !== 0)
+            || (array_key_exists('data', $payload) && ! is_string($payload['data']))
+            || (array_key_exists('attachmentId', $payload) && $payload['attachmentId'] !== $attachmentId)) {
+            throw new MailboxException('Gmail attachment content is missing or malformed.');
+        }
+
+        return $this->decodeBase64Url((string) ($payload['data'] ?? ''), $responses, $body, $payload);
     }
 
-    private function decodeBase64Url(string $encoded): string
+    /** @param array<string, mixed> $body */
+    private function validateSize(array $body, int $size): void
     {
-        if ($encoded === '') {
-            return '';
+        $declared = $this->declaredSize($body);
+        if ($declared !== null && $declared !== $size) {
+            throw new MailboxException('Gmail attachment size does not match its content.');
         }
-
-        $normalized = strtr($encoded, '-_', '+/');
-        $padding = strlen($normalized) % 4;
-
-        if ($padding > 0) {
-            $normalized .= str_repeat('=', 4 - $padding);
-        }
-
-        return base64_decode($normalized, true) ?: '';
     }
 
-    private function sanitizeFileName(string $name): string
+    /** @param array<string, mixed> $body */
+    private function declaredSize(array $body): ?int
     {
-        $sanitized = preg_replace('/[^A-Za-z0-9._-]/', '_', $name);
+        if (! array_key_exists('size', $body)) {
+            return null;
+        }
+        if (! is_int($body['size']) || $body['size'] < 0) {
+            throw new MailboxException('Malformed Gmail attachment size.');
+        }
+        if ($body['size'] > $this->limits->maxFileBytes) {
+            throw new ResponseLimitExceededException('The declared attachment exceeds its file byte limit.');
+        }
 
-        return $sanitized !== null && $sanitized !== '' ? $sanitized : 'attachment.bin';
+        return $body['size'];
     }
 
-    /**
-     * @return array{path:string,alreadyExisted:bool}
-     */
-    private function resolveDestinationPath(string $disk, string $preferredPath, string $contentHash): array
+    /** @param array<string, mixed> ...$declarations */
+    private function decodeBase64Url(#[\SensitiveParameter] string $encoded, ResponseBudget $responses, #[\SensitiveParameter] array ...$declarations): StreamInterface
     {
-        $storage = Storage::disk($disk);
-
-        if (! $storage->exists($preferredPath)) {
-            return ['path' => $preferredPath, 'alreadyExisted' => false];
+        foreach ($declarations as $declaration) {
+            $this->declaredSize($declaration);
         }
-
-        $existingHash = $this->hashForPath($disk, $preferredPath);
-        if ($existingHash !== null && hash_equals($existingHash, $contentHash)) {
-            return ['path' => $preferredPath, 'alreadyExisted' => true];
+        $responses->assertMemoryAvailable(65536);
+        $temporary = @tmpfile();
+        if ($temporary === false) {
+            throw new MailboxException('An owned temporary attachment stream could not be created.');
         }
-
-        $contentAddressedPath = $this->withHashSuffix($preferredPath, $contentHash);
-        if ($storage->exists($contentAddressedPath)) {
-            $addressedHash = $this->hashForPath($disk, $contentAddressedPath);
-            if ($addressedHash !== null && hash_equals($addressedHash, $contentHash)) {
-                return ['path' => $contentAddressedPath, 'alreadyExisted' => true];
+        $size = 0;
+        try {
+            $length = strlen($encoded);
+            for ($offset = 0; $offset < $length; $offset += 8192) {
+                $responses->assertMemoryAvailable(65536);
+                $chunk = substr($encoded, $offset, 8192);
+                if (preg_match('/^[A-Za-z0-9_-]*={0,2}$/D', $chunk) !== 1
+                    || (str_contains($chunk, '=') && (strlen($chunk) % 4 !== 0 || $length - $offset > 8192))) {
+                    throw new MailboxException('Malformed Gmail attachment base64url.');
+                }
+                $decoded = base64_decode(strtr($chunk, '-_', '+/'), true);
+                if ($decoded === false || rtrim(strtr(base64_encode($decoded), '+/', '-_'), '=') !== rtrim($chunk, '=')) {
+                    throw new MailboxException('Malformed or truncated Gmail attachment base64url.');
+                }
+                if (strlen($decoded) > $this->limits->maxFileBytes - $size) {
+                    throw new ResponseLimitExceededException('The decoded attachment exceeds its file byte limit.');
+                }
+                $size += strlen($decoded);
+                if (@fwrite($temporary, $decoded) !== strlen($decoded)) {
+                    throw new MailboxException('The owned temporary attachment stream could not be written completely.');
+                }
             }
+            foreach ($declarations as $declaration) {
+                $this->validateSize($declaration, $size);
+            }
+            rewind($temporary);
+
+            return Utils::streamFor($temporary);
+        } catch (\Throwable $exception) {
+            fclose($temporary);
+            throw $exception;
         }
-
-        return ['path' => $contentAddressedPath, 'alreadyExisted' => false];
-    }
-
-    private function hashForPath(string $disk, string $path): ?string
-    {
-        $contents = Storage::disk($disk)->get($path);
-
-        return is_string($contents) ? hash('sha256', $contents) : null;
-    }
-
-    private function withHashSuffix(string $path, string $hash): string
-    {
-        $suffix = substr($hash, 0, 12);
-        $extension = pathinfo($path, PATHINFO_EXTENSION);
-        $directory = pathinfo($path, PATHINFO_DIRNAME);
-        $filename = pathinfo($path, PATHINFO_FILENAME);
-
-        $nameWithHash = $extension !== ''
-            ? sprintf('%s-%s.%s', $filename, $suffix, $extension)
-            : sprintf('%s-%s', $filename, $suffix);
-
-        return trim($directory, '/').'/'.$nameWithHash;
     }
 }
