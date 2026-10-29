@@ -22,6 +22,7 @@ use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
 
@@ -75,6 +76,9 @@ class GraphClient
     public function renewBasicSubscription(GraphSubscriptionRegistration $registration, DateTimeImmutable $expiresAt): ProviderWriteResponse
     {
         $this->assertSubscriptionContext($registration->context);
+        if ($registration->lifecycle() !== 'active') {
+            throw new InvalidSyncStateException('An expired or removed Graph subscription cannot be renewed; reconcile and register again explicitly.');
+        }
         $this->assertSubscriptionExpiry($expiresAt);
 
         return $this->exchangeOnce('PATCH', $this->resolveApiTarget('subscriptions/'.rawurlencode($registration->subscriptionId)), [

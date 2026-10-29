@@ -15,6 +15,7 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
 use Pyle\Mailbox\DTOs\GraphChangeHint;
+use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\InvalidChangeNotificationException;
@@ -187,19 +188,31 @@ final readonly class MsGraphSubscriptions
 
     private function notificationMessageId(#[\SensitiveParameter] mixed $resource, GraphSubscriptionConfiguration $configuration): ?string
     {
-        if (! is_string($resource) || preg_match('~\A/?users/([^/]+)/(?:mailFolders/([^/]+)/)?messages/([^/]+)\z~i', $resource, $parts, PREG_UNMATCHED_AS_NULL) !== 1) {
+        return $this->resourceParts($resource, $configuration)['message'] ?? null;
+    }
+
+    /** @return array{folder: ?string, message: ?string}|null */
+    private function resourceParts(#[\SensitiveParameter] mixed $resource, GraphSubscriptionConfiguration $configuration): ?array
+    {
+        if (! is_string($resource)
+            || (preg_match('~\A/?users/([^/]+)/(?:mailFolders/([^/]+)/)?messages(?:/([^/]+))?\z~i', $resource, $parts, PREG_UNMATCHED_AS_NULL) !== 1
+                && preg_match("~\\A/?users\\('([^']+)'\\)/(?:mailFolders\\('([^']+)'\\)/)?messages(?:\\('([^']+)'\\))?\\z~i", $resource, $parts, PREG_UNMATCHED_AS_NULL) !== 1)) {
             return null;
         }
         $mailbox = rawurldecode($parts[1]);
         $folder = $parts[2] === null ? null : rawurldecode($parts[2]);
-        $message = rawurldecode($parts[3]);
+        $message = $parts[3] === null ? null : rawurldecode($parts[3]);
+        $knownFolders = array_map(static fn (WellKnownFolder $value): string => strtolower($value->forDriver('ms-graph')), WellKnownFolder::cases());
+        $expectedFolder = $configuration->folderId;
         if (($mailbox !== $configuration->providerMailboxId && $mailbox !== $configuration->providerMailboxId.'@'.$configuration->tenantId && strcasecmp($mailbox, $this->context->mailbox) !== 0)
-            || ($folder !== null && $configuration->folderId !== null && $folder !== $configuration->folderId)
-            || $message === '' || preg_match('/[\x00-\x20\x7f?#\\\\]/', $message)) {
+            || ($folder !== null && $expectedFolder !== null && $folder !== $expectedFolder
+                && (! in_array(strtolower($expectedFolder), $knownFolders, true) || strcasecmp($folder, $expectedFolder) !== 0))
+            || ($folder !== null && preg_match('/[\x00-\x1f\x7f?#\\\\]/', $folder))
+            || ($message !== null && ($message === '' || preg_match('/[\x00-\x20\x7f?#\\\\]/', $message)))) {
             return null;
         }
 
-        return $message;
+        return ['folder' => $folder, 'message' => $message];
     }
 
     private function confirmedRegistration(ProviderWriteResponse $response, GraphSubscriptionConfiguration $configuration, int $status, ?string $subscriptionId = null): GraphSubscriptionRegistration
@@ -207,11 +220,19 @@ final readonly class MsGraphSubscriptions
         $this->guard->assertActive($this->context);
         $data = json_decode($response->body() ?? '');
         $expiresAt = $data instanceof \stdClass ? self::parseExpiry($data->expirationDateTime ?? null) : null;
+        $resource = $data instanceof \stdClass ? $this->resourceParts($data->resource ?? null, $configuration) : null;
+        $changes = $data instanceof \stdClass && is_string($data->changeType ?? null) ? explode(',', $data->changeType) : [];
+        sort($changes);
         if ($response->status !== $status || ! $data instanceof \stdClass
-            || ! is_string($data->id ?? null) || ($subscriptionId !== null && $data->id !== $subscriptionId)
-            || ($data->resource ?? null) !== $configuration->resource($this->context)
+            || ! is_string($data->id ?? null) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._=-]{0,1023}\z/', $data->id) !== 1
+            || ($subscriptionId !== null && $data->id !== $subscriptionId)
+            || $resource === null || $resource['message'] !== null || (($resource['folder'] === null) !== ($configuration->folderId === null))
             || ($data->clientState ?? null) !== $configuration->clientState()
-            || $expiresAt === null) {
+            || ($data->notificationUrl ?? null) !== $configuration->notificationUrl || ($data->lifecycleNotificationUrl ?? null) !== $configuration->lifecycleNotificationUrl
+            || $changes !== ['created', 'deleted', 'updated']
+            || (property_exists($data, 'includeResourceData') && $data->includeResourceData !== false)
+            || ! in_array($data->encryptionCertificate ?? null, [null, ''], true) || ! in_array($data->encryptionCertificateId ?? null, [null, ''], true)
+            || $expiresAt === null || $expiresAt <= new DateTimeImmutable || $expiresAt > new DateTimeImmutable('+10080 minutes')) {
             throw new ApiRequestException('The Graph subscription acknowledgement could not be verified; retain the original attempt before retrying.', status: $response->status, headers: $response->headers);
         }
 
