@@ -17,6 +17,7 @@ use JsonException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
 
 trait PerformsApiRequests
@@ -180,6 +181,8 @@ trait PerformsApiRequests
                     }
 
                     $this->throwMappedException($e, $mailbox, $mailboxKey, $endpoint, $attempt);
+                } catch (GrantAccessDeniedException $e) {
+                    throw $e;
                 } catch (\Throwable $e) {
                     throw $this->wrapUnexpectedThrowable(new \RuntimeException($this->providerLabel().' request failed ('.$e::class.').'), $method, $endpoint, $mailbox, $mailboxKey, $attempt);
                 }

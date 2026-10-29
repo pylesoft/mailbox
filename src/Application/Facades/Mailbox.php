@@ -19,6 +19,7 @@ use Pyle\Mailbox\Models\MailboxMessage;
 /**
  * @method static MailboxDriver driver(string $name = null)
  * @method static MailboxResource mailbox(string $emailAddress)
+ * @method static MailboxResource forGrant(\Pyle\Mailbox\DTOs\GrantContext $context, \Pyle\Mailbox\Contracts\GrantTokenProvider $tokens, ?\GuzzleHttp\Client $httpClient = null)
  * @method static MailboxResource forMailbox(MailboxModel $mailbox)
  * @method static \Pyle\Mailbox\Contracts\FolderResource forFolder(Folder $folder)
  * @method static ConnectionTestResult testConnection(?string $emailAddress = null)

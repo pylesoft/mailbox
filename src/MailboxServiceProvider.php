@@ -35,7 +35,9 @@ class MailboxServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        if ((bool) config('mailbox.persistence.enabled', true)) {
+            $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        }
 
         if (config('logging.channels.mailbox') === null) {
             config()->set('logging.channels.mailbox', [
