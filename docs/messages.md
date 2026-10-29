@@ -803,11 +803,91 @@ The SDK retains safe request identity, Date and Retry-After response headers. Au
 
 Your application owns durable operation state and recovery. Persist the chosen message and correlation before sending, then retain the returned evidence. The SDK does not maintain an outbox, deduplicate separate explicit calls, mirror private editor drafts, inspect sent copies automatically or claim recipient delivery. Injected HTTP clients must not add their own retry middleware for submission.
 
+### Prepared Files
+
+Pass selected files in `PreparedMessage::files`. Each `PreparedFile` carries your stable file identity, name, media type, decoded byte length, optional inline disposition/Content-ID, and the original expected SHA-256. The source returns a fresh readable PSR stream; opening it transfers ownership of that stream to the SDK. Your application retains the original storage.
+
+```php
+use GuzzleHttp\Psr7\Utils;
+use Psr\Http\Message\StreamInterface;
+use Pyle\Mailbox\DTOs\PreparedFile;
+
+$path = storage_path('app/private/report.pdf');
+
+// Capture and persist this original metadata when your host prepares the file.
+$file = new PreparedFile(
+    identity: 'report-version-123',
+    name: 'État annuel.pdf',
+    mediaType: 'application/pdf',
+    byteLength: filesize($path),
+    source: static fn (): StreamInterface => Utils::streamFor(fopen($path, 'rb')),
+    sha256: hash_file('sha256', $path),
+);
+
+// Supply files: [$file] when constructing your PreparedMessage.
+```
+
+Keep the original fingerprint and length when restoring a manifest. Do not recompute them from a mutable source on resume. Every `openVerified()` reopens, rewinds a seekable source, copies it into a private owned snapshot, and verifies all bytes against that original binding before returning any content. Close the returned snapshot after use. A changed same-length source, incorrect length, interrupted read or mismatched fingerprint fails before further serialization/upload/send. Matching identity, path, name and length alone does not establish immutable content.
+
+Submission closes its own source streams and temporary snapshots on success and failure. It never removes or overwrites the host's original files. Your application owns file authorization, private storage, allowed media types, checksum persistence and durable operation state. Source callbacks and injected middleware must honor their own resource limits.
+
+Names support safe UTF-8. The SDK preserves the selected files, explicit inline disposition, supplied Content-IDs and original text/HTML; it does not infer IDs from filenames, deduplicate filenames, add files, or replace them with links. Inline disposition may omit Content-ID. Supplied IDs must be safe unique tokens, and file identities must be unique within the message. Gmail's MIME encoder additionally requires supplied IDs in `name@domain` form; an unsupported ID fails explicitly before opening files.
+
 ### Limits and Unsupported Input
 
-`maxRequestBytes` is a positive caller budget for the actual Gmail JSON request, including MIME/base64url expansion. Its default is 1 MiB; it is not a universal Gmail message or file limit. Oversized input, encoded MIME or JSON is rejected with `UnsupportedCapabilityException` before provider I/O. This text/HTML path buffers bounded content; it does not promise constant memory.
+`maxRequestBytes` is a positive caller budget for the actual Gmail JSON request, including MIME/base64url expansion. Its default remains 1 MiB; it is not a universal Gmail message or file limit. File-bearing messages often need a larger explicit wire budget.
 
-Nonempty `files` are explicitly unsupported by this submission path. Raw MIME input and signed/encrypted MIME reconstruction are also unsupported. File sources, large-file limits and reply/forward preparation are separate capabilities; the SDK does not infer them from a body or silently transform arbitrary MIME.
+Gmail resources also expose the optional `SupportsSubmissionLimits` capability:
+
+```php
+use Pyle\Mailbox\Contracts\SupportsSubmissionLimits;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
+
+if (! $mailbox instanceof SupportsSubmissionLimits) {
+    throw new UnsupportedCapabilityException('This mailbox cannot configure submission limits.');
+}
+
+$bounded = $mailbox->withSubmissionLimits(new SubmissionLimits(
+    maxFileBytes: 10_485_760,
+    maxTotalFileBytes: 20_971_520,
+    maxMemoryBytes: 8_388_608,
+));
+
+$result = $bounded->submit($message, maxRequestBytes: 50_331_648);
+```
+
+These per-file and aggregate values are the existing consumer's 10 MiB/20 MiB parity targets, not universal defaults. The default file limits impose no additional host policy (`PHP_INT_MAX`); the request and MIME caps still apply. Lengths are checked against actual source bytes and fingerprints. All configured limits must be positive.
+
+The SDK caps serialized MIME at **36,700,160 bytes (35 MiB)**, matching the send method's `mediaUpload.maxSize` in Google's [Gmail discovery document](https://gmail.googleapis.com/$discovery/rest?version=v1). This is a MIME/media cap, separately enforced from the JSON wire budget. Google's [upload guide](https://developers.google.com/workspace/gmail/api/guides/uploads) distinguishes media uploads from the standard metadata endpoint; the SDK does not invent an equivalent JSON-body ceiling. Twenty MiB of decoded files expands through MIME attachment base64 and outer base64url, so its JSON body can exceed 35 MiB while its MIME remains below that cap. Provider/account acceptance remains a separate live-validation gate.
+
+The submit path streams MIME chunks through base64url into a private temporary JSON spool; it does not build whole MIME, base64url and JSON strings. Actual MIME and JSON bytes are counted before send. `maxMemoryBytes` defaults to 8 MiB, with conservative reservations before SDK-controlled header and buffer allocations and checks against retained operation growth. It is not a total process/RSS ceiling: first-use PHP class loading, framework cache/Carbon/logging and HTTP initialization can create additional transient peaks. Source callbacks, arbitrary HTTP middleware, native libraries and other work in the process also remain outside that guarantee. Temporary disk capacity must accommodate the verified file snapshots, body spools and expanded JSON request.
+
+Use a streaming HTTP transport for large requests. The installed Guzzle cURL handler streams large bodies; its PHP stream handler materializes an outgoing body. The SDK's request stream checks the allocation before `getContents()` or string conversion, and bounded reads remain available. A buffering transport that cannot fit the chosen budget fails conservatively after the request boundary, returning uncertainty without replay. Oversized preparation, MIME or JSON fails with `UnsupportedCapabilityException` before provider I/O. Preserve the original operation whenever the send outcome is uncertain.
+
+The `submission-wire` tests are an explicit serial verification group. Ordinary runs skip them unless `MAILBOX_SUBMISSION_CONTROL_PATH` names a fresh owned measurement receipt. Run the tiny cold control and each large case in separate fresh PHP invocations, without parallel workers:
+
+```powershell
+$mailboxControlPath = Join-Path $env:TEMP ('mailbox-control-' + [guid]::NewGuid() + '.json')
+$env:MAILBOX_SUBMISSION_CONTROL_PATH = $mailboxControlPath
+php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='small file' --compact
+php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='cold 10 MiB' --compact
+php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='cold 20 MiB' --compact
+Remove-Item Env:\MAILBOX_SUBMISSION_CONTROL_PATH
+```
+
+Each invocation starts one owned local TLS server with a client-local CA and routes the original trusted Gmail HTTPS destination to it through cURL. No provider account, global DNS or trust store is changed. The server independently inspects received JSON/MIME and exact file hashes. The tests report absolute PHP heap growth, bind the cold receipt to the same PHP/runtime and package source, and require each large case's excess above that cold control to remain within the unchanged 8 MiB allocation budget. This separates demonstrated first-use framework/transport costs from payload-size growth; it does not claim an 8 MiB total cold heap. The receipt contains fixture measurements only and may be removed after verification.
+
+Verified on 64-bit PHP 8.4.25 with Guzzle 7.16.1 and Symfony Mime 8.1.10, in fresh serial processes:
+
+| Decoded files | Actual MIME bytes | Actual JSON bytes | Absolute cold heap growth | Growth above cold control |
+| --- | ---: | ---: | ---: | ---: |
+| 8 KiB control | 11,813 | 15,761 | 9,261,504 | — |
+| 10 MiB | 14,349,539 | 19,132,729 | 9,259,056 | 0 |
+| 20 MiB aggregate | 28,698,660 | 38,264,890 | 9,259,024 | 0 |
+
+These are local protocol and PHP-buffer measurements. They do not establish live Gmail acceptance, delivery, total native/RSS memory, other PHP/runtime behavior or the host's storage capacity. The [ticket 18 receipt](plans/mailbox-provider-sdk/tickets/18-freeze-file-streams-for-gmail-submission.md) retains the original cold-heap failure, measured source fingerprint and separate verification gates.
+
+Arbitrary raw MIME input and signed/encrypted MIME reconstruction remain unsupported. Reply/forward preparation is a separate capability; the SDK does not infer it from a body or silently transform arbitrary MIME.
 
 ## Preparing and Sending a Graph Draft
 

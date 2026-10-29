@@ -241,7 +241,7 @@ it('enforces the caller request budget before submitting encoded Gmail content',
     'header exceeds budget' => [['headers' => ['X-Project' => str_repeat('a', 1100)]], 1024],
 ]);
 
-it('reports file-bearing Gmail submission as unsupported before provider IO', function (): void {
+it('rejects unstructured prepared file inputs before provider IO', function (): void {
     $history = [];
     $mailbox = submissionMailbox([], $history);
     $message = submissionMessage(['files' => [['id' => 'host-file']]]);
