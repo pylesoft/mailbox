@@ -4,20 +4,27 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use DateTimeImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
+use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
+use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\GrantAuthorization;
+use Pyle\Mailbox\Support\ProviderWriteResponse;
 
 class GraphClient
 {
@@ -48,6 +55,61 @@ class GraphClient
     protected function providerLabel(): string
     {
         return 'Graph';
+    }
+
+    public function createBasicSubscription(GrantContext $context, GraphSubscriptionConfiguration $configuration, DateTimeImmutable $expiresAt): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($context);
+        $this->assertSubscriptionExpiry($expiresAt);
+
+        return $this->exchangeOnce('POST', $this->resolveApiTarget('subscriptions'), ['json' => [
+            'resource' => $configuration->resource($context),
+            'notificationUrl' => $configuration->notificationUrl,
+            'lifecycleNotificationUrl' => $configuration->lifecycleNotificationUrl,
+            'changeType' => 'created,updated,deleted',
+            'clientState' => $configuration->clientState(),
+            'includeResourceData' => false,
+            'expirationDateTime' => $expiresAt->format(DATE_ATOM),
+        ]], $this->mailboxKey($context->mailbox), 65_536);
+    }
+
+    public function renewBasicSubscription(GraphSubscriptionRegistration $registration, DateTimeImmutable $expiresAt): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($registration->context);
+        if ($registration->lifecycle() !== 'active') {
+            throw new InvalidSyncStateException('An expired or removed Graph subscription cannot be renewed; reconcile and register again explicitly.');
+        }
+        $this->assertSubscriptionExpiry($expiresAt);
+
+        return $this->exchangeOnce('PATCH', $this->resolveApiTarget('subscriptions/'.rawurlencode($registration->subscriptionId)), [
+            'json' => ['expirationDateTime' => $expiresAt->format(DATE_ATOM)],
+        ], $this->mailboxKey($registration->context->mailbox), 65_536);
+    }
+
+    public function removeBasicSubscription(GraphSubscriptionRegistration $registration): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($registration->context);
+
+        return $this->exchangeOnce('DELETE', $this->resolveApiTarget('subscriptions/'.rawurlencode($registration->subscriptionId)), [], $this->mailboxKey($registration->context->mailbox), 65_536);
+    }
+
+    private function assertSubscriptionContext(GrantContext $context): void
+    {
+        if ($this->grantAuthorization === null) {
+            throw new UnsupportedCapabilityException('Graph subscriptions require an explicit captured grant authorization.');
+        }
+        $this->grantAuthorization->assertActive($context);
+        if ($context->driver !== 'ms-graph') {
+            throw new UnsupportedCapabilityException('Graph subscriptions require a captured Microsoft Graph provider context.');
+        }
+    }
+
+    private function assertSubscriptionExpiry(DateTimeImmutable $expiresAt): void
+    {
+        $now = new DateTimeImmutable;
+        if ($expiresAt <= $now || $expiresAt > $now->modify('+10080 minutes')) {
+            throw new \InvalidArgumentException('A basic Outlook subscription expiry must be in the future and within seven days.');
+        }
     }
 
     private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
