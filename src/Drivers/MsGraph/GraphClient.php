@@ -4,25 +4,25 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use DateTimeImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
-use DateTimeImmutable;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
-use Pyle\Mailbox\Events\AccessDenied;
-use Pyle\Mailbox\Events\ApiError;
-use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
+use Pyle\Mailbox\Events\AccessDenied;
+use Pyle\Mailbox\Events\ApiError;
+use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
+use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
-use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
 
@@ -99,6 +99,9 @@ class GraphClient
             throw new UnsupportedCapabilityException('Graph subscriptions require an explicit captured grant authorization.');
         }
         $this->grantAuthorization->assertActive($context);
+        if ($context->driver !== 'ms-graph') {
+            throw new UnsupportedCapabilityException('Graph subscriptions require a captured Microsoft Graph provider context.');
+        }
     }
 
     private function assertSubscriptionExpiry(DateTimeImmutable $expiresAt): void

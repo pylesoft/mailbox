@@ -3,28 +3,31 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use GuzzleHttp\Psr7\Response;
-use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Contracts\Queue\Job;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\Drivers\MsGraph\TokenManager;
+use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
-use Pyle\Mailbox\DTOs\GrantContext;
-use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
-use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Exceptions\InvalidChangeNotificationException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
@@ -487,6 +490,89 @@ it('rejects malformed or unbound raw Graph handshakes', function (string $method
     'control character' => ['POST', 'https://host.example/graph/changes?validationToken=bad%0Avalue', 'text/plain'],
     'wrong content type' => ['POST', 'https://host.example/graph/changes?validationToken=token', 'application/json'],
 ]);
+
+it('never replays or releases a host job after an unconfirmed subscription operation', function (string $operation, string $failure): void {
+    $history = [];
+    $job = Mockery::mock(Job::class);
+    $job->shouldNotReceive('release');
+    app()->instance('queue.job', $job);
+    $response = $failure === 'transport'
+        ? new ConnectException('private-transport-secret', new Request('POST', 'https://private.invalid'))
+        : new Response(503, ['Retry-After' => '1', 'request-id' => 'attempt-1'], 'private-provider-body');
+    $mailbox = graphSubscriptionMailbox([$response, new Response(204)], $history);
+    $registration = graphSubscriptionRegistration();
+
+    try {
+        match ($operation) {
+            'create' => $mailbox->createSubscription(graphSubscriptionConfiguration(), new DateTimeImmutable('+1 day')),
+            'renew' => $mailbox->renewSubscription($registration, new DateTimeImmutable('+1 day')),
+            'remove' => $mailbox->removeSubscription($registration),
+        };
+        test()->fail('An unconfirmed provider operation must not look successful.');
+    } catch (ApiRequestException $exception) {
+        expect($exception->status)->toBe($failure === 'transport' ? null : 503);
+        $public = (string) $exception.print_r($exception->getTrace(), true);
+        expect($public)->not->toContain('private-transport-secret');
+        expect($public)->not->toContain('private-provider-body');
+        expect($public)->not->toContain('private-client-state');
+    }
+    expect($history)->toHaveCount(1);
+})->with(['create', 'renew', 'remove'])->with(['transport', 'server']);
+
+it('keeps opaque folder identifiers case-sensitive during subscription acknowledgement validation', function (): void {
+    $history = [];
+    $expiry = new DateTimeImmutable('+1 day');
+    $configuration = new GraphSubscriptionConfiguration('tenant-1', 'canonical-user-1', 'https://host.example/graph/changes', 'https://host.example/graph/lifecycle', 'private-client-state', 'OpaqueFolderAA');
+    $acknowledgement = graphSubscriptionAcknowledgement($expiry);
+    $acknowledgement['resource'] = 'users/canonical-user-1/mailFolders/opaquefolderaa/messages';
+    $mailbox = graphSubscriptionMailbox([new Response(201, [], json_encode($acknowledgement, JSON_THROW_ON_ERROR))], $history);
+
+    expect(fn () => $mailbox->createSubscription($configuration, $expiry))->toThrow(ApiRequestException::class)
+        ->and($history)->toHaveCount(1);
+});
+
+it('requires a Graph provider context even when another provider context matches captured authorization', function (): void {
+    $history = [];
+    $stack = HandlerStack::create(new MockHandler([]));
+    $stack->push(Middleware::history($history));
+    $context = new GrantContext('connection', 'grant', '1', 'gmail', 'shared@example.com');
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['shared@example.com'], 'token' => 'selected-token'],
+    ]);
+    $client = new GraphClient([], new TokenManager([]), new RateLimiter([]), new Client(['handler' => $stack]), new GrantAuthorization($context, $tokens));
+
+    expect(fn () => $client->createBasicSubscription($context, graphSubscriptionConfiguration(), new DateTimeImmutable('+1 day')))->toThrow(UnsupportedCapabilityException::class)
+        ->and($tokens->tokenReads)->toBe(0)
+        ->and($history)->toBe([]);
+});
+
+it('maps multiple known subscriptions to their retained scopes without using callback mailbox paths as folder authority', function (): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $inbox = graphSubscriptionRegistration();
+    $configuration = new GraphSubscriptionConfiguration('tenant-1', 'canonical-user-1', 'https://host.example/graph/changes', 'https://host.example/graph/lifecycle', 'private-second-state', 'drafts');
+    $drafts = new GraphSubscriptionRegistration($inbox->context, $configuration, 'subscription-2', $inbox->expiresAt);
+    $draftEvent = graphSubscriptionEvent($drafts);
+    $draftEvent['clientState'] = 'private-second-state';
+
+    $hints = $mailbox->subscriptionNotifications(graphSubscriptionRequest([graphSubscriptionEvent($inbox), $draftEvent]), [$inbox, $drafts]);
+
+    expect(array_column($hints, 'resource'))->toBe([
+        'users/shared%40example.com/mailFolders/inbox/messages',
+        'users/shared%40example.com/mailFolders/drafts/messages',
+    ])->and(array_column($hints, 'subscriptionId'))->toBe(['subscription-1', 'subscription-2'])
+        ->and($history)->toBe([]);
+});
+
+it('rejects a valid basic callback delivered to an unbound endpoint', function (string $url): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $registration = graphSubscriptionRegistration();
+    $request = graphSubscriptionRequest([graphSubscriptionEvent($registration)])->withUri(new Uri($url));
+
+    expect(fn () => $mailbox->subscriptionNotifications($request, [$registration]))->toThrow(InvalidChangeNotificationException::class)
+        ->and($history)->toBe([]);
+})->with(['https://other.example/graph/changes', 'https://host.example/graph/lifecycle', 'https://host.example/graph/changes?unexpected=true']);
 
 /** @param list<array<string, mixed>> $events */
 function graphSubscriptionRequest(array $events): Request

@@ -12,13 +12,13 @@ use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Contracts\GrantAccessGuard;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\GraphChangeHint;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
-use Pyle\Mailbox\DTOs\GraphChangeHint;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
-use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\InvalidChangeNotificationException;
+use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
 use Pyle\Mailbox\Support\ResponseBudget;
@@ -82,7 +82,7 @@ final readonly class MsGraphSubscriptions
     }
 
     /**
-     * @param list<GraphSubscriptionRegistration> $registrations
+     * @param  list<GraphSubscriptionRegistration>  $registrations
      * @return list<GraphChangeHint>
      */
     public function notifications(#[\SensitiveParameter] RequestInterface $request, array $registrations, int $maxRequestBytes): array

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\GrantAccessGuard;
@@ -14,13 +16,14 @@ use Pyle\Mailbox\Contracts\SupportsConversationRead;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\GraphChangeHint;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
-use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
@@ -30,8 +33,6 @@ use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
-use Psr\Http\Message\RequestInterface;
-use Psr\Http\Message\ResponseInterface;
 
 class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftSubmission, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
 {
@@ -65,8 +66,8 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
     }
 
     /**
-     * @param list<GraphSubscriptionRegistration> $registrations
-     * @return list<\Pyle\Mailbox\DTOs\GraphChangeHint>
+     * @param  list<GraphSubscriptionRegistration>  $registrations
+     * @return list<GraphChangeHint>
      */
     public function subscriptionNotifications(#[\SensitiveParameter] RequestInterface $request, array $registrations, int $maxRequestBytes = 65_536): array
     {
