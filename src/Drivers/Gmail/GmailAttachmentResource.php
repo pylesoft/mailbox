@@ -14,6 +14,7 @@ use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\Events\AttachmentDownloaded;
 use Pyle\Mailbox\Events\AttachmentSkipped;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Support\GmailMime;
 
 class GmailAttachmentResource implements AttachmentResource
 {
@@ -122,20 +123,16 @@ class GmailAttachmentResource implements AttachmentResource
     /** @param array<string, mixed> $payload
      * @return array<string, mixed>|null
      */
-    private function findPart(array $payload): ?array
+    private function findPart(array $payload, bool $relatedRoot = false): ?array
     {
         $body = is_array($payload['body'] ?? null) ? $payload['body'] : [];
 
-        if ((string) ($body['attachmentId'] ?? '') === $this->attachmentId || (string) ($payload['partId'] ?? '') === $this->attachmentId) {
+        if (GmailMime::isFile($payload, $relatedRoot) && ((string) ($body['attachmentId'] ?? '') === $this->attachmentId || (string) ($payload['partId'] ?? '') === $this->attachmentId)) {
             return $payload;
         }
 
-        foreach ((array) ($payload['parts'] ?? []) as $part) {
-            if (! is_array($part)) {
-                continue;
-            }
-
-            $found = $this->findPart($part);
+        foreach (GmailMime::children($payload) as $index => $part) {
+            $found = $this->findPart($part, GmailMime::isRelatedRoot($payload, $part, $index));
 
             if ($found !== null) {
                 return $found;

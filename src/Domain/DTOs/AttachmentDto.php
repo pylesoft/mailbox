@@ -7,6 +7,7 @@ namespace Pyle\Mailbox\DTOs;
 use Illuminate\Contracts\Support\Arrayable;
 use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
+use Pyle\Mailbox\Support\GmailMime;
 
 /** @implements Arrayable<string, mixed> */
 final readonly class AttachmentDto implements Arrayable, JsonSerializable
@@ -42,8 +43,8 @@ final readonly class AttachmentDto implements Arrayable, JsonSerializable
         $headers = is_array($data['headers'] ?? null) ? $data['headers'] : [];
 
         return new self(
-            id: (string) ($body['attachmentId'] ?? $data['attachmentId'] ?? $data['id'] ?? ''),
-            name: (string) ($data['filename'] ?? $data['name'] ?? ''),
+            id: (string) ($body['attachmentId'] ?? $data['attachmentId'] ?? $data['id'] ?? $data['partId'] ?? ''),
+            name: GmailMime::filename($data),
             contentType: (string) ($data['mimeType'] ?? $data['contentType'] ?? 'application/octet-stream'),
             size: (int) ($body['size'] ?? $data['size'] ?? 0),
             isInline: self::isInline($headers),
@@ -66,10 +67,10 @@ final readonly class AttachmentDto implements Arrayable, JsonSerializable
 
             $value = strtolower((string) ($header['value'] ?? ''));
 
-            return str_contains($value, 'inline');
+            return preg_match('/^inline(?:\s*;|\s*$)/', trim($value)) === 1;
         }
 
-        return false;
+        return self::contentId($headers) !== null;
     }
 
     /** @param array<int, mixed> $headers */

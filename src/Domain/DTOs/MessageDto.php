@@ -10,6 +10,7 @@ use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ReceivedHeaders;
 
 /** @implements Arrayable<string, mixed> */
@@ -99,7 +100,7 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
             id: (string) ($data['id'] ?? ''),
             subject: ReceivedHeaders::text($subject),
             bodyPreview: isset($data['snippet']) ? (string) $data['snippet'] : null,
-            body: self::extractBody($payload),
+            body: GmailMime::body($payload),
             from: is_string($fromValue) ? EmailAddressDto::fromGmail($fromValue) : null,
             sender: is_string($senderValue) ? EmailAddressDto::fromGmail($senderValue) : null,
             toRecipients: self::parseAddressHeaders($headers, 'to'),
@@ -109,7 +110,7 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
             sentAt: self::parseHeaderDate(self::headerValue($headers, 'date')),
             isRead: ! in_array('UNREAD', $labelIds, true),
             isDraft: in_array('DRAFT', $labelIds, true),
-            hasAttachments: self::hasAttachments($payload),
+            hasAttachments: GmailMime::files($payload) !== [],
             importance: self::resolveImportance($headers),
             conversationId: isset($data['threadId']) ? (string) $data['threadId'] : null,
             internetMessageId: self::headerValue($headers, 'message-id'),
@@ -168,75 +169,6 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
         }
 
         return $addresses;
-    }
-
-    /** @param array<string, mixed> $payload */
-    private static function extractBody(array $payload): ?BodyDto
-    {
-        $htmlPart = self::findBodyPart($payload, 'text/html');
-        if ($htmlPart !== null) {
-            return BodyDto::fromGmail($htmlPart);
-        }
-
-        $textPart = self::findBodyPart($payload, 'text/plain');
-        if ($textPart !== null) {
-            return BodyDto::fromGmail($textPart);
-        }
-
-        if (isset($payload['body']) && is_array($payload['body']) && isset($payload['body']['data'])) {
-            return BodyDto::fromGmail($payload);
-        }
-
-        return null;
-    }
-
-    /** @param array<string, mixed> $payload
-     * @return array<string, mixed>|null
-     */
-    private static function findBodyPart(array $payload, string $mimeType): ?array
-    {
-        $currentMime = strtolower((string) ($payload['mimeType'] ?? ''));
-
-        if ($currentMime === strtolower($mimeType) && isset($payload['body']) && is_array($payload['body']) && isset($payload['body']['data'])) {
-            return $payload;
-        }
-
-        foreach ((array) ($payload['parts'] ?? []) as $part) {
-            if (! is_array($part)) {
-                continue;
-            }
-
-            $found = self::findBodyPart($part, $mimeType);
-
-            if ($found !== null) {
-                return $found;
-            }
-        }
-
-        return null;
-    }
-
-    /** @param array<string, mixed> $payload */
-    private static function hasAttachments(array $payload): bool
-    {
-        $filename = trim((string) ($payload['filename'] ?? ''));
-        $body = is_array($payload['body'] ?? null) ? $payload['body'] : [];
-
-        if ($filename !== '' || isset($body['attachmentId'])) {
-            return true;
-        }
-
-        foreach ((array) ($payload['parts'] ?? []) as $part) {
-            if (! is_array($part)) {
-                continue;
-            }
-
-            if (self::hasAttachments($part)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static function parseInternalDate(mixed $value): ?CarbonImmutable

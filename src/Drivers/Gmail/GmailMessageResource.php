@@ -10,9 +10,12 @@ use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Support\GmailMime;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 class GmailMessageResource implements MessageResource
 {
@@ -22,18 +25,18 @@ class GmailMessageResource implements MessageResource
         private readonly string $messageId,
     ) {}
 
-    public function get(): MessageDto
+    public function get(?BodyReadLimits $limits = null): MessageDto
     {
-        $payload = $this->client->get($this->messageEndpoint(), ['format' => 'full'], $this->mailbox);
+        $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($this->messageId, $limits);
 
         return MessageDto::fromGmail($payload);
     }
 
-    public function body(): BodyDto
+    public function body(?BodyReadLimits $limits = null): BodyDto
     {
-        $message = $this->get();
+        $message = $this->get($limits);
 
-        return $message->body ?? new BodyDto('text', '');
+        return $message->body ?? throw new MailboxException('Gmail did not return a text body.');
     }
 
     public function markAsRead(): void
@@ -92,8 +95,8 @@ class GmailMessageResource implements MessageResource
     /** @return Collection<int, AttachmentDto> */
     public function attachments(): Collection
     {
-        $message = $this->client->get($this->messageEndpoint(), ['format' => 'full'], $this->mailbox);
-        $parts = $this->collectAttachmentParts((array) ($message['payload'] ?? []));
+        $message = $this->client->getBounded($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), ['format' => 'full'], $this->mailbox, retry: true);
+        $parts = GmailMime::files((array) ($message['payload'] ?? []));
 
         return collect($parts)
             ->map(fn (array $part): AttachmentDto => AttachmentDto::fromGmail($part))
@@ -129,31 +132,6 @@ class GmailMessageResource implements MessageResource
     private function messageEndpoint(): string
     {
         return sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($this->messageId));
-    }
-
-    /** @param array<string, mixed> $payload
-     * @return array<int, array<string, mixed>>
-     */
-    private function collectAttachmentParts(array $payload): array
-    {
-        $parts = [];
-
-        $filename = trim((string) ($payload['filename'] ?? ''));
-        $body = is_array($payload['body'] ?? null) ? $payload['body'] : [];
-
-        if ($filename !== '' || isset($body['attachmentId'])) {
-            $parts[] = $payload;
-        }
-
-        foreach ((array) ($payload['parts'] ?? []) as $part) {
-            if (! is_array($part)) {
-                continue;
-            }
-
-            $parts = array_merge($parts, $this->collectAttachmentParts($part));
-        }
-
-        return $parts;
     }
 
     /** @return array<string> */

@@ -20,6 +20,7 @@ use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 trait PerformsApiRequests
@@ -31,6 +32,8 @@ trait PerformsApiRequests
     private int $retryBackoffBase;
 
     private string $apiBaseUri;
+
+    private bool $queueReleaseAllowed = true;
 
     /** @param array<string, mixed> $config */
     protected function bootApiClient(array $config, ?Client $client, string $baseUri): void
@@ -57,7 +60,49 @@ trait PerformsApiRequests
      * @param  array<string, mixed>  $query
      * @return array<string, mixed>
      */
-    public function getBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
+    public function getBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query = [], ?string $mailbox = null, bool $retry = false): array
+    {
+        $queueReleaseAllowed = $this->queueReleaseAllowed;
+        $this->queueReleaseAllowed = false;
+        $attempt = 0;
+        $reauthAttempted = false;
+        $safeEndpoint = $this->redactedEndpoint($endpoint);
+        $mailboxKey = $this->mailboxKey($mailbox);
+
+        try {
+            while (true) {
+                if ($budget->remaining() === 0) {
+                    throw new ResponseLimitExceededException('The provider response byte budget is exhausted.');
+                }
+                $attempt++;
+                $startedAt = microtime(true);
+                try {
+                    return $this->requestBounded($endpoint, $budget, $query, $mailbox);
+                } catch (RequestException $e) {
+                    $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+                    if ($retry && $this->shouldRetryRequest($e, 'GET', $safeEndpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
+                        continue;
+                    }
+                    $this->throwMappedException($e, $mailbox, $mailboxKey, $safeEndpoint, $attempt);
+                } catch (ApiRequestException $e) {
+                    $previous = $e->getPrevious();
+                    if ($retry && ($previous instanceof ConnectException || ($previous instanceof RequestException && $previous->getResponse() === null))
+                        && $this->retryTransportFailure($previous, 'GET', $safeEndpoint, $mailboxKey, $attempt, $startedAt)) {
+                        continue;
+                    }
+                    throw $e;
+                }
+            }
+        } finally {
+            $this->queueReleaseAllowed = $queueReleaseAllowed;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>
+     */
+    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox): array
     {
         $options = $query === [] ? [] : ['query' => $query];
         $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false], $mailbox, retry: false);
@@ -65,19 +110,25 @@ trait PerformsApiRequests
         $body = '';
 
         try {
-            while (true) {
-                $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
-                if ($chunk === '') {
-                    if ($stream->eof()) {
-                        break;
+            try {
+                while (true) {
+                    $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
+                    if ($chunk === '') {
+                        if ($stream->eof()) {
+                            break;
+                        }
+                        throw new ApiRequestException('The provider response stream stopped making progress.');
                     }
-                    throw new ApiRequestException('The provider response stream stopped making progress.');
+                    $budget->consume(strlen($chunk));
+                    $body .= $chunk;
                 }
-                $budget->consume(strlen($chunk));
-                $body .= $chunk;
+            } finally {
+                $stream->close();
             }
-        } finally {
-            $stream->close();
+        } catch (ResponseLimitExceededException|ApiRequestException $e) {
+            throw $e;
+        } catch (\Throwable) {
+            throw new ApiRequestException('The provider response stream could not be read.');
         }
 
         if ($response->getStatusCode() >= 400) {
@@ -88,7 +139,7 @@ trait PerformsApiRequests
             $failure = new RequestException($message, $request, new Response($response->getStatusCode(), [
                 'Retry-After' => (string) $this->retryAfterSeconds($failure),
             ]));
-            $this->throwMappedException($failure, $mailbox, $this->mailboxKey($mailbox), $endpoint, 1);
+            throw $failure;
         }
 
         try {
@@ -417,6 +468,9 @@ trait PerformsApiRequests
 
     protected function handleQueueRetry(int $delaySeconds, string $reason): bool
     {
+        if (! $this->queueReleaseAllowed) {
+            return false;
+        }
         $strategy = (string) ($this->config['queue_retry_strategy'] ?? config('mailbox.queue_retry_strategy', 'release'));
 
         if ($strategy !== 'release' || ! app()->bound('queue.job')) {
