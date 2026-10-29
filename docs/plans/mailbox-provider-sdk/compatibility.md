@@ -5,7 +5,7 @@ This receipt records local compatibility checks for the unreleased provider SDK.
 ## Source and Isolation
 
 - Integration baseline: `b539e19af93ee9b9147d7e8d19896a48ca2e399d`, tree `35630f1f02124e2339995822968d8b9c7e2c2373`.
-- Host-contract test source: `e574aa7`; worker-manifest isolation: `cf26088`. These commits add test coverage/harness behavior, not provider runtime changes. Final candidate/check identities are recorded below after the remaining gates finish.
+- Final combined candidate: `6cc93ad2296fc4ecedb5a581df8ded1cbf15637d`, tree `a7d2a5d1eb1f396e96774948a9738ba08a4a4c1e`. Host-contract test source is `e574aa7`; worker-manifest isolation is `cf26088`. Their runtime trees and Composer files match the integration baseline, and their final test tree matches this candidate. Later receipt/closure edits change Markdown only.
 - Runtime constraints remain PHP `^8.2`, Illuminate `^12.0 || ^13.0`, parser `^4.0.8`, Mime `^7.4.22 || ^8.1.10`, Egulias `^4.0.4`, and PHP-DI exclusion `<6.3.0`. No supported constraint was weakened and no application dependency was migrated.
 - SDK-only tests use a deliberately unavailable default connection with package persistence disabled. Persistence tests use real SQLite memory or worker-owned Testbench files with `RefreshDatabase`. Provider/package bootstrap manifests are also worker-specific before provider registration, preventing concurrent Windows manifest replacement.
 - All checks run serially; Pest uses at most two workers, PHPStan `--debug` one process, and Composer at most two child/download operations. Opt-in TLS/memory groups run in separate serial invocations.
@@ -52,13 +52,30 @@ Every lane has its own source snapshot, manifest, lock, vendor and SQLite target
 | PHP 8.2.35 / Laravel 12, latest compatible | Laravel 12.70.2, Testbench 10.12.0/core 10.16.0, Pest 3.8.7, Mime 7.4.22. 1,413 passed / 8 wire skips / 6,953 assertions, exit 0; installed platform and unfiltered audit clean. |
 | PHP 8.3.15 / Laravel 12 | Same declared versions as the latest PHP 8.2 lane, separately solved/installed on actual PHP 8.3. 1,413 passed / 8 wire skips / 6,953 assertions, exit 0; platform/audit clean. |
 | PHP 8.4.25 / Laravel 12 | Same declared versions as the latest PHP 8.2 lane, separately solved/installed on actual PHP 8.4. 1,413 passed / 8 wire skips / 6,953 assertions, exit 0; platform/audit clean. |
-| PHP 8.4.25 / Laravel 13, current lock | Final combined gates pending. |
+| PHP 8.4.25 / Laravel 13, current lock | Laravel 13.39.0, Testbench 11.1.0/core 11.3.1, Pest 5.x-dev `18bbca7`, Mime 8.1.10. 1,413 passed / 8 wire skips / 6,953 assertions, exit 0; full-source static/style/strict Composer/platform/audit gates pass. |
 | Production-only PHP 8.2.35 / Illuminate 12, lowest | 72 runtime packages, Illuminate 12.0.0, Mime 7.4.22, Egulias 4.0.4, parser 4.0.8. Install/platform/unfiltered audit/content check all exit 0, without Testbench/PHPUnit. This is narrower than the full framework 12.69.0 lane. |
 | Production-only PHP 8.3.15 / Illuminate 13 | 74 runtime packages, Illuminate 13.39.0, Mime 7.4.22, Egulias 4.0.4, parser 4.0.8. Install/platform/unfiltered audit/content check all exit 0, without Testbench/PHPUnit. |
 | Production-only PHP 8.4.25 / Illuminate 13 | 73 runtime packages, Illuminate 13.39.0, Mime 8.1.10, Egulias 4.0.4, parser 4.0.8. Install/platform/unfiltered audit/content check all exit 0, without Testbench/PHPUnit. |
 
 PHP 8.2 with Laravel 13 is invalid under Laravel's PHP requirement and is not a test lane. The actual PHP 8.3/Laravel 13 development solver exits 2: Pest Laravel plugin 3.x supports framework 11/12, while its 5.x branch requires PHP 8.4. No constraint is weakened. That development-tool conflict is not a claim that the declared Illuminate 13 runtime is unsupported on PHP 8.3; the separate production lane records its narrower evidence. Production checks exclude test frameworks and exercise public received-message mapping and prepared-message encoding with the real runtime parser/encoder/validator dependencies; they are not full Testbench suites.
 
-## Remaining Local Gates
+## Final Candidate Gates
 
-Platform graphs, final full-suite/static/style/Composer gates and serial source-bound wire receipts are still being collected. No final candidate success is claimed by this intermediate receipt. The implementation ticket remains open until those required local checks finish. Live acceptance remains blocked independently.
+At `6cc93ad`, the current-lock PHP 8.4/Laravel 13 full suite passes **1,413 tests / 6,953 assertions**, exit 0, with two workers. Its eight ordinary-run skips are the separately executed TLS cases below. Full-source PHPStan `analyse --debug --no-progress` reports no errors in one process. Pint `--dirty --format agent`, Composer strict validation, actual installed platform requirements and the unfiltered locked audit all exit 0; audit reports no advisories, abandoned packages or filters. Direct dependency inspection confirms all three content libraries are runtime requirements.
+
+All eight fresh TLS cases pass separately and serially on PHP 8.4.25, 64-bit: **8 tests / 144 assertions**, exit 0. The actual source-and-lock fingerprint is `ddd59000cbe0463dac93904b2f1320b2762618a0a2328661c0135980e5aca591` for every case.
+
+| Local TLS case | Source bytes | PHP peak growth | Payload growth above its cold control |
+| --- | ---: | ---: | ---: |
+| Gmail cold control | 8,192 | 9,280,032 | Control |
+| Gmail cold 10 MiB | 10,485,760 | 9,276,696 | 0 |
+| Gmail cold 20 MiB aggregate | 20,971,520 | 9,276,376 | 0 |
+| Gmail warm 20 MiB reply | 20,971,520 | 162,512 | Direct warm peak |
+| Graph cold control | 3,000,001 | 5,244,096 | Control |
+| Graph cold 10 MiB | 10,485,760 | 5,244,104 | 8 |
+| Graph cold 20 MiB aggregate | 20,971,520 | 5,244,104 | 8 |
+| Graph warm 20 MiB aggregate | 20,971,520 | 263,800 | Direct warm peak |
+
+Independent owned local servers verify actual MIME/JSON or sequential Outlook ranges, exact file bytes/SHA-256, original trusted HTTPS targets, scoped local CA/cURL routing and origin-authorization suppression on preauthenticated uploads. Gmail's warm reply also verifies thread and reply headers. Each invocation owns and cleans its helper/process and temporary files. These results retain the unchanged 8 MiB payload allocation allowance; they do not promise an 8 MiB total cold heap, native/RSS limit or live provider acceptance.
+
+The workflow's explicit PHP 8.2/8.3/8.4 with Laravel 12, PHP 8.4 with Laravel 13, and PHP 8.2 prefer-lowest lanes have been parsed and checked locally. Introduced relative Markdown links and diff whitespace resolve cleanly. No GitHub CI run, push, release, provider setup or application migration was performed. Independent integration review remains a separate subsequent step; the parent specification and live tickets 26/27 remain open.
