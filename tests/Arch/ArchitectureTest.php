@@ -9,6 +9,7 @@ use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\FolderDto;
@@ -45,6 +46,7 @@ arch('DTOs are final readonly classes')
         BodyReadLimits::class,
         ChangePage::class,
         ConnectionTestResult::class,
+        ConversationRead::class,
         DeltaResultDto::class,
         EmailAddressDto::class,
         FolderDto::class,

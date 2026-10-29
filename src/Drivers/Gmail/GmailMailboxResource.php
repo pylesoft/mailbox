@@ -9,10 +9,13 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsConversationRead;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
+use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionResult;
@@ -23,7 +26,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission
+class GmailMailboxResource implements MailboxResource, SupportsConversationRead, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission
 {
     public function __construct(
         private readonly GmailClient $client,
@@ -31,6 +34,15 @@ class GmailMailboxResource implements MailboxResource, SupportsIncrementalSync, 
         private readonly string $emailAddress,
         private readonly ?GrantContext $grantContext = null,
     ) {}
+
+    public function conversation(string $conversationId, SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation = null, ?BodyReadLimits $limits = null): ConversationRead
+    {
+        if ($this->grantContext === null) {
+            throw new UnsupportedCapabilityException('Conversation reads require an explicit grant context.');
+        }
+
+        return (new GmailConversationReader($this->client, $this->grantContext))->read($conversationId, $scope, $budget, $continuation, $limits);
+    }
 
     public function submit(PreparedMessage $message, int $maxRequestBytes = 1_048_576): SubmissionResult
     {
