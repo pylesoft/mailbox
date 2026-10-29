@@ -13,6 +13,8 @@ final readonly class ChangePage
      *
      * @param  list<string>  $upserts
      * @param  list<string>  $removals
+     * @param  list<array{folderId: string, upserts: list<string>, removals: list<string>}>  $folderChanges
+     * @param  list<string>  $coveredFolders
      */
     public function __construct(
         public array $upserts = [],
@@ -21,6 +23,8 @@ final readonly class ChangePage
         public ?SyncCheckpoint $checkpoint = null,
         public bool $resetRequired = false,
         public ?string $reason = null,
+        public array $folderChanges = [],
+        public array $coveredFolders = [],
     ) {
         if ((int) ($continuation !== null) + (int) ($checkpoint !== null) + (int) $resetRequired !== 1) {
             throw new InvalidArgumentException('A change page requires exactly one continuation, completed checkpoint or reset requirement.');

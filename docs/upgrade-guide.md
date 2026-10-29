@@ -52,6 +52,12 @@ Explicit-grant Gmail resources also expose `SupportsIncrementalSync::incremental
 
 History returns reconciliation candidates without created-versus-updated guesses. Requests read unfiltered changes to preserve label-exit evidence; hosts must recheck the selected scope and import policy before updating projections. Label removal does not establish message deletion. A history 404 requests an initial reset with the committed checkpoint's original folder and cutoff, without erasing retained local history. See [bounded Gmail history](delta-sync.md#bounded-gmail-history) for replay, expanded-record budgets and recovery.
 
+## Unreleased: Bounded Graph Folder Delta
+
+Explicit-grant Graph resources now use the same optional `SupportsInitialSync` and `SupportsIncrementalSync` contracts and sync DTOs as Gmail. Graph results add trailing optional `ChangePage::coveredFolders` and `folderChanges` fields, with empty defaults for existing consumers. Mailbox-wide rounds enumerate the hierarchy and retain independent folder progress; a folder token alone never completes the mailbox.
+
+Graph `removals` are folder-membership evidence, not verified mailbox-wide deletion. Recheck candidates against the original folder/import policy and preserve retained history during resets. Delta requests remain unfiltered to avoid Graph's documented 5,000-message filtered-delta ceiling; the cutoff stays bound to state. Existing configured/eager APIs remain available. See [bounded Graph delta](delta-sync.md#bounded-graph-folder-delta) for progress, budgets, recovery and coverage limits.
+
 ## Checking Your Current Version
 
 You can check which version of Mailbox you have installed at any time:

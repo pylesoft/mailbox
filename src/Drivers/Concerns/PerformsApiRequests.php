@@ -136,6 +136,10 @@ trait PerformsApiRequests
         if ($response->getStatusCode() >= 400) {
             $endpoint = $this->redactedEndpoint($endpoint);
             $message = $this->providerLabel().' request failed with HTTP '.$response->getStatusCode().'.';
+            if ($this->driverKey() === 'ms-graph' && in_array($response->getStatusCode(), [400, 404, 410], true)
+                && $this->graphSyncResetCode($body) !== null) {
+                throw new ApiRequestException($message, status: $response->getStatusCode(), endpoint: $endpoint, providerCode: 'syncStateNotFound');
+            }
             $request = new Request('GET', $endpoint);
             $failure = new RequestException($message, $request, $response);
             $failure = new RequestException($message, $request, new Response($response->getStatusCode(), [
@@ -155,6 +159,20 @@ trait PerformsApiRequests
         }
 
         return $decoded;
+    }
+
+    private function graphSyncResetCode(#[\SensitiveParameter] string $body): ?string
+    {
+        $decoded = json_decode($body, true);
+        $error = is_array($decoded) ? ($decoded['error'] ?? null) : null;
+        while (is_array($error)) {
+            if (($error['code'] ?? null) === 'syncStateNotFound') {
+                return 'syncStateNotFound';
+            }
+            $error = $error['innerError'] ?? $error['innererror'] ?? null;
+        }
+
+        return null;
     }
 
     public function continuationEndpoint(#[\SensitiveParameter] mixed $link, #[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
@@ -179,11 +197,38 @@ trait PerformsApiRequests
             : $link;
         $target = new Uri($this->resolveTarget($candidate, $mailbox));
 
-        if ($target->getPath() !== $current->getPath() || $target->getQuery() === '') {
+        if ($this->continuationResourcePath($target->getPath()) !== $this->continuationResourcePath($current->getPath()) || $target->getQuery() === '') {
             throw new ApiRequestException('The provider continuation does not match the requested resource.');
         }
 
         return (string) $target;
+    }
+
+    private function continuationResourcePath(string $path): string
+    {
+        if ($this->driverKey() !== 'ms-graph') {
+            return $path;
+        }
+        $segments = explode('/', $path);
+        if (isset($segments[4]) && preg_match("/^mailfolders\\('((?:[^']|'')+)'\\)$/iD", $segments[4], $match) === 1) {
+            array_splice($segments, 4, 1, ['mailFolders', rawurlencode(str_replace("''", "'", rawurldecode($match[1])))]);
+        }
+        if (isset($segments[4]) && strcasecmp($segments[4], 'mailFolders') === 0) {
+            $segments[4] = 'mailFolders';
+            if (isset($segments[5])) {
+                $segments[5] = rawurlencode(rawurldecode($segments[5]));
+            }
+            if (isset($segments[6]) && strcasecmp($segments[6], 'messages') === 0) {
+                $segments[6] = 'messages';
+                if (isset($segments[7]) && strcasecmp($segments[7], 'delta') === 0) {
+                    $segments[7] = 'delta';
+                }
+            } elseif (isset($segments[6]) && strcasecmp($segments[6], 'childFolders') === 0) {
+                $segments[6] = 'childFolders';
+            }
+        }
+
+        return implode('/', $segments);
     }
 
     /** @param array<string, mixed> $payload
