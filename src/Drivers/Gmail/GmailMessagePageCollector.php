@@ -6,6 +6,7 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 final class GmailMessagePageCollector
 {
@@ -35,7 +36,7 @@ final class GmailMessagePageCollector
             $tokenSignature = $nextPageToken ?? '__first__';
 
             if ($this->shouldStopPaging($tokenSignature, $seenPageTokens, $pageCount, $maxPages)) {
-                break;
+                throw new ApiRequestException('Gmail listing cannot complete because of a page limit or repeated page token. Use bounded initial synchronization to retain a continuation.');
             }
 
             $seenPageTokens[$tokenSignature] = true;
@@ -131,8 +132,15 @@ final class GmailMessagePageCollector
      */
     private function nextPageToken(array $response): ?string
     {
-        return isset($response['nextPageToken']) && (string) $response['nextPageToken'] !== ''
-            ? (string) $response['nextPageToken']
-            : null;
+        if (! array_key_exists('nextPageToken', $response)) {
+            return null;
+        }
+
+        $token = $response['nextPageToken'];
+        if (! is_string($token) || trim($token) === '') {
+            throw new ApiRequestException('Gmail returned an unusable listing continuation.');
+        }
+
+        return $token;
     }
 }

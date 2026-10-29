@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Pyle\Mailbox\Drivers\Gmail\GmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageQuery;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 it('queries gmail messages and maps DTOs', function (): void {
     $client = new class extends GmailClient
@@ -263,7 +264,7 @@ it('builds grouped OR filters when whereAny is used', function (): void {
     expect((string) ($client->queries[0]['q'] ?? ''))->toContain('{from:"vendor-a@example.com" from:"vendor-b@example.com"}');
 });
 
-it('stops on repeated page tokens and deduplicates message ids', function (): void {
+it('rejects repeated page tokens instead of returning a completed collection', function (): void {
     $client = new class extends GmailClient
     {
         /** @var array<int, array<string, mixed>> */
@@ -304,8 +305,6 @@ it('stops on repeated page tokens and deduplicates message ids', function (): vo
     };
 
     $query = new GmailMessageQuery($client, 'invoices@example.com');
-    $result = $query->allFolders()->get();
-
+    expect(fn () => $query->allFolders()->get())->toThrow(ApiRequestException::class, 'repeated page token');
     expect($client->queries)->toHaveCount(2);
-    expect($result->pluck('id')->all())->toBe(['m-3', 'm-2', 'm-1']);
 });
