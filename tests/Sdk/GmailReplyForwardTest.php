@@ -52,6 +52,26 @@ it('submits a Gmail reply in its complete selected thread with only caller chose
         ->and($rawMime)->not->toContain('old-private@example.com');
 });
 
+it('preserves a caller chosen outgoing Message-ID for Gmail reply correlation', function (): void {
+    $history = [];
+    $mailbox = gmailContextMailbox([
+        new Response(200, [], json_encode(['id' => 'thread', 'messages' => [gmailContextSource()]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"id":"sent","threadId":"thread"}'),
+    ], $history);
+    $conversation = $mailbox->conversation('thread', new SyncScope, new SyncBudget);
+    $message = gmailContextMessage(new ReplyForwardContext(ReplyForwardOperation::Reply, $conversation, 'source'), [
+        'headers' => ['Message-ID' => '<caller-outgoing@example.com>'],
+    ]);
+
+    $result = $mailbox->submit($message);
+
+    $payload = json_decode((string) $history[1]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $mime = (new MailMimeParser)->parse(base64_decode(strtr($payload['raw'], '-_', '+/'), true), false);
+    expect($mime->getHeader('Message-ID')->getRawValue())->toBe('<caller-outgoing@example.com>')
+        ->and($result->context?->matches(new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com')))->toBeTrue()
+        ->and($history)->toHaveCount(2);
+});
+
 /** @return array<string, mixed> */
 function gmailContextSource(): array
 {
@@ -66,17 +86,18 @@ function gmailContextSource(): array
     ]];
 }
 
-function gmailContextMessage(ReplyForwardContext $context): PreparedMessage
+/** @param array<string, mixed> $changes */
+function gmailContextMessage(ReplyForwardContext $context, array $changes = []): PreparedMessage
 {
-    return new PreparedMessage(
-        sender: new EmailAddressDto('Sender', 'sender@example.com'),
-        to: [new EmailAddressDto('Chosen', 'chosen@example.com')],
-        bcc: [new EmailAddressDto('Chosen private', 'chosen-private@example.com')],
-        subject: 'Réunion à Montréal',
-        correlationId: 'reply-operation',
-        textBody: 'Only the chosen reply',
-        context: $context,
-    );
+    return new PreparedMessage(...array_replace([
+        'sender' => new EmailAddressDto('Sender', 'sender@example.com'),
+        'to' => [new EmailAddressDto('Chosen', 'chosen@example.com')],
+        'bcc' => [new EmailAddressDto('Chosen private', 'chosen-private@example.com')],
+        'subject' => 'Réunion à Montréal',
+        'correlationId' => 'reply-operation',
+        'textBody' => 'Only the chosen reply',
+        'context' => $context,
+    ], $changes));
 }
 
 /**

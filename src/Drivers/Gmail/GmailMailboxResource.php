@@ -93,7 +93,7 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
 
     public function submit(PreparedMessage $message, int $maxRequestBytes = 1_048_576): SubmissionResult
     {
-        return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes, $this->submissionLimits);
+        return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes, $this->submissionLimits, $this->grantContext);
     }
 
     public function withSubmissionLimits(SubmissionLimits $limits): SupportsMessageSubmission

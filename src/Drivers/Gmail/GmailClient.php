@@ -9,10 +9,12 @@ use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
+use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
+use Pyle\Mailbox\Enums\ReplyForwardOperation;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
@@ -22,6 +24,7 @@ use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Support\PreparedMessageMime;
 
@@ -51,9 +54,14 @@ class GmailClient
         return 'gmail';
     }
 
-    public function submitMessage(PreparedMessage $message, string $mailbox, int $maxRequestBytes = 1_048_576, ?SubmissionLimits $limits = null): SubmissionResult
+    public function submitMessage(PreparedMessage $message, string $mailbox, int $maxRequestBytes = 1_048_576, ?SubmissionLimits $limits = null, ?GrantContext $context = null): SubmissionResult
     {
-        $payload = PreparedMessageMime::gmailPayload($message, $maxRequestBytes, $limits);
+        if ($context !== null) {
+            ($this->grantAuthorization ?? throw new UnsupportedCapabilityException('Gmail receipt binding requires captured grant authorization.'))->assertActive($context);
+        }
+        $message = (new GmailSubmissionContext($context))->apply($message);
+        $replyThread = $message->context?->operation === ReplyForwardOperation::Reply ? $message->context->conversation->conversationId : null;
+        $payload = PreparedMessageMime::gmailPayload($message, $maxRequestBytes, $limits, $replyThread);
         try {
             $response = $this->requestOnce('POST', 'users/'.rawurlencode($mailbox).'/messages/send', [
                 'body' => $payload, 'headers' => ['Content-Type' => 'application/json'],
@@ -71,7 +79,7 @@ class GmailClient
             $outcome = SubmissionOutcome::Rejected;
         }
 
-        return new SubmissionResult('gmail', $outcome, $message->correlationId, $response->status, $response->headers, $messageId, $threadId);
+        return new SubmissionResult('gmail', $outcome, $message->correlationId, $response->status, $response->headers, $messageId, $threadId, $context);
     }
 
     protected function providerLabel(): string
