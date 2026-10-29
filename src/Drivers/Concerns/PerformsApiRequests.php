@@ -59,7 +59,7 @@ trait PerformsApiRequests
     public function getBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
     {
         $options = $query === [] ? [] : ['query' => $query];
-        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true], $mailbox, retry: false);
+        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false], $mailbox, retry: false);
         $stream = $response->getBody();
         $body = '';
 
@@ -77,6 +77,17 @@ trait PerformsApiRequests
             }
         } finally {
             $stream->close();
+        }
+
+        if ($response->getStatusCode() >= 400) {
+            $endpoint = $this->redactedEndpoint($endpoint);
+            $message = $this->providerLabel().' request failed with HTTP '.$response->getStatusCode().'.';
+            $request = new Request('GET', $endpoint);
+            $failure = new RequestException($message, $request, $response);
+            $failure = new RequestException($message, $request, new Response($response->getStatusCode(), [
+                'Retry-After' => (string) $this->retryAfterSeconds($failure),
+            ]));
+            $this->throwMappedException($failure, $mailbox, $this->mailboxKey($mailbox), $endpoint, 1);
         }
 
         try {

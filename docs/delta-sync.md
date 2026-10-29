@@ -58,7 +58,7 @@ State binds the provider, connection, selected grant, lifecycle generation, targ
 
 Budgets apply to each call. `maxPages` limits listing requests, `maxItems` limits returned evidence, and `maxRequests` includes the initial profile request. Gmail requests at most 500 IDs per provider page. If a response returns more IDs than requested, the SDK retains the previous position and reports `provider_item_limit`; it never trims a response and advances past discarded IDs.
 
-`maxResponseBytes` limits the aggregate bytes read from actual response streams, including the profile and every listing in that call. The transport reads at most the remaining budget plus one detection byte, closes each stream, and checks the limit before JSON decoding. A `Content-Length` header cannot bypass the check. This is a response-byte bound, not a promise about exact PHP heap usage during decoding.
+`maxResponseBytes` limits the aggregate bytes read from actual response streams, including the profile, every listing and HTTP error bodies in that call. The transport reads at most the remaining budget plus one detection byte, closes each stream, and checks the limit before JSON decoding or error-status mapping. A `Content-Length` header cannot bypass the check. This is a response-byte bound, not a promise about exact PHP heap usage during decoding.
 
 An unfinished page reports `item_limit`, `page_limit`, `request_limit`, `response_limit`, `provider_item_limit`, `provider_progress_missing` or `provider_progress_repeated`. Resume only after retaining its evidence. Raise an insufficient budget or resolve a stalled provider response as appropriate. A repeated or unusable token retains the position before that response and never becomes a checkpoint.
 

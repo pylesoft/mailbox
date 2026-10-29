@@ -111,7 +111,7 @@ it('does not spend unbounded requests retrying a bounded read', function (): voi
         ->and($history)->toHaveCount(1);
 });
 
-it('enforces aggregate response bytes on the real stream and can retry the unretained listing', function (): void {
+it('enforces aggregate response bytes on the real stream and can retry the unretained listing', function (int $status): void {
     $readBytes = 0;
     $closed = false;
     $body = Utils::streamFor('{"messages":[{"id":"'.str_repeat('x', 10000).'"}]}');
@@ -130,7 +130,7 @@ it('enforces aggregate response bytes on the real stream and can retry the unret
     $history = [];
     $mailbox = initialSyncResource([
         new Response(200, [], '{"historyId":"100"}'),
-        new Response(200, ['Content-Length' => '1'], $stream),
+        new Response($status, ['Content-Length' => '1'], $stream),
         new Response(200, [], '{"messages":[{"id":"retained"}]}'),
     ], $history);
 
@@ -148,7 +148,7 @@ it('enforces aggregate response bytes on the real stream and can retry the unret
     expect($resumed->upserts)->toBe(['retained'])
         ->and($resumed->checkpoint->position)->toBe('100')
         ->and($history)->toHaveCount(3);
-});
+})->with([200, 503]);
 
 it('does not equate numeric-looking opaque lifecycle generations', function (): void {
     $history = [];
@@ -269,6 +269,17 @@ it('reports provider item-limit violations without promoting a checkpoint', func
     expect($page->reason)->toBe('provider_item_limit')
         ->and($page->upserts)->toBe([])
         ->and($page->checkpoint)->toBeNull();
+});
+
+it('rejects a null message list instead of completing an empty import', function (): void {
+    $history = [];
+    $mailbox = initialSyncResource([
+        new Response(200, [], '{"historyId":"100"}'),
+        new Response(200, [], '{"messages":null}'),
+    ], $history);
+
+    expect(fn () => $mailbox->initialSync(new SyncScope, new SyncBudget))
+        ->toThrow(ApiRequestException::class, 'message list');
 });
 
 it('refuses legacy initial completion without a history baseline', function (): void {

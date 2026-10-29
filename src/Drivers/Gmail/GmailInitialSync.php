@@ -86,7 +86,7 @@ final readonly class GmailInitialSync
                 return $this->unfinished($identity, $state, $upserts, 'provider_progress_repeated');
             }
 
-            $summaries = $response['messages'] ?? [];
+            $summaries = array_key_exists('messages', $response) ? $response['messages'] : [];
             if (! is_array($summaries) || ! array_is_list($summaries)) {
                 throw new ApiRequestException('Gmail returned an invalid initial message list.');
             }
