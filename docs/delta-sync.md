@@ -135,7 +135,7 @@ Graph pages add two optional fields to the shared `ChangePage`; Gmail pages leav
 
 | Field | Meaning |
 | --- | --- |
-| `coveredFolders` | Exact folder IDs discovered so far in this round. Enumeration may still be unfinished while a continuation exists. |
+| `coveredFolders` | The exact selected folder ID, or mailbox folder IDs discovered so far in this round. Enumeration may still be unfinished while a continuation exists. |
 | `folderChanges` | A list of records containing `folderId`, `upserts` and `removals`, preserving the folder associated with each observation. |
 
 The existing flat `upserts` and `removals` remain available as deduplicated reconciliation candidates. A message moved from one covered folder to another can appear in both arrays. Graph `@removed` means removal **from that folder**, including a move; even a provider reason of `deleted` does not establish mailbox-wide message deletion. Neither array authorizes erasing retained history. Upserts do not guess creation versus update from an etag. Repeated or conflicting evidence requires idempotent reconciliation through the message resource.
@@ -168,7 +168,7 @@ Graph next and delta links contain opaque queries. Mailbox preserves their encod
 
 Each link must stay on the configured Graph API origin and the exact mailbox, folder and operation being read. A link from another folder cannot resume the current folder. Missing or malformed links, conflicting next/delta links, repeated pages and missing collection data throw `ApiRequestException`; they do not produce a completed empty result. Graph message queries also throw when the configured page limit prevents completion.
 
-Treat `deltaLink` as private checkpoint state. Store it unchanged in private application storage and reuse it only for the same mailbox and folder. Client and result debug dumps redact secrets, while the existing property and array/JSON serialization retain the checkpoint for persistence. This validation does not replace host authorization or the grant-bound checkpoint format planned for bounded synchronization.
+Treat `deltaLink` as private checkpoint state. Store it unchanged in private application storage and reuse it only for the same mailbox and folder. Client and result debug dumps redact secrets, while the existing property and array/JSON serialization retain the checkpoint for persistence. Use the bounded capabilities above for grant/lifecycle-bound progress; a legacy URL alone does not provide that binding.
 
 ## Your First Sync
 
@@ -182,7 +182,7 @@ $result = Mailbox::mailbox('invoices@acme.com')
     ->delta(); // DeltaResultDto
 ```
 
-The returned `DeltaResultDto` contains every message currently in the folder inside the `created` collection, an empty `updated` collection, an empty `deleted` collection, and a `deltaLink` you must store for next time. The `fullSyncRequired` flag will be `false`.
+The returned `DeltaResultDto` contains the folder's current messages, grouped into `created` and `updated` by the legacy provider mapping, plus a `deltaLink` to store for next time. Graph retains its historical etag/modified-time heuristic; those labels do not establish reliable creation-versus-update evidence. The bounded Graph API returns upsert candidates instead. The `fullSyncRequired` flag will be `false`.
 
 Store the `deltaLink` somewhere durable -- a database column, a cache key, or a model attribute. You will need it for every subsequent sync.
 
@@ -205,7 +205,7 @@ foreach ($result->updated as $message) {
 }
 
 foreach ($result->deleted as $messageId) {
-    // Handle deleted message IDs
+    // Reconcile removal evidence within the host's retention policy.
 }
 
 // Persist the new token for next time
@@ -216,7 +216,7 @@ This incremental call is fast -- it only returns what changed since the token wa
 
 ## Handling Expired Tokens
 
-Delta tokens do not last forever. Microsoft Graph tokens expire after roughly 30 days of inactivity. Gmail history IDs become unavailable once the underlying history records are purged. When this happens, the provider rejects the token and Mailbox sets `fullSyncRequired` to `true` on the returned `DeltaResultDto`.
+Delta tokens do not last forever. Graph Outlook state can age out of the provider's token cache and has no fixed lifetime. Gmail history IDs become unavailable once the underlying history records are purged. The legacy Graph API handles HTTP 410 resets; the bounded Graph API also recognizes the documented `syncStateNotFound` code. Legacy supported expiry responses set `fullSyncRequired` to `true` on the returned `DeltaResultDto`.
 
 ```php
 $result = Mailbox::mailbox('invoices@acme.com')
