@@ -1060,6 +1060,10 @@ class PostmarkAttachmentResource implements \Pyle\Mailbox\Contracts\AttachmentRe
 
 Seven classes. Each one implements a single contract. Wire them together through your driver constructor, register the driver with `Mailbox::extend()` or the `driver_classes` config map, and you have a fully functional Mailbox driver.
 
+## Optional Conversation Reads
+
+Your mailbox resource may also implement `SupportsConversationRead` to return complete messages and file metadata within an explicit scope. This capability is separate from the required `MailboxResource` contract. Existing custom drivers may omit it and keep their basic reads. Callers check the capability before using it; see [complete conversation reads](../messages.md#reading-a-complete-conversation) for the result, budgets and private continuation contract.
+
 ## What's Next
 
 - [Stubs](stubs.md) -- publish ready-made file templates to bootstrap your driver.
