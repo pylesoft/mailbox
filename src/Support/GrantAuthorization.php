@@ -15,6 +15,15 @@ final readonly class GrantAuthorization
         private GrantTokenProvider $tokens,
     ) {}
 
+    public function assertActive(GrantContext $context): void
+    {
+        if (! $this->context->matches($context)) {
+            throw new GrantAccessDeniedException('The requested grant context does not match the captured authorization.');
+        }
+
+        $this->tokens->assertActive($context);
+    }
+
     public function accessToken(string $mailbox): string
     {
         if (strtolower(trim($mailbox)) !== strtolower(trim($this->context->mailbox))) {

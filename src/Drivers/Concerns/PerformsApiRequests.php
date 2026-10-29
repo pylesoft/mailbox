@@ -280,6 +280,13 @@ trait PerformsApiRequests
         }
         $target = $this->resolveTarget($endpoint, $mailbox);
         $mailboxKey = $this->mailboxKey($mailbox);
+
+        return $this->exchangeOnce($method, $target, $options, $mailboxKey, $maxResponseBytes);
+    }
+
+    /** @param array<string, mixed> $options */
+    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes): ProviderWriteResponse
+    {
         $attempted = false;
         try {
             $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, &$attempted): ResponseInterface {

@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** open
+**Resolution:** closed
 
 **Spec:** [Specification](../spec.md)
 
@@ -16,18 +16,36 @@ Create and maintain basic Graph subscriptions, validate callbacks and lifecycle 
 
 ## Acceptance criteria
 
-- [ ] Expose subscription creation, renewal and removal with selected grant, target resource, provider identity and expiry; support host-managed registration maintenance.
-- [ ] Request basic notifications with includeResourceData=false and explicitly reject rich encrypted mode, certificate management or decryption requests.
-- [ ] Handle validation handshakes according to the provider contract and validate secret client state, subscription, tenant/resource and lifecycle binding before emitting usable signals.
-- [ ] Accept legitimate basic notifications that carry resourceData identity metadata; its presence alone does not mean rich mode.
-- [ ] Reject unknown/mismatched resources, stale generations and invalid secrets without exposing secrets in public results or logs.
-- [ ] Surface missed, removed and reauthorization lifecycle signals. Duplicates/out-of-order notifications only request reconciliation from committed per-folder progress.
-- [ ] Keep endpoint authorization/configuration, durable receipt acknowledgement, scheduling and dispatch in the host; report actual capability/setup limitations.
-- [ ] Document subscription prerequisites, renewal, basic-mode scope and recovery scans.
+- [x] Expose subscription creation, renewal and removal with selected grant, target resource, provider identity and expiry; support host-managed registration maintenance.
+- [x] Request basic notifications with includeResourceData=false and explicitly reject rich encrypted mode, certificate management or decryption requests.
+- [x] Handle validation handshakes according to the provider contract and validate secret client state, subscription, tenant/resource and lifecycle binding before emitting usable signals.
+- [x] Accept legitimate basic notifications that carry resourceData identity metadata; its presence alone does not mean rich mode.
+- [x] Reject unknown/mismatched resources, stale generations and invalid secrets without exposing secrets in public results or logs.
+- [x] Surface missed, removed and reauthorization lifecycle signals. Duplicates/out-of-order notifications only request reconciliation from committed per-folder progress.
+- [x] Keep endpoint authorization/configuration, durable receipt acknowledgement, scheduling and dispatch in the host; report actual capability/setup limitations.
+- [x] Document subscription prerequisites, renewal, basic-mode scope and recovery scans.
 
 ## Verification
 
 - Exercise real subscription create/renew/delete HTTP plus raw handshake and notification/lifecycle validation paths.
 - Cover legitimate basic identity metadata, rich-mode rejection, bad client state, wrong tenant/resource/subscription, batched/malformed events, expiry, duplicates and stale generations.
 - Assert no direct provider-data publication, checkpoint advancement or package-owned callback queue.
+
+## Comments
+
+- 2026-10-29: Claimed by the ticket 23 implementer on `feat/mailbox-sdk-23`, created clean without an upstream from integration `472743cf90f7855a9a495b3b8fecd6c7933e1463`. Scope is optional basic Graph subscription maintenance and raw callback validation through the approved public SDK → real provider/client seam with HTTP fakes and SDK database access forbidden. Public endpoints, receipts, scheduling, dispatch, live setup and provider calls remain host responsibilities. Heavy checks and dependency bootstrap wait for the root's serialized check slot.
+
+- 2026-10-29: Implemented optional `SupportsGraphSubscriptions` with separate create, renew, remove, raw handshake and raw notification operations. Registration retains the selected context, trusted tenant/canonical mailbox mapping, folder scope, provider subscription ID, actual expiry and lifecycle state. Basic requests explicitly send `includeResourceData=false`; requested rich mode, certificates and incoming encrypted/full-resource payloads return clear unsupported errors. Expired or removed registrations cannot be renewed, and late valid notifications return scoped recovery hints.
+
+- 2026-10-29: Callback validation covers the whole bounded batch before returning hints: known subscription, constant-time client-state comparison, tenant, expiry evidence, configured endpoint, trusted mailbox identity and message identity metadata. Documented slash/OData resource forms and canonical ID or canonical ID with tenant are accepted only against the host-established mapping. Known folder aliases may normalize case; opaque IDs remain exact. Lifecycle events bind through their retained subscription because the provider omits a resource path. Multiple known registrations retain their separate folder scopes; duplicates and older notifications do not promote checkpoints or publish data.
+
+- 2026-10-29: Real REDs reproduced missing create/renew/callback capabilities, invalid requested expiry reaching HTTP, raw malformed-date exception disclosure, missing rich-mode capability errors, malformed basic etag acceptance, syntactically valid truncated bodies accepted despite Content-Length, documented resource normalization rejected, contradictory provider acknowledgements accepted, inactive renewal reaching HTTP, and same-captured non-Graph contexts acquiring a token. Each was corrected at the public provider/client seam. Callback reads enforce actual byte budgets, reject content encoding and length mismatches, preserve host-owned streams, and sanitize unreadable-body errors with exception arguments enabled in the privacy regression.
+
+- 2026-10-29: The shared transport change only extracts the existing one-attempt exchange/receipt into a private method. Existing `requestOnce()` retains its original byte-budget and destination validation. Typed Graph subscription methods construct their exact global endpoint internally, validate the full captured grant context and reuse that receipt, including no redirects, identity encoding, bounded response reading, safe headers, cleanup and no replay/job release. Existing raw scope restrictions remain verified. The mailbox constructor gains one optional trailing lifecycle guard, retained through named construction; mandatory interfaces and existing constructors remain compatible. No dependency changes.
+
+- 2026-10-29: Verification at source `712bad894dd3e93b343ba16009d8d88d94bf36b6`, including integration `36bd463fd32496472d46e07427dc8dd9e366ae69` (tickets 18 and 20), used one heavy check at a time. Focused subscriptions: 94 passed, 398 assertions, two workers. Final affected provider/auth/raw transport/custom-driver/architecture/native-submission set: 433 passed, 1,892 assertions, two workers, 22.39 seconds, actual exit 0. The affected command selected `GraphSubscriptionTest|GraphSubmissionTest|GraphNativeSubmissionTest|GmailWatchTest|GmailSubmissionTest|GmailFileSubmissionTest|ExplicitGrantReadTest|GraphClientTest|MsGraphMailboxResourceDirectTest|GmailClientTest|PerformsApiRequestsTest|DriverResolutionTest|ArchitectureTest|TypeCoverageTest` with `pest tests --filter=... --parallel --processes=2 --compact`. SDK tests forbid database access; legacy tests use Testbench SQLite memory or owned worker files with isolated RefreshDatabase setup. No application database or destructive MySQL operation was used.
+
+- 2026-10-29: Full-source PHPStan level 8 ran with `--debug --no-progress --memory-limit=512M` in one process. It found only two redundant type conditions in the new validator; the helper annotation and unreachable empty-string check were corrected, and the changed file then passed the same single-process analysis with exit 0. Unchanged full-source results and behavioral results were retained. Pint passed for all 11 ticket PHP files and `--dirty --format agent`; strict Composer validation, platform requirements and `git diff --check` passed. The unchanged lock installed without scripts and with both process-local Composer parallel limits set to two. Rejected command invocations are not counted as tests.
+
+- 2026-10-29: Added verified usage, trusted identity mapping, endpoint/permission prerequisites, renewal, basic metadata, lifecycle and recovery guidance to [Graph authentication](../../../authentication/ms-graph.md#basic-graph-subscriptions), using current official Microsoft subscription, webhook, Outlook and lifecycle references. Local package acceptance is complete. No full-suite or live-provider acceptance is claimed: designated accounts, consent/scoped application permissions, public callback delivery, deployed receipt/renewal/recovery and live operations remain separate tickets 26/27 gates. No push, PR, release, deployment, live send, provider setup, consumer write or application database change occurred.
 
