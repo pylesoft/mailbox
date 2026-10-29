@@ -340,6 +340,10 @@ Mailbox also validates the `return_to` URL against an allowlist of hosts configu
 MAILBOX_OAUTH_ALLOWED_RETURN_HOSTS=acme.com,app.acme.com
 ```
 
+Both providers accept local application paths such as `/settings/mailbox` and absolute HTTP(S) URLs whose host is explicitly allowed. The same policy applies when initiating OAuth and when returning from success, cancellation, validation errors or failed token exchanges, including values already stored in OAuth state.
+
+Scheme-relative URLs such as `//attacker.example`, backslashes and control characters are rejected because browser normalization can change their destination. This intentionally rejects unsafe destinations accepted by earlier versions. Invalid destinations fall back to a valid `MAILBOX_OAUTH_DEFAULT_RETURN_URL`; when neither destination is valid, the callback keeps its existing JSON response and status. Safe callback fields and connection ownership behavior are unchanged.
+
 ### Encrypt Tokens at Rest
 
 Mailbox encrypts `access_token` and `refresh_token` using Laravel's `encrypted` Eloquent cast. Make sure your `APP_KEY` is set and that you have a backup rotation strategy. If `APP_KEY` changes without re-encrypting stored tokens, all existing OAuth tokens become unreadable.
