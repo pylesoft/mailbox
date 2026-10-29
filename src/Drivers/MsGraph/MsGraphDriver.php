@@ -52,7 +52,14 @@ class MsGraphDriver implements MailboxDriver, SupportsGrantMailbox, SupportsRawC
         $config = array_merge((array) config('mailbox'), $this->config, ['queue_retry_strategy' => 'sleep']);
         $client = new GraphClient($config, $this->tokenManager, $this->rateLimiter, $httpClient, new GrantAuthorization($context, $tokens));
 
-        return new MsGraphMailboxResource($client, new BatchRequest($client), new MsGraphDeltaSync($client), $context->mailbox, $context);
+        return new MsGraphMailboxResource(
+            client: $client,
+            batch: new BatchRequest($client),
+            deltaSync: new MsGraphDeltaSync($client),
+            emailAddress: $context->mailbox,
+            grantContext: $context,
+            grantGuard: $tokens,
+        );
     }
 
     public function testConnection(?string $emailAddress = null): ConnectionTestResult

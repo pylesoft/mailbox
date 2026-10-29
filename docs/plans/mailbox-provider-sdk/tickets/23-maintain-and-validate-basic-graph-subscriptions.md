@@ -31,3 +31,7 @@ Create and maintain basic Graph subscriptions, validate callbacks and lifecycle 
 - Cover legitimate basic identity metadata, rich-mode rejection, bad client state, wrong tenant/resource/subscription, batched/malformed events, expiry, duplicates and stale generations.
 - Assert no direct provider-data publication, checkpoint advancement or package-owned callback queue.
 
+## Comments
+
+- 2026-10-29: Claimed by the ticket 23 implementer on `feat/mailbox-sdk-23`, created clean without an upstream from integration `472743cf90f7855a9a495b3b8fecd6c7933e1463`. Scope is optional basic Graph subscription maintenance and raw callback validation through the approved public SDK → real provider/client seam with HTTP fakes and SDK database access forbidden. Public endpoints, receipts, scheduling, dispatch, live setup and provider calls remain host responsibilities. Heavy checks and dependency bootstrap wait for the root's serialized check slot.
+
