@@ -18,6 +18,8 @@ use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSharedMailboxLive;
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\VerifiesGraphSharedMailboxLiveAccess;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConversationRead;
@@ -36,7 +38,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -46,6 +48,19 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         private readonly ?GrantContext $grantContext = null,
         private readonly ?GrantAccessGuard $grantGuard = null,
     ) {}
+
+    public function requireSharedMailboxLive(GraphSubscriptionRegistration $registration): void
+    {
+        if ($this->grantContext === null || ! $this->grantGuard instanceof VerifiesGraphSharedMailboxLiveAccess) {
+            throw new UnsupportedCapabilityException('Required shared-mailbox live mode needs a captured host verifier for application authority and push setup.');
+        }
+        $this->grantGuard->assertActive($this->grantContext);
+        if (! $this->grantContext->matches($registration->context) || $registration->lifecycle() !== 'active') {
+            throw new UnsupportedCapabilityException('Required shared-mailbox live mode needs an active, unexpired subscription for the exact selected grant context.');
+        }
+        $this->grantGuard->assertSharedMailboxLive($this->grantContext, $registration->configuration);
+        $this->grantGuard->assertActive($this->grantContext);
+    }
 
     public function createSubscription(GraphSubscriptionConfiguration $configuration, \DateTimeImmutable $expiresAt): GraphSubscriptionRegistration
     {
