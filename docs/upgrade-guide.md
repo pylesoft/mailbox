@@ -26,6 +26,12 @@ Authenticated Graph and Gmail clients reject destinations outside their configur
 
 Transport errors and logs no longer retain raw provider bodies, bearer headers or continuation queries. Native client and delta-result debug dumps redact secrets. The existing checkpoint property and array/JSON values remain unchanged for private persistence.
 
+## Unreleased: Resumable Gmail Initial Synchronization
+
+Explicit-grant Gmail resources now expose the optional `SupportsInitialSync` capability. It returns bounded message-ID evidence with separate continuations and completed checkpoints. The host retains evidence before advancing progress. See [bounded initial synchronization](delta-sync.md#bounded-gmail-initial-synchronization) for scope, baseline ordering, budgets and replay responsibilities.
+
+Existing eager Gmail method signatures remain available. A query that reaches its page limit or repeats a page token now throws `ApiRequestException` instead of silently returning a partial collection. Eager initial delta captures its history baseline before listing and refuses completion without a baseline. Consumers that intentionally read a subset may keep using `take()`; consumers that need resumable imports should use the new capability.
+
 ## Checking Your Current Version
 
 You can check which version of Mailbox you have installed at any time:

@@ -9,15 +9,32 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsInitialSync;
+use Pyle\Mailbox\DTOs\ChangePage;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncContinuation;
+use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource
+class GmailMailboxResource implements MailboxResource, SupportsInitialSync
 {
     public function __construct(
         private readonly GmailClient $client,
         private readonly GmailDeltaSync $deltaSync,
         private readonly string $emailAddress,
+        private readonly ?GrantContext $grantContext = null,
     ) {}
+
+    public function initialSync(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation = null): ChangePage
+    {
+        if ($this->grantContext === null) {
+            throw new UnsupportedCapabilityException('Bounded synchronization requires an explicit grant context.');
+        }
+
+        return (new GmailInitialSync($this->client, $this->grantContext))->page($scope, $budget, $continuation);
+    }
 
     public function messages(): MessageQueryBuilder
     {
