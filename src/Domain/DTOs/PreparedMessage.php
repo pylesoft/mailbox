@@ -11,7 +11,7 @@ final readonly class PreparedMessage
      * @param  list<EmailAddressDto>  $cc
      * @param  list<EmailAddressDto>  $bcc
      * @param  array<string, string>  $headers
-     * @param  list<mixed>  $files
+     * @param  list<PreparedFile>  $files
      */
     public function __construct(
         public EmailAddressDto $sender,

@@ -53,9 +53,6 @@ class GmailClient
 
     public function submitMessage(PreparedMessage $message, string $mailbox, int $maxRequestBytes = 1_048_576): SubmissionResult
     {
-        if ($message->files !== []) {
-            throw new UnsupportedCapabilityException('Gmail file-bearing submission is not supported.');
-        }
         $raw = PreparedMessageMime::encode($message, $maxRequestBytes);
         $payload = json_encode(['raw' => rtrim(strtr(base64_encode($raw), '+/', '-_'), '=')], JSON_THROW_ON_ERROR);
         if (strlen($payload) > $maxRequestBytes) {

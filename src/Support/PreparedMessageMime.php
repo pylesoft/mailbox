@@ -6,11 +6,13 @@ namespace Pyle\Mailbox\Support;
 
 use InvalidArgumentException;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
+use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Exception\ExceptionInterface;
+use Symfony\Component\Mime\Part\DataPart;
 
 final class PreparedMessageMime
 {
@@ -28,6 +30,9 @@ final class PreparedMessageMime
             foreach ($addresses as $address) {
                 $inputBytes += strlen($address->name) + strlen($address->address);
             }
+        }
+        foreach ($message->files as $file) {
+            $inputBytes += $file->byteLength + strlen($file->name) + strlen($file->mediaType);
         }
         if ($inputBytes > $maxBytes) {
             throw new UnsupportedCapabilityException('The prepared content exceeds the submission byte budget.');
@@ -57,22 +62,43 @@ final class PreparedMessageMime
             $email->getHeaders()->addTextHeader($name, $value);
         }
         $email->getHeaders()->addTextHeader('X-Mailbox-Correlation-Id', $message->correlationId);
-        $email->ensureValidity();
-        $headers = $email->getPreparedHeaders();
-        // Gmail routes recipients from MIME headers; Symfony removes Bcc for envelope-based transports.
-        if ($message->bcc !== []) {
-            $headers->addMailboxListHeader('Bcc', array_map(self::address(...), $message->bcc));
-        }
-
-        $mime = $headers->toString();
-        foreach ($email->getBody()->toIterable() as $chunk) {
-            if (strlen($mime) + strlen($chunk) > $maxBytes) {
-                throw new UnsupportedCapabilityException('The encoded MIME exceeds the submission byte budget.');
+        $snapshots = [];
+        try {
+            foreach ($message->files as $file) {
+                $snapshot = $file->openVerified()->detach();
+                $snapshots[] = $snapshot;
+                $part = new DataPart($snapshot, $file->name, $file->mediaType);
+                if ($file->inline) {
+                    $part->asInline();
+                }
+                if ($file->contentId !== null) {
+                    $part->setContentId($file->contentId);
+                }
+                $email->addPart($part);
             }
-            $mime .= $chunk;
-        }
+            $email->ensureValidity();
+            $headers = $email->getPreparedHeaders();
+            // Gmail routes recipients from MIME headers; Symfony removes Bcc for envelope-based transports.
+            if ($message->bcc !== []) {
+                $headers->addMailboxListHeader('Bcc', array_map(self::address(...), $message->bcc));
+            }
 
-        return $mime;
+            $mime = $headers->toString();
+            foreach ($email->getBody()->toIterable() as $chunk) {
+                if (strlen($mime) + strlen($chunk) > $maxBytes) {
+                    throw new UnsupportedCapabilityException('The encoded MIME exceeds the submission byte budget.');
+                }
+                $mime .= $chunk;
+            }
+
+            return $mime;
+        } finally {
+            foreach ($snapshots as $snapshot) {
+                if (is_resource($snapshot)) {
+                    fclose($snapshot);
+                }
+            }
+        }
     }
 
     private static function address(EmailAddressDto $address): Address
@@ -100,6 +126,14 @@ final class PreparedMessageMime
         foreach ([$message->textBody, $message->htmlBody] as $body) {
             if ($body !== null && ! mb_check_encoding($body, 'UTF-8')) {
                 throw new InvalidArgumentException('Prepared text and HTML must be valid UTF-8.');
+            }
+        }
+        if (! array_is_list($message->files)) {
+            throw new InvalidArgumentException('Prepared files must be a list.');
+        }
+        foreach ($message->files as $file) {
+            if (! $file instanceof PreparedFile) {
+                throw new UnsupportedCapabilityException('Prepared files require structured immutable file sources.');
             }
         }
     }
