@@ -89,8 +89,10 @@ final class GmailGrantOAuthService
         $claims = $this->identityClaims($data['id_token'] ?? null, $clientId, $payload->nonce());
         $identity = new GrantIdentity('gmail', 'https://accounts.google.com', $claims['sub'], $clientId);
         $refreshToken = $this->token($data['refresh_token'] ?? null);
+        $nonceHash = hash('sha256', $payload->nonce());
         if (! array_key_exists('refresh_token', $data) && $previous !== null && $previous->identity->matches($identity)) {
             $refreshToken = $this->token($previous->refreshToken());
+            $nonceHash = $previous->nonceHash();
         }
         if ($refreshToken === null) {
             throw new OAuthEnrollmentException('Renewable Google authorization is missing. Reconnect with offline consent.');
@@ -105,6 +107,7 @@ final class GmailGrantOAuthService
             now()->addSeconds($data['expires_in'])->toDateTimeImmutable(), $scopes, bin2hex(random_bytes(16)),
             is_string($claims['email'] ?? null) ? $claims['email'] : null,
             ['display_name' => $claims['name'] ?? null, 'hosted_domain' => $claims['hd'] ?? null],
+            $nonceHash,
         );
         $this->assertAllowed($context, $hostContext);
         if (! $this->grants->replace($context, $previous, $grant)) {
