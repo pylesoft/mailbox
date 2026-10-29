@@ -11,6 +11,7 @@ use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\SupportsConversationRead;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
+use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
@@ -18,6 +19,7 @@ use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionEvidence;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
@@ -27,7 +29,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftSubmission, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -54,6 +56,11 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
     public function submitPrepared(SubmissionPreparation $preparation, PreparedMessage $message): SubmissionResult
     {
         return $this->draftSubmission()->submit($preparation, $message);
+    }
+
+    public function inspectSubmission(SubmissionPreparation $preparation, PreparedMessage $message): SubmissionEvidence
+    {
+        return $this->draftSubmission()->inspect($preparation, $message);
     }
 
     private function draftSubmission(): MsGraphDraftSubmission
