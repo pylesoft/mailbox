@@ -11,9 +11,9 @@ use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
-use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Exception\ExceptionInterface;
@@ -78,22 +78,8 @@ final class PreparedMessageMime
             throw new InvalidArgumentException('The submission byte budget must be positive.');
         }
         $remainingFileBytes = $limits->maxTotalFileBytes;
-        $metadataBytes = strlen($message->subject) + strlen($message->correlationId);
-        foreach ($message->headers as $name => $value) {
-            $metadataBytes += (is_string($name) ? strlen($name) : 0) + (is_string($value) ? strlen($value) : 0);
-        }
-        foreach ([$message->to, $message->cc, $message->bcc, [$message->sender]] as $addresses) {
-            foreach ($addresses as $address) {
-                if ($address instanceof EmailAddressDto) {
-                    $metadataBytes += strlen($address->name) + strlen($address->address) + 4096;
-                }
-            }
-        }
-        foreach ($message->files as $file) {
-            if ($file instanceof PreparedFile) {
-                $metadataBytes += strlen($file->name) + strlen($file->mediaType) + strlen($file->identity) + strlen($file->contentId ?? '') + 4096;
-            }
-        }
+        $metadataBytes = strlen($message->subject) + strlen($message->correlationId)
+            + self::metadataBytes($message->headers, [$message->to, $message->cc, $message->bcc, [$message->sender]], $message->files);
         if ($metadataBytes > intdiv(PHP_INT_MAX - 262_144, 8)) {
             throw new UnsupportedCapabilityException('The prepared metadata exceeds its allocation budget.');
         }
@@ -123,42 +109,72 @@ final class PreparedMessageMime
         }
     }
 
+    /**
+     * @param  array<array-key, mixed>  $headers
+     * @param  list<array<array-key, mixed>>  $addressLists
+     * @param  array<array-key, mixed>  $files
+     */
+    private static function metadataBytes(array $headers, array $addressLists, array $files): int
+    {
+        $metadataBytes = 0;
+        foreach ($headers as $name => $value) {
+            $metadataBytes += (is_string($name) ? strlen($name) : 0) + (is_string($value) ? strlen($value) : 0);
+        }
+        foreach ($addressLists as $addresses) {
+            foreach ($addresses as $address) {
+                if ($address instanceof EmailAddressDto) {
+                    $metadataBytes += strlen($address->name) + strlen($address->address) + 4096;
+                }
+            }
+        }
+        foreach ($files as $file) {
+            if ($file instanceof PreparedFile) {
+                $metadataBytes += strlen($file->name) + strlen($file->mediaType) + strlen($file->identity) + strlen($file->contentId ?? '') + 4096;
+            }
+        }
+
+        return $metadataBytes;
+    }
+
     /** @return iterable<string> */
     private static function chunks(PreparedMessage $message, int $maxBytes, ResponseBudget $budget): iterable
     {
         $snapshots = [];
         try {
-        $email = (new Email)
-            ->from(self::address($message->sender))
-            ->to(...array_map(self::address(...), $message->to))
-            ->cc(...array_map(self::address(...), $message->cc))
-            ->bcc(...array_map(self::address(...), $message->bcc))
-            ->subject($message->subject);
-        $body = null;
-        if ($message->textBody !== null) {
-            $snapshot = self::temporaryFile();
-            $snapshots[] = $snapshot;
-            self::write($snapshot, $message->textBody);
-            $body = new TextPart($snapshot, 'utf-8', 'plain', 'base64');
-        }
-        if ($message->htmlBody !== null) {
-            $snapshot = self::temporaryFile();
-            $snapshots[] = $snapshot;
-            self::write($snapshot, $message->htmlBody);
-            $html = new TextPart($snapshot, 'utf-8', 'html', 'base64');
-            $body = $body === null ? $html : new AlternativePart($body, $html);
-        }
-        if ($body === null) {
-            throw new InvalidArgumentException('The prepared message requires text or HTML content.');
-        }
-        foreach ($message->headers as $name => $value) {
-            $email->getHeaders()->addTextHeader($name, $value);
-        }
-        $email->getHeaders()->addTextHeader('X-Mailbox-Correlation-Id', $message->correlationId);
-        $inlineParts = $attachments = [];
+            $email = (new Email)
+                ->from(self::address($message->sender))
+                ->to(...array_map(self::address(...), $message->to))
+                ->cc(...array_map(self::address(...), $message->cc))
+                ->bcc(...array_map(self::address(...), $message->bcc))
+                ->subject($message->subject);
+            $body = null;
+            if ($message->textBody !== null) {
+                $snapshot = self::temporaryFile();
+                $snapshots[] = $snapshot;
+                self::write($snapshot, $message->textBody);
+                $body = new TextPart($snapshot, 'utf-8', 'plain', 'base64');
+            }
+            if ($message->htmlBody !== null) {
+                $snapshot = self::temporaryFile();
+                $snapshots[] = $snapshot;
+                self::write($snapshot, $message->htmlBody);
+                $html = new TextPart($snapshot, 'utf-8', 'html', 'base64');
+                $body = $body === null ? $html : new AlternativePart($body, $html);
+            }
+            if ($body === null) {
+                throw new InvalidArgumentException('The prepared message requires text or HTML content.');
+            }
+            foreach ($message->headers as $name => $value) {
+                $email->getHeaders()->addTextHeader($name, $value);
+            }
+            $email->getHeaders()->addTextHeader('X-Mailbox-Correlation-Id', $message->correlationId);
+            $inlineParts = $attachments = [];
             foreach ($message->files as $file) {
                 $budget->assertMemoryAvailable(262_144);
                 $snapshot = $file->openVerified()->detach();
+                if (! is_resource($snapshot)) {
+                    throw new MailboxException('The verified prepared file snapshot is unavailable.');
+                }
                 $snapshots[] = $snapshot;
                 $part = new DataPart($snapshot, $file->name, $file->mediaType);
                 if ($file->inline) {
@@ -258,11 +274,17 @@ final class PreparedMessageMime
                 throw new InvalidArgumentException('Prepared text and HTML must be valid UTF-8.');
             }
         }
-        if (! array_is_list($message->files)) {
+        self::validateFiles($message->files);
+    }
+
+    /** @param array<array-key, mixed> $files */
+    private static function validateFiles(array $files): void
+    {
+        if (! array_is_list($files)) {
             throw new InvalidArgumentException('Prepared files must be a list.');
         }
         $identities = $contentIds = [];
-        foreach ($message->files as $file) {
+        foreach ($files as $file) {
             if (! $file instanceof PreparedFile) {
                 throw new UnsupportedCapabilityException('Prepared files require structured immutable file sources.');
             }

@@ -3,22 +3,29 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
-use GuzzleHttp\Promise\Create;
 use Psr\Http\Message\RequestInterface;
+use Pyle\Mailbox\Contracts\GmailPushVerifier;
+use Pyle\Mailbox\Contracts\SupportsConversationRead;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
 use Pyle\Mailbox\Contracts\SupportsSubmissionLimits;
+use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailWatch;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
+use Pyle\Mailbox\DTOs\GmailWatchConfiguration;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
+use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
@@ -138,6 +145,39 @@ it('enforces configurable decoded file limits before opening any selected source
         ->and($history)->toBe([]);
 })->with(['single file' => false, 'aggregate files' => true]);
 
+it('retains watch notification and lifecycle authority after configuring submission limits', function (): void {
+    $history = [];
+    $handler = HandlerStack::create(new MockHandler([new Response(200, [], '{"historyId":"100","expiration":"1893456000123"}')]));
+    $handler->push(Middleware::history($history));
+    $tokens = new TestGrantTokenProvider(['grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'private-token']]);
+    $context = new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com');
+    $limited = Mailbox::forGrant($context, $tokens, new Client(['handler' => $handler]))
+        ->withSubmissionLimits(new SubmissionLimits(maxFileBytes: 4));
+    expect($limited)->toBeInstanceOf(SupportsGmailWatch::class)->toBeInstanceOf(SupportsConversationRead::class);
+    $configuration = new GmailWatchConfiguration('projects/project/topics/mail', 'projects/project/subscriptions/mail-push', 'https://host.example/gmail-push', 'push@project.iam.gserviceaccount.com', '123456789');
+    $registration = $limited->watch($configuration);
+    $request = new Request('POST', 'https://host.example/gmail-push', ['Content-Type' => 'application/json'], json_encode([
+        'message' => ['messageId' => 'notification-1', 'data' => base64_encode('{"emailAddress":"sender@example.com","historyId":"110"}')],
+        'subscription' => 'projects/project/subscriptions/mail-push',
+    ], JSON_THROW_ON_ERROR));
+    $verifier = new class implements GmailPushVerifier
+    {
+        public function verify(RequestInterface $request): array
+        {
+            return ['iss' => 'https://accounts.google.com', 'aud' => 'https://host.example/gmail-push', 'sub' => '123456789',
+                'email' => 'push@project.iam.gserviceaccount.com', 'email_verified' => true, 'iat' => time() - 60, 'exp' => time() + 600];
+        }
+    };
+    $hint = $limited->notification($request, $registration, $verifier);
+    expect($hint->context)->toBe($context)->and($hint->historyId)->toBe('110');
+    $file = new PreparedFile('host-1', 'file.bin', 'application/octet-stream', 5, static fn () => Utils::streamFor('bytes'), hash('sha256', 'bytes'));
+    expect(fn () => $limited->submit(fileSubmissionMessage([$file])))->toThrow(UnsupportedCapabilityException::class);
+    $tokens->grants['grant']['generation'] = '2';
+    expect(fn () => $limited->notification($request, $registration, $verifier))->toThrow(GrantAccessDeniedException::class);
+    expect(fn () => $limited->watch($configuration))->toThrow(GrantAccessDeniedException::class);
+    expect($history)->toHaveCount(1);
+});
+
 it('bounds a buffering HTTP handler before it can materialize the whole Gmail JSON body', function (): void {
     $received = false;
     $attempts = 0;
@@ -164,6 +204,96 @@ it('bounds a buffering HTTP handler before it can materialize the whole Gmail JS
         ->and($body->getSize())->toBeNull();
 });
 
+it('closes owned submission resources after acceptance or uncertainty and preserves host storage', function (bool $timeout): void {
+    $path = tempnam(sys_get_temp_dir(), 'mailbox-host-');
+    file_put_contents($path, 'host-original');
+    $source = $body = null;
+    $attempts = 0;
+    $http = new Client(['handler' => static function (RequestInterface $request) use ($timeout, &$body, &$attempts) {
+        $attempts++;
+        $body = $request->getBody();
+        if ($timeout) {
+            throw new ConnectException('private-network-secret', new Request('POST', 'https://private-upload-secret'));
+        }
+
+        return Create::promiseFor(new Response(200, [], '{"id":"accepted-file-message"}'));
+    }]);
+    $file = new PreparedFile('host-1', 'host.bin', 'application/octet-stream', 13, static function () use ($path, &$source) {
+        $source = Utils::streamFor(fopen($path, 'rb'));
+
+        return $source;
+    }, hash('sha256', 'host-original'));
+    $history = [];
+    $mailbox = fileSubmissionMailbox([], $history, $http);
+    try {
+        $result = $mailbox->submit(fileSubmissionMessage([$file]));
+
+        expect($result->outcome)->toBe($timeout ? SubmissionOutcome::Uncertain : SubmissionOutcome::Accepted)
+            ->and($attempts)->toBe(1)
+            ->and($source->isReadable())->toBeFalse()
+            ->and($body->isReadable())->toBeFalse()
+            ->and($body->getSize())->toBeNull()
+            ->and(file_get_contents($path))->toBe('host-original');
+        expect(json_encode($result, JSON_THROW_ON_ERROR))->not->toContain('private-network-secret');
+        expect(json_encode($result, JSON_THROW_ON_ERROR))->not->toContain('private-upload-secret');
+    } finally {
+        unlink($path);
+    }
+})->with(['accepted' => false, 'lost acknowledgement' => true]);
+
+it('keeps source content and its fingerprint out of ordinary prepared file debug and JSON', function (): void {
+    $bytes = 'private-file-content';
+    $fingerprint = hash('sha256', $bytes);
+    $file = new PreparedFile('host-1', 'safe-name.bin', 'application/octet-stream', strlen($bytes), static fn () => Utils::streamFor($bytes), $fingerprint);
+
+    foreach ([json_encode($file, JSON_THROW_ON_ERROR), print_r($file, true)] as $representation) {
+        expect($representation)->not->toContain($bytes);
+        expect($representation)->not->toContain($fingerprint);
+    }
+});
+
+it('retains every selected same-name attachment without inferring inline content from HTML', function (): void {
+    $history = [];
+    $mailbox = fileSubmissionMailbox([new Response(200, [], '{"id":"accepted-file-message"}')], $history);
+    $files = [
+        new PreparedFile('first', 'same-name', 'application/octet-stream', 3, static fn () => Utils::streamFor('one'), hash('sha256', 'one')),
+        new PreparedFile('second', 'same-name', 'application/octet-stream', 3, static fn () => Utils::streamFor('two'), hash('sha256', 'two')),
+    ];
+    $mailbox->submit(fileSubmissionMessage($files, '<p><img src="cid:same-name"></p>'));
+
+    $payload = json_decode((string) $history[0]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $parsed = (new MailMimeParser)->parse(base64_decode(strtr($payload['raw'], '-_', '+/'), true), false);
+    $parts = $parsed->getAllAttachmentParts();
+    expect($parsed->getHtmlContent())->toBe('<p><img src="cid:same-name"></p>')
+        ->and($parts)->toHaveCount(2)
+        ->and($parts[0]->getContent())->toBe('one')
+        ->and($parts[1]->getContent())->toBe('two')
+        ->and($parts[0]->getContentDisposition())->toBe('attachment')
+        ->and($parts[1]->getContentDisposition())->toBe('attachment')
+        ->and($parts[0]->getContentId())->toBeNull()
+        ->and($parts[1]->getContentId())->toBeNull();
+});
+
+it('rejects unsafe prepared file metadata before any source can open', function (array $changes): void {
+    $opened = false;
+    $arguments = array_replace([
+        'identity' => 'host-1', 'name' => 'file.bin', 'mediaType' => 'application/octet-stream', 'byteLength' => 5,
+        'source' => static function () use (&$opened) {
+            $opened = true;
+
+            return Utils::streamFor('bytes');
+        }, 'sha256' => hash('sha256', 'bytes'),
+    ], $changes);
+
+    expect(fn () => new PreparedFile(...$arguments))->toThrow(InvalidArgumentException::class)
+        ->and($opened)->toBeFalse();
+})->with([
+    'filename injection' => [['name' => "file.bin\r\nBcc: hidden@example.com"]],
+    'type injection' => [['mediaType' => "application/octet-stream\r\nX-Hidden: yes"]],
+    'Content-ID injection' => [['contentId' => "chosen@example.com\r\nX-Hidden: yes"]],
+    'missing byte binding' => [['sha256' => '']],
+]);
+
 it('rejects a same-length changed source after reopening with the original persisted fingerprint', function (): void {
     $path = tempnam(sys_get_temp_dir(), 'mailbox-host-');
     file_put_contents($path, 'first');
@@ -186,23 +316,53 @@ it('rejects a same-length changed source after reopening with the original persi
     }
 });
 
+it('submits an explicitly bound zero-byte file as an empty attachment', function (): void {
+    $history = [];
+    $mailbox = fileSubmissionMailbox([new Response(200, [], '{"id":"accepted-empty-file"}')], $history);
+    $file = new PreparedFile('empty', 'empty.bin', 'application/octet-stream', 0, static fn () => Utils::streamFor(''), hash('sha256', ''));
+
+    $result = $mailbox->submit(fileSubmissionMessage([$file]));
+
+    $payload = json_decode((string) $history[0]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $parsed = (new MailMimeParser)->parse(base64_decode(strtr($payload['raw'], '-_', '+/'), true), false);
+    $part = $parsed->getAttachmentPart(0);
+    $sections = explode("\r\n\r\n", (string) $part->getStream(), 2);
+    expect($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($parsed->getAllAttachmentParts())->toHaveCount(1)
+        ->and($part->getFilename())->toBe('empty.bin')
+        ->and($part->getContentTransferEncoding())->toBe('base64')
+        ->and($sections)->toHaveCount(2)
+        ->and(base64_decode($sections[1], true))->toBe('');
+});
+
+it('rejects a no-progress source that has not reached EOF rather than treating it as empty content', function (): void {
+    $history = [];
+    $mailbox = fileSubmissionMailbox([], $history);
+    $file = new PreparedFile('empty', 'empty.bin', 'application/octet-stream', 0, static fn () => FnStream::decorate(Utils::streamFor(''), [
+        'read' => static fn (int $length): string => '', 'eof' => static fn (): bool => false,
+    ]), hash('sha256', ''));
+
+    expect(fn () => $mailbox->submit(fileSubmissionMessage([$file])))->toThrow(MailboxException::class)
+        ->and($history)->toBe([]);
+});
+
 it('rejects invalid source lengths fingerprints and interrupted reads before any send', function (int $length, string $fingerprint, bool $interrupted): void {
     $closed = false;
     $source = static function () use (&$closed, $interrupted) {
         $stream = Utils::streamFor('bytes');
 
         return FnStream::decorate($stream, [
-        'read' => static function (int $bytes) use ($interrupted, $stream): string {
-            if ($interrupted) {
-                throw new RuntimeException('private-host-path private-file-secret');
-            }
+            'read' => static function (int $bytes) use ($interrupted, $stream): string {
+                if ($interrupted) {
+                    throw new RuntimeException('private-host-path private-file-secret');
+                }
 
-            return $stream->read($bytes);
-        },
-        'close' => static function () use (&$closed, $stream): void {
-            $closed = true;
-            $stream->close();
-        },
+                return $stream->read($bytes);
+            },
+            'close' => static function () use (&$closed, $stream): void {
+                $closed = true;
+                $stream->close();
+            },
         ]);
     };
     $file = new PreparedFile('host-1', 'source.bin', 'application/octet-stream', $length, $source, $fingerprint);
@@ -242,8 +402,8 @@ function fileSubmissionMessage(array $files, string $htmlBody = '<p>Chosen HTML 
 }
 
 /**
- * @param list<mixed> $responses
- * @param array<int, mixed> $history
+ * @param  list<mixed>  $responses
+ * @param  array<int, mixed>  $history
  */
 function fileSubmissionMailbox(array $responses, array &$history, ?Client $http = null): SupportsMessageSubmission
 {

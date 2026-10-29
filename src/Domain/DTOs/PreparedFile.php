@@ -49,9 +49,7 @@ final readonly class PreparedFile
         $snapshot = null;
         try {
             $source = ($this->source)();
-            if (! $source instanceof StreamInterface || ! $source->isReadable()) {
-                throw new MailboxException('The prepared file source is unreadable.');
-            }
+            $source = self::readableSource($source);
             if ($source->isSeekable()) {
                 $source->rewind();
             }
@@ -61,14 +59,20 @@ final readonly class PreparedFile
             }
             $hash = hash_init('sha256');
             $length = 0;
-            while (! $source->eof()) {
+            while (true) {
                 $chunk = $source->read(min(8192, $this->byteLength - $length + 1));
-                if (($chunk === '' && ! $source->eof()) || strlen($chunk) > $this->byteLength - $length) {
+                if ($chunk === '') {
+                    if (! $source->eof()) {
+                        throw new MailboxException('The prepared file source has an interrupted read.');
+                    }
+                    break;
+                }
+                if (strlen($chunk) > $this->byteLength - $length) {
                     throw new MailboxException('The prepared file source has an invalid byte length or interrupted read.');
                 }
                 $length += strlen($chunk);
                 hash_update($hash, $chunk);
-                if ($chunk !== '' && fwrite($snapshot, $chunk) !== strlen($chunk)) {
+                if (fwrite($snapshot, $chunk) !== strlen($chunk)) {
                     throw new MailboxException('The prepared file snapshot could not be written.');
                 }
             }
@@ -92,6 +96,15 @@ final readonly class PreparedFile
                 }
             }
         }
+    }
+
+    private static function readableSource(mixed $source): StreamInterface
+    {
+        if (! $source instanceof StreamInterface || ! $source->isReadable()) {
+            throw new MailboxException('The prepared file source is unreadable.');
+        }
+
+        return $source;
     }
 
     /** @return array<string, mixed> */
