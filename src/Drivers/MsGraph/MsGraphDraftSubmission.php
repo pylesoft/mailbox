@@ -29,6 +29,8 @@ use GuzzleHttp\Psr7\Utils;
 use GuzzleHttp\Psr7\LimitStream;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\GrantRefreshException;
 
 final readonly class MsGraphDraftSubmission
 {
@@ -71,16 +73,7 @@ final readonly class MsGraphDraftSubmission
             }
             $remaining -= $file->byteLength;
         }
-        $index = 0;
-        foreach ($preparation->attachments as $progress) {
-            if ($progress->fileIdentity !== ($message->files[$index]->identity ?? null)) {
-                throw new InvalidArgumentException('The attachment progress does not match the selected file manifest.');
-            }
-            if ($progress->outcome !== PreparationOutcome::Prepared) {
-                break;
-            }
-            $index++;
-        }
+        $index = $this->attachmentIndex($preparation, $message);
         $file = $message->files[$index] ?? null;
         if ($file === null) {
             throw new InvalidArgumentException('Attachment preparation requires an unfinished selected file.');
@@ -116,6 +109,67 @@ final readonly class MsGraphDraftSubmission
             $next->outcome === PreparationOutcome::Prepared && count($attachments) < count($message->files) ? PreparationOutcome::Preparing : $next->outcome,
             $preparation->correlationId, $preparation->draftId, $next->status, $next->headers,
             $preparation->intentFingerprint(), $preparation->conversationId, $attachments);
+    }
+
+    private function attachmentIndex(SubmissionPreparation $preparation, PreparedMessage $message): int
+    {
+        if (! array_is_list($preparation->attachments) || count($preparation->attachments) > count($message->files)) {
+            throw new InvalidArgumentException('The attachment progress has an invalid file manifest.');
+        }
+        $ids = [];
+        foreach ($preparation->attachments as $index => $progress) {
+            $file = $message->files[$index];
+            if (! $progress instanceof AttachmentPreparation || $progress->fileIdentity !== $file->identity
+                || $progress->acknowledgedBytes < 0 || $progress->acknowledgedBytes > $file->byteLength
+                || ($progress->session() !== null && ! $progress->session()->matches($this->context, $preparation->draftId ?? '', $file))) {
+                throw new InvalidArgumentException('The attachment progress does not match its original immutable binding.');
+            }
+            if ($progress->outcome !== PreparationOutcome::Prepared) {
+                if ($index !== count($preparation->attachments) - 1 || $progress->attachmentId !== null) {
+                    throw new InvalidArgumentException('Unfinished attachment work cannot precede another attachment.');
+                }
+
+                return $index;
+            }
+            if ($progress->acknowledgedBytes !== $file->byteLength || ! self::validId($progress->attachmentId)
+                || in_array($progress->attachmentId, $ids, true)) {
+                throw new InvalidArgumentException('Completed attachment progress requires a unique acknowledged identity and exact byte length.');
+            }
+            $ids[] = $progress->attachmentId;
+        }
+
+        return count($preparation->attachments);
+    }
+
+    public function inspectAttachments(SubmissionPreparation $preparation, PreparedMessage $message, SubmissionLimits $limits): SubmissionPreparation
+    {
+        $draftId = $this->assertIntent($preparation, $message);
+        $index = $this->attachmentIndex($preparation, $message);
+        $progress = $preparation->attachments[$index] ?? null;
+        if (! in_array($preparation->outcome, [PreparationOutcome::Uncertain, PreparationOutcome::Expired], true)
+            || $progress === null || ! in_array($progress->outcome, [PreparationOutcome::Uncertain, PreparationOutcome::Expired], true)) {
+            throw new InvalidArgumentException('Inspection requires retained uncertain attachment work on the original draft.');
+        }
+        $file = $message->files[$index];
+        $source = $file->openVerified();
+        $source->close();
+        $response = $this->observe($draftId, $message);
+        $draft = json_decode($response->body() ?? '');
+        if ($response->status !== 200 || ! $draft instanceof \stdClass || ! $this->matchesDraft(get_object_vars($draft), $message, $draftId)
+            || ($preparation->conversationId !== null && ($draft->conversationId ?? null) !== $preparation->conversationId)) {
+            return $preparation;
+        }
+        $knownIds = array_column($preparation->attachments, 'attachmentId');
+        $candidates = array_values(array_filter($draft->attachments, fn (mixed $attachment): bool => $attachment instanceof \stdClass
+            && self::validId($attachment->id ?? null) && ! in_array($attachment->id, $knownIds, true)
+            && $this->attachmentMetadataMatches($attachment, $file)));
+        if (count($candidates) !== 1 || ! $this->attachmentBytesMatch($draftId, $candidates[0]->id, $file, $limits)) {
+            return $preparation;
+        }
+
+        return $this->withAttachment($preparation, $message, $index,
+            new AttachmentPreparation($file->identity, PreparationOutcome::Prepared, $file->byteLength,
+                $candidates[0]->id, $response->status, $response->headers, $progress->session()));
     }
 
     private function largeFileStep(string $draftId, PreparedFile $file, ?AttachmentPreparation $progress, SubmissionLimits $limits, int $maxRequestBytes): AttachmentPreparation
@@ -248,11 +302,19 @@ final readonly class MsGraphDraftSubmission
         if ($preparation->outcome !== PreparationOutcome::Prepared) {
             throw new InvalidArgumentException('Submission requires a completed preparation.');
         }
+        if ($this->attachmentIndex($preparation, $message) !== count($message->files)) {
+            throw new InvalidArgumentException('Submission requires every selected file to have complete retained progress.');
+        }
+        foreach ($message->files as $file) {
+            $source = $file->openVerified();
+            $source->close();
+        }
         $endpoint = $this->endpoint().'/'.rawurlencode($draftId);
         $verification = $this->observe($draftId, $message);
         $draft = json_decode($verification->body() ?? '');
         if ($verification->status !== 200 || ! $draft instanceof \stdClass || ! $this->matchesDraft(get_object_vars($draft), $message, $draftId)
-            || ($preparation->conversationId !== null && ($draft->conversationId ?? null) !== $preparation->conversationId)) {
+            || ($preparation->conversationId !== null && ($draft->conversationId ?? null) !== $preparation->conversationId)
+            || ! $this->filesMatch($draft, $preparation, $message)) {
             throw new ApiRequestException('The Graph draft could not be verified against the prepared intent; no send was attempted.', status: $verification->status, headers: $verification->headers);
         }
         $response = $this->client->requestOnce('POST', $endpoint.'/send', [
@@ -273,6 +335,7 @@ final readonly class MsGraphDraftSubmission
         $copy = json_decode($response->body() ?? '');
         $observed = $response->status === 200 && $copy instanceof \stdClass
             && $this->matchesDraft(get_object_vars($copy), $message, $draftId, false)
+            && $this->filesMatch($copy, $preparation, $message)
             && is_string($copy->conversationId ?? null) && trim($copy->conversationId) !== ''
             && ($preparation->conversationId === null || $copy->conversationId === $preparation->conversationId)
             && is_string($copy->sentDateTime ?? null) && preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\z/', $copy->sentDateTime) === 1
@@ -305,7 +368,7 @@ final readonly class MsGraphDraftSubmission
         return $this->client->requestOnce('GET', $this->endpoint().'/'.rawurlencode($draftId), [
             'query' => [
                 '$select' => 'id,isDraft,from,toRecipients,ccRecipients,bccRecipients,subject,body,internetMessageHeaders,hasAttachments,conversationId,sentDateTime',
-                '$expand' => 'attachments($select=id)',
+                '$expand' => 'attachments($select=id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId)',
             ],
             'headers' => ['Prefer' => 'IdType="ImmutableId", outlook.body-content-type="'.($message->htmlBody === null ? 'text' : 'html').'"'],
         ], $this->context->mailbox, maxResponseBytes: 4_194_304);
@@ -463,7 +526,8 @@ final readonly class MsGraphDraftSubmission
     private function matchesDraft(array $draft, PreparedMessage $message, string $draftId, bool $isDraft = true): bool
     {
         if (($draft['id'] ?? null) !== $draftId || ($draft['isDraft'] ?? null) !== $isDraft
-            || ($draft['hasAttachments'] ?? null) !== false || ($draft['attachments'] ?? null) !== []
+            || ! is_array($draft['attachments'] ?? null) || ! array_is_list($draft['attachments']) || count($draft['attachments']) > 1000
+            || ($message->files === [] && (($draft['hasAttachments'] ?? null) !== false || $draft['attachments'] !== []))
             || array_key_exists('attachments@odata.nextLink', $draft)) {
             return false;
         }
@@ -500,6 +564,64 @@ final readonly class MsGraphDraftSubmission
         }
 
         return true;
+    }
+
+    private function filesMatch(\stdClass $draft, SubmissionPreparation $preparation, PreparedMessage $message): bool
+    {
+        if ($message->files === []) {
+            return true;
+        }
+        if ($this->attachmentIndex($preparation, $message) !== count($message->files)
+            || count($draft->attachments) !== count($message->files)
+            || ($draft->hasAttachments ?? null) !== (count(array_filter($message->files, static fn (PreparedFile $file): bool => ! $file->inline)) > 0)) {
+            return false;
+        }
+        $attachments = [];
+        foreach ($draft->attachments as $attachment) {
+            if (! $attachment instanceof \stdClass || ! self::validId($attachment->id ?? null) || isset($attachments[$attachment->id])) {
+                return false;
+            }
+            $attachments[$attachment->id] = $attachment;
+        }
+        foreach ($message->files as $index => $file) {
+            $id = $preparation->attachments[$index]->attachmentId;
+            if (! is_string($id) || ! isset($attachments[$id]) || ! $this->attachmentMetadataMatches($attachments[$id], $file)
+                || ! $this->attachmentBytesMatch($preparation->draftId ?? '', $id, $file, new SubmissionLimits)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function attachmentMetadataMatches(\stdClass $attachment, PreparedFile $file): bool
+    {
+        return ($attachment->{'@odata.type'} ?? null) === '#microsoft.graph.fileAttachment'
+            && ($attachment->name ?? null) === $file->name && ($attachment->size ?? null) === $file->byteLength
+            && is_string($attachment->contentType ?? null) && strtolower($attachment->contentType) === strtolower($file->mediaType)
+            && ($attachment->isInline ?? null) === $file->inline && ($attachment->contentId ?? null) === $file->contentId;
+    }
+
+    private function attachmentBytesMatch(string $draftId, string $attachmentId, PreparedFile $file, SubmissionLimits $limits): bool
+    {
+        try {
+            $source = $this->client->streamBounded($this->endpoint().'/'.rawurlencode($draftId).'/attachments/'.rawurlencode($attachmentId).'/$value',
+                new ResponseBudget(max(1, $file->byteLength), $limits->maxMemoryBytes), max(1, $file->byteLength), $this->context->mailbox);
+            try {
+                $hash = hash_init('sha256');
+                while (! $source->eof()) {
+                    hash_update($hash, $source->read(8192));
+                }
+
+                return $source->getSize() === $file->byteLength && hash_equals($file->fingerprint(), hash_final($hash));
+            } finally {
+                $source->close();
+            }
+        } catch (GrantAccessDeniedException|GrantRefreshException $exception) {
+            throw $exception;
+        } catch (MailboxException) {
+            return false;
+        }
     }
 
     /** @return list<array{name: string, address: string}>|null */

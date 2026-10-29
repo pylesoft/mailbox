@@ -32,7 +32,7 @@ final readonly class GraphUploadSession
     {
         $url = parse_url($this->uploadUrl);
         if (! is_array($url) || ($url['scheme'] ?? '') !== 'https' || ($url['host'] ?? '') !== 'outlook.office.com'
-            || isset($url['user'], $url['pass']) || isset($url['user']) || isset($url['fragment']) || isset($url['port'])
+            || isset($url['user']) || isset($url['pass']) || isset($url['fragment']) || isset($url['port'])
             || ! is_string($url['query'] ?? null) || $url['query'] === ''
             || preg_match('/[\x00-\x20\x7f\\\\]/', $this->uploadUrl) === 1
             || preg_match("~\\A/api/v2\\.0/Users\\('[^']+'\\)/Messages\\('[^']+'\\)/AttachmentSessions\\('[^']+'\\)\\z~", $url['path'] ?? '') !== 1) {
@@ -48,7 +48,11 @@ final readonly class GraphUploadSession
             return null;
         }
         $url = parse_url($location);
-        $parent = substr(parse_url($this->uploadUrl(), PHP_URL_PATH), 0, strrpos(parse_url($this->uploadUrl(), PHP_URL_PATH), '/'));
+        $path = parse_url($this->uploadUrl(), PHP_URL_PATH);
+        if (! is_string($path) || ($separator = strrpos($path, '/')) === false) {
+            return null;
+        }
+        $parent = substr($path, 0, $separator);
         if (! is_array($url) || ($url['scheme'] ?? '') !== 'https' || ($url['host'] ?? '') !== 'outlook.office.com'
             || isset($url['user']) || isset($url['pass']) || isset($url['fragment']) || isset($url['port']) || isset($url['query'])
             || ! str_starts_with($url['path'] ?? '', $parent.'/Attachments(')

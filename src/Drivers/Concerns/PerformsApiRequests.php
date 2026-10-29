@@ -284,7 +284,10 @@ trait PerformsApiRequests
         return $this->exchangeOnce($method, $target, $options, $mailboxKey, $maxResponseBytes);
     }
 
-    /** @param array<string, mixed> $options */
+    /**
+     * @param array<string, mixed> $options
+     * @param (\Closure(): void)|null $beforeRequest
+     */
     private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null): ProviderWriteResponse
     {
         $attempted = false;

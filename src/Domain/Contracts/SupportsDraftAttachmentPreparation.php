@@ -11,4 +11,6 @@ use Pyle\Mailbox\DTOs\SubmissionPreparation;
 interface SupportsDraftAttachmentPreparation extends SupportsDraftSubmission
 {
     public function prepareAttachments(SubmissionPreparation $preparation, PreparedMessage $message, ?SubmissionLimits $limits = null, int $maxRequestBytes = 4_000_000): SubmissionPreparation;
+
+    public function inspectAttachments(SubmissionPreparation $preparation, PreparedMessage $message, ?SubmissionLimits $limits = null): SubmissionPreparation;
 }

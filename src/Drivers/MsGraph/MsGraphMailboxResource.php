@@ -116,6 +116,11 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         return $this->draftSubmission()->inspect($preparation, $message);
     }
 
+    public function inspectAttachments(SubmissionPreparation $preparation, PreparedMessage $message, ?SubmissionLimits $limits = null): SubmissionPreparation
+    {
+        return $this->draftSubmission()->inspectAttachments($preparation, $message, $limits ?? new SubmissionLimits);
+    }
+
     private function draftSubmission(): MsGraphDraftSubmission
     {
         if ($this->grantContext === null) {

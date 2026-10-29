@@ -60,6 +60,37 @@ it('attaches a chosen small file to the acknowledged immutable draft without sen
         ]);
 });
 
+it('leaves ambiguous or mismatched attachment evidence unresolved without any duplicate write', function (string $case): void {
+    $history = [];
+    $file = ['@odata.type' => '#microsoft.graph.fileAttachment', 'id' => 'candidate=',
+        'name' => 'chosen.txt', 'contentType' => 'text/plain', 'size' => 5, 'isInline' => false, 'contentId' => null];
+    $draft = graphAttachmentDraft([$file]);
+    if ($case === 'duplicate') {
+        $draft['attachments'][] = array_replace($file, ['id' => 'duplicate=']);
+    } elseif ($case === 'changed CID') {
+        $draft['attachments'][0]['contentId'] = 'another-cid';
+    } elseif ($case === 'wrong draft') {
+        $draft['id'] = 'another-draft=';
+    } elseif ($case === 'incomplete list') {
+        $draft['attachments@odata.nextLink'] = 'https://private-upload-secret';
+    }
+    $mailbox = graphAttachmentMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'), new Response(503),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], 'hallo'),
+    ], $history);
+    $message = graphAttachmentMessage([new PreparedFile('chosen-file', 'chosen.txt', 'text/plain', 5,
+        static fn () => Utils::streamFor('hello'), hash('sha256', 'hello'))]);
+    $uncertain = $mailbox->prepareAttachments($mailbox->prepareSubmission($message), $message);
+
+    $observed = $mailbox->inspectAttachments($uncertain, $message);
+
+    expect($observed->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($observed->draftId)->toBe('immutable-draft=')
+        ->and(fn () => $mailbox->prepareAttachments($observed, $message))->toThrow(InvalidArgumentException::class)
+        ->and(fn () => $mailbox->submitPrepared($observed, $message))->toThrow(InvalidArgumentException::class)
+        ->and($history)->toHaveCount($case === 'changed bytes' ? 4 : 3);
+})->with(['changed bytes', 'duplicate', 'changed CID', 'wrong draft', 'incomplete list']);
+
 it('inspects the original draft and exact file bytes after a lost attachment acknowledgement without adding another copy', function (): void {
     $history = [];
     $attachment = ['@odata.type' => '#microsoft.graph.fileAttachment', 'id' => 'observed-file=',
