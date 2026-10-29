@@ -12,6 +12,14 @@ Configure the app registration and an explicit tenant GUID, `common`, `organizat
 
 Delegated shared access requires the signed-in user's mailbox permissions and a successful read of that target. It supports delta-only discovery; required shared live read/send/watch has a separate application-grant setup contract. Enrollment, scopes and `/me` success do not establish mailbox permission or live readiness. Live-provider and shared-lock deployment acceptance remain separate gates.
 
+### Optional Selected-Grant Persistence
+
+`EloquentGrantStore` may now back the selected-grant services using existing package connections and OAuth token models. Apply the additive migration, explicitly select a grant and generation, and retain your host guards, atomic OAuth state adapter and shared refresh lock. Existing OAuth rows are preserved and remain unselected; no subject/email lookup, ownership backfill or automatic binding is performed. Configured drivers and existing resource resolution remain available. Hosts using their own models may keep `mailbox.persistence.enabled=false` and provide their own `GrantStore`. See [optional Eloquent storage](configuration.md#storing-selected-grants-with-eloquent).
+
+The adapter rejects stale revisions, reused revisions, revoked grants, changed ownership/generation and changed verified identity, including Microsoft's `object_id`. Ordinary refresh keeps the generation; reconnect/reactivation requires a fresh generation. Retain grant rows and their encrypted revision history to preserve reuse protection, and plan for its lifetime growth.
+
+`MailboxOAuthToken` now hides access tokens, refresh tokens, nonce fingerprints and revision history from JSON and debug output, including legacy callback-result JSON. This is an intentional security change. Trusted code may still read model attributes directly; applications must not depend on credential values in serialized model or callback results.
+
 ### Received Addresses and Headers
 
 Gmail message mapping now parses received addresses and decodes encoded names and subjects. For example, `"Doe, Jane" <jane@example.com>` produces one recipient named `Doe, Jane`, and `=?ISO-8859-1?Q?Andr=E9?=` becomes `André`. Quoted local parts, comments, groups, repeated recipient headers and Unicode addresses retain their mailbox values. Empty groups add no recipients. Graph's structured names and addresses remain separate, and its already decoded text is preserved.
