@@ -21,6 +21,7 @@ final readonly class OAuthState
         #[SensitiveParameter] private string $codeVerifier,
         public ?string $returnTo = null,
         public ?string $userReference = null,
+        public ?string $authority = null,
     ) {}
 
     public function nonce(): string
