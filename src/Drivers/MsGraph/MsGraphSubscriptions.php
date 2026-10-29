@@ -82,7 +82,7 @@ final readonly class MsGraphSubscriptions
     }
 
     /**
-     * @param  list<GraphSubscriptionRegistration>  $registrations
+     * @param  array<array-key, GraphSubscriptionRegistration>  $registrations
      * @return list<GraphChangeHint>
      */
     public function notifications(#[\SensitiveParameter] RequestInterface $request, array $registrations, int $maxRequestBytes): array
@@ -208,7 +208,7 @@ final readonly class MsGraphSubscriptions
             || ($folder !== null && $expectedFolder !== null && $folder !== $expectedFolder
                 && (! in_array(strtolower($expectedFolder), $knownFolders, true) || strcasecmp($folder, $expectedFolder) !== 0))
             || ($folder !== null && preg_match('/[\x00-\x1f\x7f?#\\\\]/', $folder))
-            || ($message !== null && ($message === '' || preg_match('/[\x00-\x20\x7f?#\\\\]/', $message)))) {
+            || ($message !== null && preg_match('/[\x00-\x20\x7f?#\\\\]/', $message))) {
             return null;
         }
 
