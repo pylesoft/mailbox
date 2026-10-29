@@ -921,9 +921,11 @@ This capability requires an explicit grant context. It does not add methods to m
 
 | Preparation outcome | Meaning |
 | --- | --- |
-| `PreparationOutcome::Prepared` | Graph acknowledged a valid immutable draft identity and any required native normalization. No send has been requested. |
+| `PreparationOutcome::Preparing` | The draft is acknowledged, but selected files still need preparation. Retain this state before another step. |
+| `PreparationOutcome::Prepared` | Graph acknowledged the immutable draft, required native normalization, and every selected file. No send has been requested. |
 | `PreparationOutcome::Rejected` | A definite rejection response was observed. No send has been requested. |
 | `PreparationOutcome::Uncertain` | A draft may exist, but creation, file cleanup or normalization is not fully acknowledged. No send has been requested. |
+| `PreparationOutcome::Expired` | An attachment session has expired or become unusable. Inspect the original draft before deciding how to recover. |
 
 An uncertain preparation never causes another draft creation or an automatic send. The draft may be visible in Outlook and may remain after an interrupted or failed operation. The SDK does not automatically delete it.
 
@@ -980,9 +982,53 @@ Use `ReplyForwardOperation::Forward` for native forwarding. Graph consumes this 
 
 Preparation reads the source through its selected mailbox/folder scope, then invokes `createReply` or `createForward` with immutable IDs. It replaces the new draft's sender, subject, body and complete To/Cc/Bcc arrays with caller choices. It does not select reply-all recipients, infer historical Bcc or add quoted history. Custom headers and correlation are supplied during creation; later PATCH normalization updates only writable draft fields. The source message and its files are never changed.
 
-The empty file manifest is authoritative for native drafts. Preparation enumerates copied files even when `hasAttachments` is false and deletes them only from the new draft. This path accepts one complete metadata response containing at most 1,000 distinct attachment IDs and 4 MiB; unfinished, malformed or over-budget metadata leaves preparation uncertain before cleanup. An interrupted deletion or PATCH retains the acknowledged draft identity and stops without replay or send. Chosen-file uploads require the separate file capability.
+The selected file manifest is authoritative for native drafts. Preparation enumerates copied files even when `hasAttachments` is false and deletes them only from the new draft. This path accepts one complete metadata response containing at most 1,000 distinct attachment IDs and 4 MiB; unfinished, malformed or over-budget metadata leaves preparation uncertain before cleanup. An interrupted deletion or PATCH retains the acknowledged draft identity and stops without replay or send. Use the attachment capability below to add chosen files after normalization; an empty selection needs no upload step.
 
 The intent fingerprint includes the operation, source, conversation, selected authorization and scope as well as chosen message fields. It excludes unrelated conversation history. Native replies retain the selected conversation; a native forward may return a different provider conversation, which the preparation retains and verifies before send. The same documented harmless normalization rules apply to native drafts; arbitrary HTML rewriting remains unverifiable rather than silently accepted.
+
+### Preparing Graph Attachments
+
+Use the optional `SupportsDraftAttachmentPreparation` capability with ordinary drafts and native replies or forwards. Supply the shared `PreparedFile` values described above. Draft creation retains their names, media types, lengths, inline metadata and original SHA-256 in its private intent binding.
+
+```php
+use Pyle\Mailbox\Contracts\SupportsDraftAttachmentPreparation;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
+
+if ($mailbox instanceof SupportsDraftAttachmentPreparation
+    && $preparation->outcome === PreparationOutcome::Preparing) {
+    $next = $mailbox->prepareAttachments(
+        $preparation,
+        $message,
+        new SubmissionLimits(maxFileBytes: 10_485_760, maxTotalFileBytes: 20_971_520),
+    );
+
+    // Retain $next privately before scheduling the next host-owned step.
+}
+```
+
+Each call performs at most one attachment write: a small-file POST, upload-session creation, or one sequential range. Files below 3,000,000 bytes use JSON/base64 POSTs that remain strictly below the 4 MB write limit. Larger files use the documented Outlook session protocol, within its 150 MB maximum, with ranges of at most 3,000,000 bytes. `maxRequestBytes` can tighten each write; files whose encoded small-file request cannot fit fail before that POST. Limits do not replace tenant message-size or mailbox-permission policy. [Microsoft documents both attachment paths](https://learn.microsoft.com/en-us/graph/outlook-large-attachments).
+
+`SubmissionPreparation::attachments` exposes each attempted file's identity, outcome, acknowledged byte count, nullable attachment ID, status and safe headers. Upload state also retains the original source binding and fixed Outlook expiry privately. Preserve the full preparation in trusted private storage; PHP serialization retains private recovery fields, while ordinary JSON and debug output intentionally omit session URLs. Restore only SDK-issued state. Never put serialized preparation state in a public response or log.
+
+The SDK verifies the original SHA-256 and exact length whenever it reopens a file for preparation or resume. It closes its source streams and private snapshots without deleting host files. Before send, it reopens every selected source again and verifies the exact selected remote attachment identities, metadata and raw bytes on the original immutable draft. A changed source or manifest stops before send.
+
+An uncertain attachment acknowledgement requires a separate inspection:
+
+```php
+if ($mailbox instanceof SupportsDraftAttachmentPreparation
+    && $preparation->attachments !== []
+    && in_array($preparation->outcome, [PreparationOutcome::Uncertain, PreparationOutcome::Expired], true)) {
+    $observed = $mailbox->inspectAttachments($preparation, $message);
+
+    // Retain this observation alongside the original preparation evidence.
+}
+```
+
+Inspection requires retained attachment progress on the acknowledged draft; it cannot recover lost draft creation or interrupted native normalization. It reads the original draft and verifies candidate raw bytes against the original SHA-256 and length. Matching names or sizes alone are insufficient. Missing, duplicated, changed or incomplete evidence leaves the original uncertainty unresolved. Inspection never creates another attachment or draft. A lost range acknowledgement without a completed attachment remains unresolved; this API does not invent an Outlook session-status GET or replay a range. Expired sessions are not silently recreated, and uploads do not extend their retained expiry.
+
+Upload PUTs use the original private preauthenticated `https://outlook.office.com` URL, with redirects and debug output disabled. They omit Graph bearer tokens, client-default authorization, cookies and query options, while retaining the host's trusted handler, TLS verification, proxy and timeout policy. Injected middleware and callbacks remain the host's responsibility: they must protect private URLs and must not add credentials or retry uncertain writes.
+
+The 10 MiB per-file and 20 MiB aggregate examples are configurable host targets. Fixture results do not establish live support: Microsoft documents a known large-file issue for shared and delegated mailboxes. That combination, tenant limits and provider normalization remain separate live acceptance gates.
 
 ### Inspecting Graph Submission Evidence
 
@@ -1001,7 +1047,7 @@ if ($mailbox instanceof SupportsDraftSubmissionInspection) {
 }
 ```
 
-Inspection requires the retained identity and original intent under the same selected authorization. It performs one bounded GET of that immutable ID in the same mailbox, using immutable ID and the chosen body-format preferences. It checks the explicit recipients, content, headers, complete file manifest, correlation, provider conversation when retained, and sent-copy state. It never creates, changes, sends or deletes a message.
+Inspection requires the retained identity and original intent under the same selected authorization. It performs a bounded GET of that immutable ID in the same mailbox, using immutable ID and the chosen body-format preferences, plus bounded raw attachment reads when files were selected. It checks the explicit recipients, content, headers, complete file manifest, correlation, provider conversation when retained, and sent-copy state. It never creates, changes, sends or deletes a message.
 
 `SubmissionEvidence` carries the provider, selected context, original correlation, original `artifactId`, `outcome`, lookup status, safe headers and optional provider conversation. `SentCopyObserved` means Graph returned a matching non-draft sent copy; it does not prove delivery to recipients. A delayed draft, 404, denied or interrupted lookup, malformed content, mismatched identity/intent or incomplete response returns `Inconclusive`. The original artifact identity is retained even when the lookup is absent or mismatched.
 
@@ -1009,7 +1055,7 @@ Keep preparation facts, the original `SubmissionResult` and later observations s
 
 ### Graph Limits and Permissions
 
-This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers, with optional explicit native reply/forward context. Supplying both body formats, nonempty files, raw MIME or unsupported headers requires a separate capability; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above. See Microsoft's [native reply](https://learn.microsoft.com/en-us/graph/api/message-createreply?view=graph-rest-1.0), [native forward](https://learn.microsoft.com/en-us/graph/api/message-createforward?view=graph-rest-1.0), [draft update](https://learn.microsoft.com/en-us/graph/api/message-update?view=graph-rest-1.0) and [attachment removal](https://learn.microsoft.com/en-us/graph/api/attachment-delete?view=graph-rest-1.0) references.
+This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers, with optional explicit native reply/forward context and structured files through `SupportsDraftAttachmentPreparation`. Both body formats together, raw MIME and unsupported headers remain unsupported; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above. See Microsoft's [native reply](https://learn.microsoft.com/en-us/graph/api/message-createreply?view=graph-rest-1.0), [native forward](https://learn.microsoft.com/en-us/graph/api/message-createforward?view=graph-rest-1.0), [draft update](https://learn.microsoft.com/en-us/graph/api/message-update?view=graph-rest-1.0) and [attachment removal](https://learn.microsoft.com/en-us/graph/api/attachment-delete?view=graph-rest-1.0) references.
 
 `maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget and remain strictly below Graph's 4 MB write limit. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow, truncation or inconsistent unencoded Content-Length preserves observed status and safe headers without establishing successful preparation, verification or send.
 
