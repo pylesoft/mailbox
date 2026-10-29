@@ -11,6 +11,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Support\Facades\Log;
 use JsonException;
@@ -106,14 +107,19 @@ trait PerformsApiRequests
      */
     private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox): array
     {
+        $budget->assertMemoryAvailable(65536);
         $options = $query === [] ? [] : ['query' => $query];
-        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false], $mailbox, retry: false);
+        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox, retry: false);
         $stream = $response->getBody();
         $body = '';
 
         try {
             try {
+                $this->assertIdentityResponse($response);
+                $declared = $this->responseLength($response);
+                $size = 0;
                 while (true) {
+                    $budget->assertMemoryAvailable(strlen($body) + 32768);
                     $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
                     if ($chunk === '') {
                         if ($stream->eof()) {
@@ -122,7 +128,11 @@ trait PerformsApiRequests
                         throw new ApiRequestException('The provider response stream stopped making progress.');
                     }
                     $budget->consume(strlen($chunk));
+                    $size += strlen($chunk);
                     $body .= $chunk;
+                }
+                if ($declared !== null && $size !== $declared) {
+                    throw new ApiRequestException('The provider response length does not match its declaration.');
                 }
             } finally {
                 $stream->close();
@@ -132,6 +142,8 @@ trait PerformsApiRequests
         } catch (\Throwable) {
             throw new ApiRequestException('The provider response stream could not be read.');
         }
+
+        $budget->assertJsonDecodeMemory($body);
 
         if ($response->getStatusCode() >= 400) {
             $endpoint = $this->redactedEndpoint($endpoint);
@@ -342,6 +354,94 @@ trait PerformsApiRequests
         return $response->getBody();
     }
 
+    public function streamBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, int $maxBytes, ?string $mailbox = null): StreamInterface
+    {
+        if ($maxBytes < 1) {
+            throw new \InvalidArgumentException('A streamed response byte limit must be positive.');
+        }
+        $budget->assertMemoryAvailable(65536);
+        $response = $this->requestRaw('GET', $endpoint, ['stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox, retry: false);
+        $source = $response->getBody();
+        $temporary = null;
+        $size = 0;
+
+        try {
+            $budget->assertMemoryAvailable(65536);
+            $this->assertIdentityResponse($response);
+            $declared = $this->responseLength($response);
+            if ($declared !== null && ($declared > $maxBytes || $declared > $budget->remaining())) {
+                throw new ResponseLimitExceededException('The declared attachment exceeds its remaining byte limit.');
+            }
+            $temporary = @tmpfile();
+            if ($temporary === false) {
+                throw new ApiRequestException('An owned temporary response stream could not be created.');
+            }
+            while (true) {
+                $budget->assertMemoryAvailable(65536);
+                $chunk = $source->read(min(8192, $budget->remaining()) + 1);
+                if ($chunk === '') {
+                    if ($source->eof()) {
+                        break;
+                    }
+                    throw new ApiRequestException('The provider response stream stopped making progress.');
+                }
+                $budget->consume(strlen($chunk));
+                if (strlen($chunk) > $maxBytes - $size) {
+                    throw new ResponseLimitExceededException('The streamed attachment exceeds its file byte limit.');
+                }
+                $size += strlen($chunk);
+                if (@fwrite($temporary, $chunk) !== strlen($chunk)) {
+                    throw new ApiRequestException('The owned temporary response stream could not be written completely.');
+                }
+            }
+            if ($response->getStatusCode() !== 200) {
+                throw new ApiRequestException('The provider file read failed with HTTP '.$response->getStatusCode().'.', status: $response->getStatusCode());
+            }
+            if ($declared !== null && $size !== $declared) {
+                throw new ApiRequestException('The provider response length does not match its declaration.');
+            }
+            rewind($temporary);
+            $stream = Utils::streamFor($temporary);
+            $temporary = null;
+
+            return $stream;
+        } catch (ResponseLimitExceededException|ApiRequestException $exception) {
+            throw $exception;
+        } catch (\Throwable) {
+            throw new ApiRequestException('The provider response stream could not be read completely.');
+        } finally {
+            $source->close();
+            if (is_resource($temporary)) {
+                fclose($temporary);
+            }
+        }
+    }
+
+    private function assertIdentityResponse(ResponseInterface $response): void
+    {
+        if (! in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
+            throw new ApiRequestException('The bounded provider read requires identity HTTP content encoding.');
+        }
+    }
+
+    private function responseLength(ResponseInterface $response): ?int
+    {
+        $values = $response->getHeader('Content-Length');
+        if ($values === []) {
+            return null;
+        }
+        if (count($values) !== 1 || ! ctype_digit($values[0])) {
+            throw new ApiRequestException('The provider returned a malformed response length.');
+        }
+        $length = ltrim($values[0], '0');
+        $maximum = (string) PHP_INT_MAX;
+        if (strlen($length) > strlen($maximum) || (strlen($length) === strlen($maximum) && strcmp($length, $maximum) > 0)) {
+            throw new ApiRequestException('The provider returned an unsupported response length.');
+        }
+
+        return (int) $length;
+    }
+
     /** @param array<string, mixed> $options
      * @return array<string, mixed>
      */
@@ -440,6 +540,7 @@ trait PerformsApiRequests
         );
 
         if ($response->getStatusCode() >= 300 && $response->getStatusCode() < 400) {
+            $response->getBody()->close();
             throw new ApiRequestException('Authenticated provider requests do not follow redirects.');
         }
 

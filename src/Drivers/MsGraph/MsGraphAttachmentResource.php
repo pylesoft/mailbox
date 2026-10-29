@@ -4,17 +4,21 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
-use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Facades\Storage;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Contracts\AttachmentResource;
+use Pyle\Mailbox\Contracts\SupportsAttachmentReadLimits;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
-use Pyle\Mailbox\Events\AttachmentDownloaded;
-use Pyle\Mailbox\Events\AttachmentSkipped;
+use Pyle\Mailbox\DTOs\AttachmentReadLimits;
+use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\AttachmentStorage;
+use Pyle\Mailbox\Support\ResponseBudget;
 
-class MsGraphAttachmentResource implements AttachmentResource
+class MsGraphAttachmentResource implements AttachmentResource, SupportsAttachmentReadLimits
 {
+    private AttachmentReadLimits $limits;
+
     private const ATTACHMENT_METADATA_SELECT = 'id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId';
 
     public function __construct(
@@ -22,86 +26,69 @@ class MsGraphAttachmentResource implements AttachmentResource
         private readonly string $mailbox,
         private readonly string $messageId,
         private readonly string $attachmentId,
-    ) {}
+    ) {
+        $this->limits = new AttachmentReadLimits;
+    }
+
+    public function withReadLimits(AttachmentReadLimits $limits): AttachmentResource
+    {
+        $resource = clone $this;
+        $resource->limits = $limits;
+
+        return $resource;
+    }
 
     public function metadata(): AttachmentDto
     {
-        $payload = $this->client->get(
-            $this->attachmentEndpoint(),
-            ['$select' => self::ATTACHMENT_METADATA_SELECT],
-            $this->mailbox,
-        );
-
-        return AttachmentDto::fromMsGraph($payload);
+        return AttachmentDto::fromMsGraph($this->readMetadata(new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes)));
     }
 
     public function download(): AttachmentFileDto
     {
-        $payload = $this->client->get(
-            $this->attachmentEndpoint(),
-            ['$select' => self::ATTACHMENT_METADATA_SELECT],
-            $this->mailbox,
-        );
+        $responses = new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes);
+        $payload = $this->readMetadata($responses);
         $attachment = AttachmentDto::fromMsGraph($payload);
-        $content = (string) $this->stream();
-        $contentHash = hash('sha256', $content);
-
-        $disk = (string) config('mailbox.attachment_disk', 'local');
-        $basePath = trim((string) config('mailbox.attachment_path', 'mailbox-attachments'), '/');
-        $safeMailbox = strtolower(str_replace(['@', '.'], ['_', '_'], $this->mailbox));
-        $fileName = $this->sanitizeFileName($attachment->name !== '' ? $attachment->name : $attachment->id);
-        $preferredPath = sprintf('%s/%s/%s/%s', $basePath, $safeMailbox, $this->messageId, $fileName);
-        $resolvedPath = $this->resolveDestinationPath($disk, $preferredPath, $contentHash);
-
-        if ($resolvedPath['alreadyExisted']) {
-            Event::dispatch(new AttachmentSkipped(
-                driver: 'ms-graph',
-                mailbox: $this->mailbox,
-                messageId: $this->messageId,
-                attachmentId: $this->attachmentId,
-                path: $resolvedPath['path'],
-            ));
-
-            return new AttachmentFileDto(
-                id: $attachment->id,
-                name: $attachment->name,
-                contentType: $attachment->contentType,
-                size: $attachment->size,
-                isInline: $attachment->isInline,
-                contentId: $attachment->contentId,
-                path: $resolvedPath['path'],
-                disk: $disk,
-                alreadyExisted: true,
-            );
+        $type = $payload['@odata.type'] ?? '#microsoft.graph.fileAttachment';
+        if (! in_array($type, ['#microsoft.graph.fileAttachment', '#microsoft.graph.itemAttachment'], true)) {
+            throw new MailboxException('This Graph attachment form does not provide supported file bytes.');
+        }
+        $file = $type === '#microsoft.graph.fileAttachment';
+        if ($file && $attachment->size > $this->limits->maxFileBytes) {
+            throw new ResponseLimitExceededException('The declared attachment exceeds its file byte limit.');
+        }
+        $content = $this->client->streamBounded($this->attachmentEndpoint().'/$value', $responses, $this->limits->maxFileBytes, $this->mailbox);
+        if ($file && array_key_exists('size', $payload) && $content->getSize() !== $attachment->size) {
+            $content->close();
+            throw new MailboxException('Graph attachment size does not match its content.');
         }
 
-        Storage::disk($disk)->put($resolvedPath['path'], $content);
+        return AttachmentStorage::store($content, $attachment, $responses, 'ms-graph', $this->mailbox, $this->messageId, $this->attachmentId);
+    }
 
-        Event::dispatch(new AttachmentDownloaded(
-            driver: 'ms-graph',
-            mailbox: $this->mailbox,
-            messageId: $this->messageId,
-            attachmentId: $this->attachmentId,
-            path: $resolvedPath['path'],
-            disk: $disk,
-        ));
+    /** @return array<string, mixed> */
+    private function readMetadata(ResponseBudget $responses): array
+    {
+        $payload = $this->client->getBounded($this->attachmentEndpoint(), $responses, ['$select' => self::ATTACHMENT_METADATA_SELECT], $this->mailbox);
+        if (($payload['id'] ?? null) !== $this->attachmentId
+            || (array_key_exists('size', $payload) && (! is_int($payload['size']) || $payload['size'] < 0))) {
+            throw new MailboxException('Graph returned missing or inconsistent attachment metadata.');
+        }
+        foreach (['name', 'contentType', '@odata.type'] as $field) {
+            if (array_key_exists($field, $payload) && ! is_string($payload[$field])) {
+                throw new MailboxException('Graph returned malformed attachment metadata.');
+            }
+        }
+        if ((isset($payload['contentId']) && ! is_string($payload['contentId']))
+            || (array_key_exists('isInline', $payload) && ! is_bool($payload['isInline']))) {
+            throw new MailboxException('Graph returned malformed attachment metadata.');
+        }
 
-        return new AttachmentFileDto(
-            id: $attachment->id,
-            name: $attachment->name,
-            contentType: $attachment->contentType,
-            size: $attachment->size,
-            isInline: $attachment->isInline,
-            contentId: $attachment->contentId,
-            path: $resolvedPath['path'],
-            disk: $disk,
-            alreadyExisted: false,
-        );
+        return $payload;
     }
 
     public function stream(): StreamInterface
     {
-        return $this->client->stream($this->attachmentEndpoint().'/$value', $this->mailbox);
+        return $this->client->streamBounded($this->attachmentEndpoint().'/$value', new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes), $this->limits->maxFileBytes, $this->mailbox);
     }
 
     private function attachmentEndpoint(): string
@@ -112,60 +99,5 @@ class MsGraphAttachmentResource implements AttachmentResource
             rawurlencode($this->messageId),
             rawurlencode($this->attachmentId),
         );
-    }
-
-    private function sanitizeFileName(string $name): string
-    {
-        $sanitized = preg_replace('/[^A-Za-z0-9._-]/', '_', $name);
-
-        return $sanitized !== null && $sanitized !== '' ? $sanitized : 'attachment.bin';
-    }
-
-    /**
-     * @return array{path:string,alreadyExisted:bool}
-     */
-    private function resolveDestinationPath(string $disk, string $preferredPath, string $contentHash): array
-    {
-        $storage = Storage::disk($disk);
-
-        if (! $storage->exists($preferredPath)) {
-            return ['path' => $preferredPath, 'alreadyExisted' => false];
-        }
-
-        $existingHash = $this->hashForPath($disk, $preferredPath);
-        if ($existingHash !== null && hash_equals($existingHash, $contentHash)) {
-            return ['path' => $preferredPath, 'alreadyExisted' => true];
-        }
-
-        $contentAddressedPath = $this->withHashSuffix($preferredPath, $contentHash);
-        if ($storage->exists($contentAddressedPath)) {
-            $addressedHash = $this->hashForPath($disk, $contentAddressedPath);
-            if ($addressedHash !== null && hash_equals($addressedHash, $contentHash)) {
-                return ['path' => $contentAddressedPath, 'alreadyExisted' => true];
-            }
-        }
-
-        return ['path' => $contentAddressedPath, 'alreadyExisted' => false];
-    }
-
-    private function hashForPath(string $disk, string $path): ?string
-    {
-        $contents = Storage::disk($disk)->get($path);
-
-        return is_string($contents) ? hash('sha256', $contents) : null;
-    }
-
-    private function withHashSuffix(string $path, string $hash): string
-    {
-        $suffix = substr($hash, 0, 12);
-        $extension = pathinfo($path, PATHINFO_EXTENSION);
-        $directory = pathinfo($path, PATHINFO_DIRNAME);
-        $filename = pathinfo($path, PATHINFO_FILENAME);
-
-        $nameWithHash = $extension !== ''
-            ? sprintf('%s-%s.%s', $filename, $suffix, $extension)
-            : sprintf('%s-%s', $filename, $suffix);
-
-        return trim($directory, '/').'/'.$nameWithHash;
     }
 }
