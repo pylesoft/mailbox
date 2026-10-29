@@ -16,6 +16,7 @@ use Pyle\Mailbox\Contracts\SupportsConversationRead;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
+use Pyle\Mailbox\Contracts\SupportsSubmissionLimits;
 use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailWatch;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
@@ -25,6 +26,7 @@ use Pyle\Mailbox\DTOs\GmailWatchConfiguration;
 use Pyle\Mailbox\DTOs\GmailWatchRegistration;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
@@ -33,7 +35,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource, SupportsConversationRead, SupportsGmailWatch, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission
+class GmailMailboxResource implements MailboxResource, SupportsConversationRead, SupportsGmailWatch, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission, SupportsSubmissionLimits
 {
     public function __construct(
         private readonly GmailClient $client,
@@ -41,6 +43,7 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
         private readonly string $emailAddress,
         private readonly ?GrantContext $grantContext = null,
         private readonly ?GrantAccessGuard $grantGuard = null,
+        private readonly ?SubmissionLimits $submissionLimits = null,
     ) {}
 
     /** @param list<string> $labelIds */
@@ -90,7 +93,19 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
 
     public function submit(PreparedMessage $message, int $maxRequestBytes = 1_048_576): SubmissionResult
     {
-        return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes);
+        return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes, $this->submissionLimits);
+    }
+
+    public function withSubmissionLimits(SubmissionLimits $limits): SupportsMessageSubmission
+    {
+        return new self(
+            client: $this->client,
+            deltaSync: $this->deltaSync,
+            emailAddress: $this->emailAddress,
+            grantContext: $this->grantContext,
+            grantGuard: $this->grantGuard,
+            submissionLimits: $limits,
+        );
     }
 
     public function initialSync(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation = null): ChangePage

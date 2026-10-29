@@ -12,6 +12,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Contracts\Queue\Job;
+use Psr\Http\Message\RequestInterface;
 use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
@@ -31,6 +32,7 @@ it('submits explicit international Gmail content once without package persistenc
     $handler = HandlerStack::create(new MockHandler([
         new Response(200, ['X-Request-Id' => 'request-1'], '{"id":"18af33","threadId":"18af30"}'),
     ]));
+    $handler->push(Middleware::mapRequest(static fn (RequestInterface $request): RequestInterface => $request->withBody(Utils::streamFor((string) $request->getBody()))));
     $handler->push(Middleware::history($history));
     $tokens = new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'private-token'],
@@ -239,7 +241,7 @@ it('enforces the caller request budget before submitting encoded Gmail content',
     'header exceeds budget' => [['headers' => ['X-Project' => str_repeat('a', 1100)]], 1024],
 ]);
 
-it('reports file-bearing Gmail submission as unsupported before provider IO', function (): void {
+it('rejects unstructured prepared file inputs before provider IO', function (): void {
     $history = [];
     $mailbox = submissionMailbox([], $history);
     $message = submissionMessage(['files' => [['id' => 'host-file']]]);
@@ -299,6 +301,8 @@ function submissionMessage(array $changes = []): PreparedMessage
 function submissionMailbox(array $responses, array &$history, ?GrantTokenProvider $tokens = null): SupportsMessageSubmission
 {
     $handler = HandlerStack::create(new MockHandler($responses));
+    // Small fixture bodies are retained at HTTP inspection; production owned spools close after submit.
+    $handler->push(Middleware::mapRequest(static fn (RequestInterface $request): RequestInterface => $request->withBody(Utils::streamFor((string) $request->getBody()))));
     $handler->push(Middleware::history($history));
     $tokens ??= new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'private-token'],
