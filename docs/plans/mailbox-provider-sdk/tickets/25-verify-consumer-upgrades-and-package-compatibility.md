@@ -37,3 +37,7 @@ Verify that all implemented capabilities form a compatible package upgrade, with
 
 Preserve existing runner/platform coverage; no Blacksmith migration, package publication, production setup change or consumer migration is included. Missing isolated-consumer access is a concrete blocker, not evidence of compatibility. Keep one writer for shared contracts and dependency files; independent graph nodes do not authorize conflicting simultaneous edits.
 
+
+## Comments
+
+- 2026-10-29: Claimed by the fresh ticket-25 implementer on local branch feat/mailbox-sdk-25, based on integration b539e19af93ee9b9147d7e8d19896a48ca2e399d (tree 35630f1f02124e2339995822968d8b9c7e2c2373). Dependencies 08/11/17/20/21/22/24 are closed and integrated. Root granted the sole heavy-check slot; all checks remain serial, Pest at most two workers. Scope is local package compatibility, isolated consumer/platform verification and accurate documentation; no publication, live provider operation or consumer migration.
