@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use GuzzleHttp\Psr7\LimitStream;
+use GuzzleHttp\Psr7\Utils;
 use InvalidArgumentException;
+use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\DTOs\AttachmentPreparation;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
-use Pyle\Mailbox\DTOs\PreparedMessage;
-use Pyle\Mailbox\DTOs\PreparedFile;
-use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\GraphUploadSession;
+use Pyle\Mailbox\DTOs\PreparedFile;
+use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionEvidence;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\Enums\PreparationOutcome;
@@ -20,17 +23,14 @@ use Pyle\Mailbox\Enums\ReplyForwardOperation;
 use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\GrantRefreshException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\PreparedMessageMime;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
 use Pyle\Mailbox\Support\ResponseBudget;
 use Pyle\Mailbox\Support\SubmissionBody;
-use GuzzleHttp\Psr7\Utils;
-use GuzzleHttp\Psr7\LimitStream;
-use Psr\Http\Message\StreamInterface;
-use Pyle\Mailbox\Exceptions\MailboxException;
-use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
-use Pyle\Mailbox\Exceptions\GrantRefreshException;
 
 final readonly class MsGraphDraftSubmission
 {
@@ -97,6 +97,7 @@ final readonly class MsGraphDraftSubmission
         $attachmentId = $response->status === 201 && $data instanceof \stdClass && self::validId($data->id ?? null) ? $data->id : null;
         $outcome = $attachmentId !== null ? PreparationOutcome::Prepared
             : (self::rejected($response->status) ? PreparationOutcome::Rejected : PreparationOutcome::Uncertain);
+
         return $this->withAttachment($preparation, $message, $index, new AttachmentPreparation($file->identity, $outcome,
             $attachmentId === null ? 0 : $file->byteLength, $attachmentId, $response->status, $response->headers));
     }
@@ -109,24 +110,25 @@ final readonly class MsGraphDraftSubmission
         return new SubmissionPreparation($preparation->context,
             $next->outcome === PreparationOutcome::Prepared && count($attachments) < count($message->files) ? PreparationOutcome::Preparing : $next->outcome,
             $preparation->correlationId, $preparation->draftId, $next->status, $next->headers,
-            $preparation->intentFingerprint(), $preparation->conversationId, $attachments);
+            $preparation->intentFingerprint(), $preparation->conversationId, array_values($attachments));
     }
 
     private function attachmentIndex(SubmissionPreparation $preparation, PreparedMessage $message): int
     {
-        if (! array_is_list($preparation->attachments) || count($preparation->attachments) > count($message->files)) {
+        $attachments = $this->attachmentProgress($preparation->attachments);
+        if (count($attachments) > count($message->files)) {
             throw new InvalidArgumentException('The attachment progress has an invalid file manifest.');
         }
         $ids = [];
-        foreach ($preparation->attachments as $index => $progress) {
+        foreach ($attachments as $index => $progress) {
             $file = $message->files[$index];
-            if (! $progress instanceof AttachmentPreparation || $progress->fileIdentity !== $file->identity
+            if ($progress->fileIdentity !== $file->identity
                 || $progress->acknowledgedBytes < 0 || $progress->acknowledgedBytes > $file->byteLength
                 || ($progress->session() !== null && ! $progress->session()->matches($this->context, $preparation->draftId ?? '', $file))) {
                 throw new InvalidArgumentException('The attachment progress does not match its original immutable binding.');
             }
             if ($progress->outcome !== PreparationOutcome::Prepared) {
-                if ($index !== count($preparation->attachments) - 1 || $progress->attachmentId !== null) {
+                if ($index !== count($attachments) - 1 || $progress->attachmentId !== null) {
                     throw new InvalidArgumentException('Unfinished attachment work cannot precede another attachment.');
                 }
 
@@ -139,7 +141,24 @@ final readonly class MsGraphDraftSubmission
             $ids[] = $progress->attachmentId;
         }
 
-        return count($preparation->attachments);
+        return count($attachments);
+    }
+
+    /** @return list<AttachmentPreparation> */
+    private function attachmentProgress(mixed $value): array
+    {
+        if (! is_array($value) || ! array_is_list($value)) {
+            throw new InvalidArgumentException('The attachment progress requires a retained list.');
+        }
+        $attachments = [];
+        foreach ($value as $progress) {
+            if (! $progress instanceof AttachmentPreparation) {
+                throw new InvalidArgumentException('The attachment progress requires complete retained file state.');
+            }
+            $attachments[] = $progress;
+        }
+
+        return $attachments;
     }
 
     public function inspectAttachments(SubmissionPreparation $preparation, PreparedMessage $message, SubmissionLimits $limits): SubmissionPreparation

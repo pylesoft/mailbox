@@ -285,8 +285,8 @@ trait PerformsApiRequests
     }
 
     /**
-     * @param array<string, mixed> $options
-     * @param (\Closure(): void)|null $beforeRequest
+     * @param  array<string, mixed>  $options
+     * @param  (\Closure(): void)|null  $beforeRequest
      */
     private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null): ProviderWriteResponse
     {
@@ -303,6 +303,21 @@ trait PerformsApiRequests
                         unset($configuration[$name]);
                     }
                     $configuration['headers'] = [];
+                    if (isset($configuration['curl']) && is_array($configuration['curl'])) {
+                        foreach (['CURLOPT_USERPWD', 'CURLOPT_USERNAME', 'CURLOPT_PASSWORD', 'CURLOPT_HTTPAUTH', 'CURLOPT_XOAUTH2_BEARER',
+                            'CURLOPT_LOGIN_OPTIONS', 'CURLOPT_NETRC', 'CURLOPT_NETRC_FILE', 'CURLOPT_COOKIE', 'CURLOPT_COOKIEFILE',
+                            'CURLOPT_COOKIEJAR', 'CURLOPT_COOKIELIST', 'CURLOPT_COOKIESESSION', 'CURLOPT_HTTPHEADER',
+                            'CURLOPT_USERAGENT', 'CURLOPT_REFERER', 'CURLOPT_ENCODING', 'CURLOPT_ACCEPT_ENCODING', 'CURLOPT_HTTP_CONTENT_DECODING',
+                            'CURLOPT_URL', 'CURLOPT_CURLU', 'CURLOPT_PORT', 'CURLOPT_REQUEST_TARGET', 'CURLOPT_FOLLOWLOCATION',
+                            'CURLOPT_CUSTOMREQUEST', 'CURLOPT_HTTPGET', 'CURLOPT_POST', 'CURLOPT_PUT', 'CURLOPT_NOBODY', 'CURLOPT_UPLOAD',
+                            'CURLOPT_POSTFIELDS', 'CURLOPT_POSTFIELDSIZE', 'CURLOPT_POSTFIELDSIZE_LARGE', 'CURLOPT_MIMEPOST', 'CURLOPT_HTTPPOST',
+                            'CURLOPT_READFUNCTION', 'CURLOPT_READDATA', 'CURLOPT_INFILE', 'CURLOPT_INFILESIZE', 'CURLOPT_INFILESIZE_LARGE',
+                            'CURLOPT_VERBOSE', 'CURLOPT_STDERR', 'CURLOPT_HEADER', 'CURLOPT_RETURNTRANSFER'] as $option) {
+                            if (defined($option)) {
+                                unset($configuration['curl'][constant($option)]);
+                            }
+                        }
+                    }
                     $client = new Client($configuration);
                 }
                 foreach (array_keys($requestOptions['headers']) as $name) {

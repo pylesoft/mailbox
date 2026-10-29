@@ -8,32 +8,35 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\FnStream;
 use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Contracts\Queue\Job;
 use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Contracts\SupportsDraftAttachmentPreparation;
+use Pyle\Mailbox\DTOs\AttachmentPreparation;
+use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphUploadSession;
-use Pyle\Mailbox\DTOs\AttachmentPreparation;
-use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\MessageDto;
-use Pyle\Mailbox\DTOs\ReplyForwardContext;
-use Pyle\Mailbox\DTOs\SyncIdentity;
-use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\ReplyForwardContext;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
+use Pyle\Mailbox\DTOs\SyncIdentity;
+use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\PreparationOutcome;
-use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Enums\ReplyForwardOperation;
+use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
-use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
@@ -109,7 +112,7 @@ it('does not use an untrusted malformed or already expired Outlook session', fun
     ['malformed JSON', PreparationOutcome::Uncertain],
 ]);
 
-it('requires the original captured session and authorization binding when restoring upload progress', function (bool $missing): void {
+it('requires the original captured session and authorization binding when restoring upload progress', function (string $case): void {
     $history = [];
     $expires = new DateTimeImmutable('+1 hour');
     $mailbox = graphAttachmentMailbox([new Response(201, [], '{"id":"immutable-draft="}'),
@@ -118,15 +121,23 @@ it('requires the original captured session and authorization binding when restor
     $file = new PreparedFile('chosen-file', 'chosen.bin', 'application/octet-stream', strlen($bytes), static fn () => Utils::streamFor($bytes), hash('sha256', $bytes));
     $message = graphAttachmentMessage([$file]);
     $original = $mailbox->prepareAttachments($mailbox->prepareSubmission($message), $message);
-    $session = $missing ? null : new GraphUploadSession(new GrantContext('connection', 'another-grant', '1', 'ms-graph', 'sender@example.com'),
-        'immutable-draft=', $file->identity, $file->byteLength, $file->fingerprint(), graphAttachmentUploadUrl(), $expires);
+    $session = $case === 'foreign grant same mailbox'
+        ? new GraphUploadSession(new GrantContext('connection', 'another-grant', '1', 'ms-graph', 'sender@example.com'),
+            'immutable-draft=', $file->identity, $file->byteLength, $file->fingerprint(), graphAttachmentUploadUrl(), $expires)
+        : ($case === 'missing private state' ? null : $original->attachments[0]->session());
+    $progress = [new AttachmentPreparation($file->identity, PreparationOutcome::Preparing, 0, null, 201, session: $session)];
+    if ($case === 'non-list state') {
+        $progress = [1 => $progress[0]];
+    } elseif ($case === 'malformed file state') {
+        $progress = [new stdClass];
+    }
     $restored = new SubmissionPreparation($original->context, $original->outcome, $original->correlationId, $original->draftId,
         $original->status, $original->headers, $original->intentFingerprint(), $original->conversationId,
-        [new AttachmentPreparation($file->identity, PreparationOutcome::Preparing, 0, null, 201, session: $session)]);
+        $progress);
 
     expect(fn () => $mailbox->prepareAttachments(unserialize(serialize($restored)), $message))->toThrow(InvalidArgumentException::class)
         ->and($history)->toHaveCount(2);
-})->with(['missing private state' => true, 'foreign grant same mailbox' => false]);
+})->with(['missing private state', 'foreign grant same mailbox', 'non-list state', 'malformed file state']);
 
 it('recovers a lost final large file acknowledgement from original draft bytes before preparing the next chosen file', function (): void {
     $history = [];
@@ -213,7 +224,7 @@ it('stops when the host revokes the selected grant while the original source is 
             }
             $source = Utils::streamFor($bytes);
 
-            return \GuzzleHttp\Psr7\FnStream::decorate($source, ['close' => static function () use ($source, &$closes): void {
+            return FnStream::decorate($source, ['close' => static function () use ($source, &$closes): void {
                 if ($source->isReadable()) {
                     $closes++;
                 }
@@ -246,7 +257,7 @@ it('enforces caller decoded file and write limits before attaching another file'
     $limits = new SubmissionLimits(maxFileBytes: $case === 'file' ? 4 : 5, maxTotalFileBytes: 9);
 
     expect(fn () => $mailbox->prepareAttachments($draft, $message, $limits, maxRequestBytes: $case === 'write' ? 100 : 4_000_000))
-        ->toThrow($case === 'write' ? \Pyle\Mailbox\Exceptions\ResponseLimitExceededException::class : UnsupportedCapabilityException::class)
+        ->toThrow($case === 'write' ? ResponseLimitExceededException::class : UnsupportedCapabilityException::class)
         ->and($history)->toHaveCount(1);
     if ($case !== 'write') {
         expect($opened)->toBeFalse();
@@ -266,7 +277,7 @@ it('rejects a large-file source before creating a session when the caller memory
     $draft = $mailbox->prepareSubmission($message);
 
     expect(fn () => $mailbox->prepareAttachments($draft, $message, new SubmissionLimits(maxMemoryBytes: 32_768)))
-        ->toThrow(\Pyle\Mailbox\Exceptions\ResponseLimitExceededException::class)
+        ->toThrow(ResponseLimitExceededException::class)
         ->and($opened)->toBeFalse()
         ->and($history)->toHaveCount(1);
 });
@@ -360,7 +371,9 @@ it('checks the original source again after complete attachment acknowledgement b
     $bytes = 'hello';
     $mailbox = graphAttachmentMailbox([new Response(201, [], '{"id":"immutable-draft="}'), new Response(201, [], '{"id":"file="}')], $history);
     $file = new PreparedFile('chosen-file', 'chosen.txt', 'text/plain', 5,
-        static function () use (&$bytes) { return Utils::streamFor($bytes); }, hash('sha256', 'hello'));
+        static function () use (&$bytes) {
+            return Utils::streamFor($bytes);
+        }, hash('sha256', 'hello'));
     $message = graphAttachmentMessage([$file]);
     $prepared = $mailbox->prepareAttachments($mailbox->prepareSubmission($message), $message);
     $bytes = 'hallo';
@@ -372,6 +385,19 @@ it('checks the original source again after complete attachment acknowledgement b
 
 it('omits inherited HTTP credentials and queries while preserving trusted network policy for the exact upload URL', function (): void {
     $history = [];
+    $observations = 0;
+    $securityObserver = static function (ResponseInterface $response) use (&$observations): void {
+        $observations++;
+    };
+    $curlDefaults = $networkCurlDefaults = [];
+    if (defined('CURLOPT_CONNECT_TO')) {
+        $networkCurlDefaults = [CURLOPT_PROXYUSERPWD => 'trusted-proxy:proxy-secret',
+            CURLOPT_CONNECT_TO => ['outlook.office.com:443:127.0.0.1:443'], CURLOPT_SSL_VERIFYPEER => true];
+        $curlDefaults = [CURLOPT_USERPWD => 'raw-user:raw-secret', CURLOPT_HTTPHEADER => ['Authorization: Bearer raw-token'],
+            CURLOPT_FOLLOWLOCATION => true, CURLOPT_VERBOSE => true, CURLOPT_URL => 'https://attacker.example',
+            CURLOPT_CUSTOMREQUEST => 'POST', CURLOPT_POSTFIELDS => 'unselected-bytes',
+            CURLOPT_READFUNCTION => static fn (): string => 'unselected-bytes'] + $networkCurlDefaults;
+    }
     $expires = (new DateTimeImmutable('+1 hour'))->format(DATE_ATOM);
     $tokens = new TestGrantTokenProvider(['grant' => ['connection' => 'connection', 'generation' => '1',
         'mailboxes' => ['sender@example.com'], 'token' => 'private-token']]);
@@ -382,7 +408,7 @@ it('omits inherited HTTP credentials and queries while preserving trusted networ
     ], $history, ['headers' => ['aUtHoRiZaTiOn' => 'Bearer inherited-token', 'Cookie' => 'inherited-cookie'],
         'auth' => ['basic-user', 'basic-secret'], 'cookies' => CookieJar::fromArray(['private-cookie' => 'cookie-secret'], 'outlook.office.com'),
         'query' => ['default-secret' => 'default-query'], 'proxy' => 'http://trusted-proxy.example:8080', 'verify' => '/trusted/host-ca.pem',
-        'timeout' => 7, 'connect_timeout' => 3], $tokens);
+        'timeout' => 7, 'connect_timeout' => 3, 'on_headers' => $securityObserver, 'curl' => $curlDefaults], $tokens);
     $bytes = str_repeat('a', 3_000_001);
     $message = graphAttachmentMessage([new PreparedFile('chosen-file', 'chosen.bin', 'application/octet-stream', strlen($bytes),
         static fn () => Utils::streamFor($bytes), hash('sha256', $bytes))]);
@@ -401,6 +427,9 @@ it('omits inherited HTTP credentials and queries while preserving trusted networ
         ->and($history[2]['options']['verify'])->toBe('/trusted/host-ca.pem')
         ->and($history[2]['options']['timeout'])->toBe(7)
         ->and($history[2]['options']['connect_timeout'])->toBe(3)
+        ->and($history[2]['options']['curl'])->toBe($networkCurlDefaults)
+        ->and($history[2]['options']['on_headers'])->toBe($securityObserver)
+        ->and($observations)->toBe(3)
         ->and($history[2]['options']['allow_redirects'])->toBeFalse()
         ->and($uncertain->headers)->toBe([]);
 });
@@ -483,7 +512,9 @@ it('rejects a same length changed source after a retained acknowledged prefix be
         new Response(201, ['Location' => 'https://unexpected.example/duplicate']),
     ], $history);
     $file = new PreparedFile('mutable-host-file', 'chosen.bin', 'application/octet-stream', strlen($bytes),
-        static function () use (&$bytes) { return Utils::streamFor($bytes); }, hash('sha256', $bytes));
+        static function () use (&$bytes) {
+            return Utils::streamFor($bytes);
+        }, hash('sha256', $bytes));
     $message = graphAttachmentMessage([$file]);
     $session = $mailbox->prepareAttachments($mailbox->prepareSubmission($message), $message);
     $prefix = $mailbox->prepareAttachments($session, $message);
@@ -573,7 +604,7 @@ function graphAttachmentUploadUrl(): string
 }
 
 /**
- * @param list<array<string, mixed>> $attachments
+ * @param  list<array<string, mixed>>  $attachments
  * @return array<string, mixed>
  */
 function graphAttachmentDraft(array $attachments): array
@@ -587,9 +618,9 @@ function graphAttachmentDraft(array $attachments): array
 }
 
 /**
- * @param list<mixed> $responses
- * @param array<int, mixed> $history
- * @param array<string, mixed> $clientOptions
+ * @param  list<mixed>  $responses
+ * @param  array<int, mixed>  $history
+ * @param  array<string, mixed>  $clientOptions
  */
 function graphAttachmentMailbox(array $responses, array &$history, array $clientOptions = [], ?TestGrantTokenProvider $tokens = null): SupportsDraftAttachmentPreparation
 {

@@ -9,8 +9,8 @@ use Pyle\Mailbox\Enums\PreparationOutcome;
 final readonly class SubmissionPreparation
 {
     /**
-     * @param array<string, list<string>> $headers
-     * @param list<AttachmentPreparation> $attachments
+     * @param  array<string, list<string>>  $headers
+     * @param  list<AttachmentPreparation>  $attachments
      */
     public function __construct(
         public GrantContext $context,

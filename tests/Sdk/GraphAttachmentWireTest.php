@@ -114,7 +114,9 @@ function graphAttachmentWireCase(int $fileCount, int $fileBytes, bool $control =
             return Create::promiseFor(new Response(201, [], '{"id":"immutable-draft="}'));
         });
         $http = new Client(['handler' => $handler, 'verify' => $directory.'/certificate.pem', 'timeout' => 30, 'proxy' => '',
-            'curl' => [CURLOPT_CONNECT_TO => ['outlook.office.com:443:127.0.0.1:'.$port]]]);
+            'curl' => [CURLOPT_CONNECT_TO => ['outlook.office.com:443:127.0.0.1:'.$port], CURLOPT_USERPWD => 'dummy-default-user:dummy-default-secret',
+                CURLOPT_URL => 'https://outlook.office.com/forbidden-target', CURLOPT_CUSTOMREQUEST => 'POST',
+                CURLOPT_POSTFIELDS => 'unselected-bytes', CURLOPT_READFUNCTION => static fn (): string => 'unselected-bytes']]);
         $tokens = new TestGrantTokenProvider(['grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'dummy-local-token']]);
         $mailbox = Mailbox::forGrant(new GrantContext('connection', 'grant', '1', 'ms-graph', 'sender@example.com'), $tokens, $http);
         $message = new PreparedMessage(new EmailAddressDto('Sender', 'sender@example.com'), [new EmailAddressDto('To', 'to@example.com')],

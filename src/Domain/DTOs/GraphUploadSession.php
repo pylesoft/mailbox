@@ -56,7 +56,7 @@ final readonly class GraphUploadSession
         if (! is_array($url) || ($url['scheme'] ?? '') !== 'https' || ($url['host'] ?? '') !== 'outlook.office.com'
             || isset($url['user']) || isset($url['pass']) || isset($url['fragment']) || isset($url['port']) || isset($url['query'])
             || ! str_starts_with($url['path'] ?? '', $parent.'/Attachments(')
-            || preg_match("~\\A".preg_quote($parent, '~')."/Attachments\\('([^']+)'\\)\\z~", $url['path'] ?? '', $match) !== 1) {
+            || preg_match('~\\A'.preg_quote($parent, '~')."/Attachments\\('([^']+)'\\)\\z~", $url['path'], $match) !== 1) {
             return null;
         }
         $id = rawurldecode($match[1]);
