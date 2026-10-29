@@ -35,3 +35,7 @@ Expose Gmail watch/stop operations and turn authenticated Pub/Sub requests into 
 
 Cryptographic-verifier correctness and actual Pub/Sub delivery require designated host/live integration evidence; protocol fixtures alone do not prove either.
 
+## Comments
+
+- 2026-10-29: Claimed by the ticket 22 implementer on `feat/mailbox-sdk-22`, based on integration `0dca168e0c6af8c3869ebd2a5803bad5cf28da05`. Implementing only the optional Gmail watch/stop and raw-request verified notification capability at the specification's approved public SDK/HTTP/host-verifier seam. Checks wait for the shared resource slot; no live setup or delivery is authorized.
+

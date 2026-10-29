@@ -50,7 +50,7 @@ class GmailDriver implements MailboxDriver, SupportsGrantMailbox, SupportsRawCli
         $config = array_merge((array) config('mailbox'), $this->config, ['queue_retry_strategy' => 'sleep']);
         $client = new GmailClient($config, $this->tokenManager, $this->rateLimiter, $httpClient, new GrantAuthorization($context, $tokens));
 
-        return new GmailMailboxResource($client, new GmailDeltaSync($client), $context->mailbox, $context);
+        return new GmailMailboxResource($client, new GmailDeltaSync($client), $context->mailbox, $context, grantGuard: $tokens);
     }
 
     public function testConnection(?string $emailAddress = null): ConnectionTestResult
