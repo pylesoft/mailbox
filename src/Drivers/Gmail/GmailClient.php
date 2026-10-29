@@ -9,6 +9,9 @@ use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionResult;
+use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
@@ -18,7 +21,9 @@ use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\GrantAuthorization;
+use Pyle\Mailbox\Support\PreparedMessageMime;
 
 class GmailClient
 {
@@ -44,6 +49,32 @@ class GmailClient
     protected function driverKey(): string
     {
         return 'gmail';
+    }
+
+    public function submitMessage(PreparedMessage $message, string $mailbox, int $maxRequestBytes = 1_048_576): SubmissionResult
+    {
+        if ($message->files !== []) {
+            throw new UnsupportedCapabilityException('Gmail file-bearing submission is not supported.');
+        }
+        $raw = PreparedMessageMime::encode($message, $maxRequestBytes);
+        $payload = json_encode(['raw' => rtrim(strtr(base64_encode($raw), '+/', '-_'), '=')], JSON_THROW_ON_ERROR);
+        if (strlen($payload) > $maxRequestBytes) {
+            throw new UnsupportedCapabilityException('The Gmail JSON request exceeds the submission byte budget.');
+        }
+        $response = $this->requestOnce('POST', 'users/'.rawurlencode($mailbox).'/messages/send', [
+            'body' => $payload, 'headers' => ['Content-Type' => 'application/json'],
+        ], $mailbox);
+        $data = json_decode($response->body() ?? '', true);
+        $messageId = is_array($data) && is_string($data['id'] ?? null) && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $data['id']) === 1 ? $data['id'] : null;
+        $threadId = is_array($data) && is_string($data['threadId'] ?? null) && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $data['threadId']) === 1 ? $data['threadId'] : null;
+        $outcome = $response->status === 200 && $messageId !== null && (! array_key_exists('threadId', $data) || $threadId !== null)
+            ? SubmissionOutcome::Accepted
+            : SubmissionOutcome::Uncertain;
+        if (in_array($response->status, [400, 401, 403, 404, 405, 409, 410, 411, 412, 413, 414, 415, 422, 429], true)) {
+            $outcome = SubmissionOutcome::Rejected;
+        }
+
+        return new SubmissionResult('gmail', $outcome, $message->correlationId, $response->status, $response->headers, $messageId, $threadId);
     }
 
     protected function providerLabel(): string

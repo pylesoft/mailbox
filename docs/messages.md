@@ -681,6 +681,72 @@ echo sprintf('Processed %d invoices.', count($processedIds));
 
 This example demonstrates folder scoping, multi-field filtering, body retrieval, attachment downloading, and bulk operations all working together in a cohesive workflow.
 
+## Submitting a Prepared Gmail Message
+
+You may submit text and HTML messages through Gmail's optional `SupportsMessageSubmission` capability. Your application chooses the sender, recipients, content and correlation identity. Constructing or editing a `PreparedMessage` performs no provider operation; calling `submit` explicitly requests a send.
+
+```php
+use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
+use Pyle\Mailbox\DTOs\EmailAddressDto;
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Facades\Mailbox;
+
+// Reuse your explicitly selected GrantContext and GrantTokenProvider.
+$mailbox = Mailbox::forGrant($context, $tokens);
+
+if (! $mailbox instanceof SupportsMessageSubmission) {
+    throw new UnsupportedCapabilityException('This mailbox does not support direct submission.');
+}
+
+$message = new PreparedMessage(
+    sender: new EmailAddressDto('Élodie', 'sender@example.com'),
+    to: [new EmailAddressDto('Zoë', 'recipient@example.com')],
+    subject: 'Meeting confirmation',
+    correlationId: 'host-operation-123',
+    textBody: 'Your meeting is confirmed.',
+    htmlBody: '<p>Your meeting is confirmed.</p>',
+    cc: [],
+    bcc: [],
+    headers: ['X-Project' => 'Customer support'],
+);
+
+// Persist the operation and its chosen intent before requesting submission.
+$result = $mailbox->submit($message, maxRequestBytes: 1_048_576);
+```
+
+The capability is available on Gmail mailbox resources, including configured Google Workspace resources. Existing custom drivers do not need to implement it. The selected authorization must permit Gmail submission, such as the `gmail.send` scope, and Gmail must authorize the chosen sender. The SDK does not choose an alias or elevate authorization.
+
+### Explicit Recipients and Safe Encoding
+
+Provide at least one address in `to`, `cc` or `bcc`. Bcc-only messages are supported. Each submission uses only that message's explicit lists; it never retains recipients from an earlier message. Gmail routes mail using the serialized To/Cc/Bcc headers, so the SDK retains the explicit Bcc header for Gmail even though Symfony's usual envelope-based serialization removes it.
+
+Names, subjects and text headers support UTF-8. Text and HTML bodies must also contain valid UTF-8. The SDK rejects header controls, injection, invalid addresses and unsupported field names before any send. Structural headers and structured fields, including From, Sender, To/Cc/Bcc, Reply-To, Subject, Date, Message-ID, Return-Path, MIME-Version, Content-*, Resent-* and DKIM-Signature, cannot be supplied as text-header overrides. The encoder creates the MIME structure, Date and Message-ID itself.
+
+`correlationId` is required, contains no control characters and is limited to 512 bytes. It is returned with submission evidence and encoded in `X-Mailbox-Correlation-Id`; choose an opaque value that is safe for recipients to see. Applications cannot override this header separately.
+
+### Submission Evidence
+
+`submit` makes one provider request. It never retries that request, falls back to another grant, or releases an enclosing queue job. Existing safe-read retries remain separate. A stale or disconnected selected grant fails before the send; a token refresh failure also remains a preflight failure.
+
+| Outcome | Meaning | Host responsibility |
+| --- | --- | --- |
+| `SubmissionOutcome::Accepted` | Gmail returned HTTP 200 with a valid message identity and, when supplied, a valid thread identity. | Retain the provider IDs and original correlation. Acceptance is not delivery proof. |
+| `SubmissionOutcome::Rejected` | A known rejection response, such as HTTP 400, 401, 403 or 429, was observed. | Retain the response evidence and decide how to correct or schedule the operation. |
+| `SubmissionOutcome::Uncertain` | A timeout, 5xx, redirect, oversized/interrupted response or malformed acknowledgement prevents a reliable acceptance decision. | Retain the original operation and investigate it. Uncertainty does not authorize another send. |
+
+`SubmissionResult` contains `provider`, `outcome`, `correlationId`, nullable HTTP `status`, safe response `headers`, and nullable validated `messageId` / `threadId`. It is not a fetched `MessageDto`. An empty Gmail 202 is uncertain; it does not have Graph's send-acceptance semantics.
+
+The SDK retains safe request identity, Date and Retry-After response headers. Authorization, cookies, redirect/upload URLs, arbitrary response bodies and raw transport exceptions are excluded from public submission evidence. If no response was observed, `status` is `null`. A response body beyond 64 KiB cannot establish acceptance, but its observed status and safe headers remain available.
+
+Your application owns durable operation state and recovery. Persist the chosen message and correlation before sending, then retain the returned evidence. The SDK does not maintain an outbox, deduplicate separate explicit calls, mirror private editor drafts, inspect sent copies automatically or claim recipient delivery. Injected HTTP clients must not add their own retry middleware for submission.
+
+### Limits and Unsupported Input
+
+`maxRequestBytes` is a positive caller budget for the actual Gmail JSON request, including MIME/base64url expansion. Its default is 1 MiB; it is not a universal Gmail message or file limit. Oversized input, encoded MIME or JSON is rejected with `UnsupportedCapabilityException` before provider I/O. This text/HTML path buffers bounded content; it does not promise constant memory.
+
+Nonempty `files` are explicitly unsupported by this submission path. Raw MIME input and signed/encrypted MIME reconstruction are also unsupported. File sources, large-file limits and reply/forward preparation are separate capabilities; the SDK does not infer them from a body or silently transform arbitrary MIME.
+
 ## What's Next
 
 - [Attachments](attachments.md) -- downloading, streaming, and working with individual attachments in depth
