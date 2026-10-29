@@ -10,7 +10,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.2', '8.3', '8.4']
+        include:
+          - php: '8.2'
+            laravel: '12.*'
+          - php: '8.3'
+            laravel: '12.*'
+          - php: '8.4'
+            laravel: '12.*'
+          - php: '8.4'
+            laravel: '13.*'
 
     steps:
       - uses: actions/checkout@v4
@@ -32,8 +40,8 @@ jobs:
             ${{ runner.os }}-php-${{ matrix.php }}-composer-latest-
             ${{ runner.os }}-php-${{ matrix.php }}-composer-
 
-      - run: composer update --no-interaction --prefer-dist --no-progress
-      - run: vendor/bin/pest
+      - run: composer update --with "laravel/framework:${{ matrix.laravel }}" --no-interaction --prefer-dist --no-progress
+      - run: vendor/bin/pest --parallel --processes=2
 
   qa-static-style:
     runs-on: ubuntu-latest
@@ -59,7 +67,10 @@ jobs:
             ${{ runner.os }}-php-8.4-composer-
 
       - run: composer install --no-interaction --prefer-dist --no-progress
-      - run: vendor/bin/phpstan analyse --no-progress
+      - run: composer validate --strict
+      - run: composer check-platform-reqs
+      - run: composer audit --locked
+      - run: vendor/bin/phpstan analyse --debug --no-progress
       - run: vendor/bin/pint --test
 
   tests-lowest:
@@ -85,5 +96,5 @@ jobs:
             ${{ runner.os }}-php-8.2-composer-lowest-
             ${{ runner.os }}-php-8.2-composer-
 
-      - run: composer update --prefer-lowest --prefer-stable --no-interaction --prefer-dist
-      - run: vendor/bin/pest
+      - run: composer update --with "laravel/framework:12.*" --prefer-lowest --prefer-stable --no-interaction --prefer-dist
+      - run: vendor/bin/pest --parallel --processes=2

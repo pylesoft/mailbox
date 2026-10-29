@@ -10,7 +10,7 @@ After publishing the config file with `php artisan vendor:publish --tag=mailbox-
 php artisan vendor:publish --tag=mailbox-config
 ```
 
-This copies the package's config file to `config/mailbox.php`. Migrations are loaded automatically by the package, and you can still publish stubs separately:
+This copies the package's config file to `config/mailbox.php`. Migrations are loaded automatically while `mailbox.persistence.enabled` is `true`, and you can still publish stubs separately:
 
 ```bash
 php artisan vendor:publish --tag=mailbox-stubs

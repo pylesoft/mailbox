@@ -4,6 +4,8 @@ Mailbox ships with first-party drivers for Microsoft Graph and Gmail, but you ca
 
 If you prefer to start from ready-made files, publish the [driver stubs](stubs.md) first and fill in the blanks as you follow along.
 
+The provider SDK adds [optional capability contracts](../provider-sdk.md#choosing-a-capability); it does not add mandatory methods to these existing driver/resource contracts. Implement only the capabilities your driver can honor. Configured constructors, custom creators and resolver replacement remain available; a facade/client mock verifies host behavior, while a provider contract test must keep the real transport and mapping behind HTTP fakes.
+
 ## Architecture at a Glance
 
 A custom driver is a tree of small, focused classes:
@@ -64,7 +66,7 @@ class PostmarkDriver implements MailboxDriver
                 success: true,
                 error: null,
                 latencyMs: $latency,
-                authenticatedAs: $this->config['server_token'] ?? null,
+                authenticatedAs: 'configured Postmark account',
                 accessibleMailboxes: $emailAddress ? [$emailAddress] : [],
             );
         } catch (\Throwable $e) {

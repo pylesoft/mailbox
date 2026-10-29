@@ -88,6 +88,18 @@ it('resolves sqlite paths for serial and parallel test modes', function (): void
     expect($parallelPath)->toEndWith('/storage/framework/testing/test-worker-7.sqlite');
 });
 
+it('keeps provider manifests inside the active parallel worker storage', function (): void {
+    $token = (string) getenv('TEST_TOKEN');
+    if ($token === '') {
+        expect(str_replace('\\', '/', app()->getCachedServicesPath()))->toEndWith('/cache/services.php');
+
+        return;
+    }
+
+    expect(str_replace('\\', '/', app()->getCachedServicesPath()))->toBe(str_replace('\\', '/', storage_path('framework/testing/bootstrap-'.$token.'/services.php')))
+        ->and(str_replace('\\', '/', app()->getCachedPackagesPath()))->toBe(str_replace('\\', '/', storage_path('framework/testing/bootstrap-'.$token.'/packages.php')));
+});
+
 it('boots workbench tooling and runs artisan smoke commands', function (): void {
     expect(class_exists(WorkbenchServiceProvider::class))->toBeTrue();
 

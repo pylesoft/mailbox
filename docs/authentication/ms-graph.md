@@ -2,7 +2,7 @@
 
 Mailbox connects to Microsoft 365 mailboxes through the OAuth 2.0 **client credentials flow** — the recommended path for server-side and background workloads where your application reads, modifies, and organizes mail without any interactive user sign-in. You register an app in Microsoft Entra, grant it the right permissions, and Mailbox handles token acquisition and caching automatically at runtime.
 
-If you need a browser-based sign-in flow where individual users grant consent and Mailbox stores per-user refresh tokens, see [User OAuth](user-oauth.md) instead.
+For browser consent by individual work/school or personal Microsoft users, see [host-owned User OAuth](user-oauth.md). Your application supplies its endpoints, authorization and grant storage; Mailbox does not discover stored user tokens from a mailbox address.
 
 ## What You Need
 
