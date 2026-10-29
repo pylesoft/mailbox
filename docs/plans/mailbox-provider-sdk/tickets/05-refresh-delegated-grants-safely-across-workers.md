@@ -31,3 +31,7 @@ Make an expired Gmail delegated grant usable safely when several workers or mail
 - Test unavailable/failed/contended locks with zero exchanges, same-identity omission and negative subject/tenant/client changes.
 - Keep deterministic package adapter tests separate from verification that a deployed host actually provides a shared cross-process lock store.
 
+## Comments
+
+- 2026-10-29: Claimed by mailbox_ticket_05 on `feat/mailbox-sdk-05`, based on integrated tickets 01-04 at `d881c0a79a038ee38a7adc1ae4915188037b21ab`. Implement shared guarded refresh and Gmail at the approved Q13 HTTP/host-adapter seams; preserve existing configured modes and leave deployed shared-store proof to the live acceptance gate. No publication, provider operations, consumer changes or active database access.
+

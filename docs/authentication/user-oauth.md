@@ -243,7 +243,7 @@ After a user completes the OAuth flow, Mailbox stores the access token and refre
 
 ### Current Runtime Support
 
-Gmail enrollment can now exchange a code into host-owned storage and use the enrolled access token through `Mailbox::forGrant()`. Your `GrantTokenProvider` must supply a currently valid token. Transparent delegated refresh is not implemented yet; storing a refresh token does not make configured drivers consume it. Ticket 05 covers coordinated refresh.
+Gmail enrollment can exchange a code into host-owned storage and use the grant through `Mailbox::forGrant()`. The [refreshing token provider](#refreshing-host-owned-gmail-grants) refreshes expired delegated grants under a shared lock. You may still supply your own `GrantTokenProvider` with a currently valid token. Configured drivers do not discover stored delegated grants automatically.
 
 The configured Workspace service-account and Microsoft application modes retain their existing token acquisition. The database-backed browser routes remain available, but they do not bind legacy OAuth rows to the explicit runtime automatically. Do not select the first active row or infer ownership from its email or subject.
 
@@ -451,7 +451,7 @@ The SDK checks the host guard before loading the token and again before each HTT
 
 Each call creates an isolated provider resource and leaves the configured-driver cache and global configuration unchanged. Configured `mailbox()`, `forMailbox()`, custom creators, resolver replacements and existing driver/client constructors remain available. Custom drivers may implement the optional `SupportsGrantMailbox` contract; drivers without it throw `UnsupportedCapabilityException` only when asked to serve `forGrant()`.
 
-This entrypoint accepts valid supplied tokens. Use the Gmail enrollment service below to obtain them; the runtime does not discover old OAuth rows or transparently refresh expired tokens. A provider `401` fails with `AuthenticationException` without using configured service-account or application credentials. Host storage, authorization and durable job handling remain in your application. For SDK-only boot, [disable package persistence](../configuration.md#using-your-own-persistence) and leave the database-backed OAuth routes disabled.
+This entrypoint accepts valid supplied tokens or the refreshing provider below. Use the Gmail enrollment service to obtain a selected grant; the runtime does not discover old OAuth rows. A provider `401` fails with `AuthenticationException` without using configured service-account or application credentials. Host storage, authorization and durable job handling remain in your application. For SDK-only boot, [disable package persistence](../configuration.md#using-your-own-persistence) and leave the database-backed OAuth routes disabled.
 
 ## Enrolling Gmail With Host-Owned Storage
 
@@ -501,6 +501,38 @@ A missing refresh-token field preserves an earlier token only from this same sel
 Keep credentials and state encrypted in private storage. Use the `StoredGrant::accessToken()`, `refreshToken()`, `OAuthState::nonce()` and `codeVerifier()` accessors when mapping private storage; their JSON/debug representations intentionally omit secrets. Never reuse credential revisions. Reconnect/disconnect must invalidate the previous lifecycle generation, while ordinary token rotation keeps it. The store must enforce these checks atomically even if ownership changes between the final guard and the write. A rejected write never falls back to another grant.
 
 The default package browser controllers continue using the legacy model-backed services; your host-owned endpoints call this service directly. Safe return paths and allowed hosts use the same return policy as those controllers. Provider setup, live consent and live mailbox validation remain separate acceptance gates.
+
+## Refreshing Host-Owned Gmail Grants
+
+You may use `RefreshingGrantTokenProvider` to read with a stored Gmail grant and renew it before expiry. Supply your host's `GrantAccessGuard` and `GrantStore`, an explicitly named shared Laravel cache store, and the Gmail refresher:
+
+```php
+use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Services\OAuth\GmailGrantRefresher;
+use Pyle\Mailbox\Support\CacheGrantRefreshLock;
+use Pyle\Mailbox\Support\RefreshingGrantTokenProvider;
+
+// $guard implements GrantAccessGuard; $grants implements GrantStore.
+// Configure cache.stores.mailbox-refresh to use your central Redis or database store.
+$tokens = new RefreshingGrantTokenProvider(
+    $guard,
+    $grants,
+    new CacheGrantRefreshLock('mailbox-refresh'),
+    new GmailGrantRefresher,
+);
+
+$message = Mailbox::forGrant($context, $tokens)->message($messageId)->get();
+```
+
+`GrantAccessGuard::assertActive()` has the same authorization checks described above. Existing `GrantTokenProvider` implementations already satisfy this guard contract. The Gmail refresher uses `mailbox.oauth.gmail.client_id` and `client_secret`; its selected grant must have the same verified Google identity and client. Both `gmail` and `google-workspace` contexts use this delegated path. Existing configured service-account and application modes keep their current authentication.
+
+Every worker and server must use the same central lock backend, connection, database and key prefix. `CacheGrantRefreshLock` rejects array, file, null, failover and non-locking stores. An unavailable, failed or contended lock stops before the refresh exchange. Custom stores must provide cross-process atomic lock ownership; package tests and the `LockProvider` interface alone cannot establish that deployment property.
+
+The lock key uses the exact connection/grant tuple across mailbox targets, revisions and lifecycle generations. A token with more than 30 seconds remaining is used directly. Otherwise, the provider acquires a 60-second lock, reloads authoritative credentials, and exchanges only if they still need refresh. Google HTTP exchanges have a 30-second timeout, verified TLS and no redirects. The host's atomic `replace()` must still check identity, revision and generation because a lock lease may expire during I/O. Refresh advances the credential revision and preserves the lifecycle generation; reconnect and disconnect must invalidate the previous generation.
+
+An omitted refresh token retains the secret from that same reloaded, verified identity. A returned rotation replaces it atomically. A refresh response may omit its ID token. If present, its issuer, subject, audience, issue time and expiry must match the selected identity. Refresh ID tokens containing a nonce fail closed because the stored envelope does not retain the original enrollment nonce. Returned scopes replace the stored scopes; an omitted scope retains the previous list.
+
+Catch `GrantRefreshException` to inspect `retryable` and `retryAfterSeconds`. Coordination failures, transport errors, rate limits and temporary provider failures are retryable. Client setup and malformed credential responses are non-retryable refresh errors. `GrantAccessDeniedException` reports revoked, invalid or insufficient delegated authority and identity/lifecycle changes; request reconnect or apply your host's authorization policy. Exceptions omit raw provider bodies and secrets. The SDK performs no refresh retries, releases no enclosing job and never falls back to configured credentials. Your application decides when to retry.
 
 ## What's Next
 
