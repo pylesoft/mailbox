@@ -4,6 +4,14 @@ Mailbox follows [semantic versioning](https://semver.org). Review the relevant u
 
 ## Unreleased Provider SDK
 
+### Host-Owned Microsoft Authorization
+
+Microsoft work/school and personal accounts may now use explicit host-owned enrollment and renewable grants. Existing configured application-permission access and legacy browser-service signatures remain available. New delegated reads use `Mailbox::forGrant()` with `RefreshingGrantTokenProvider` and `MsGraphGrantRefresher`; they do not discover or reassign legacy OAuth records or fall back to application authority. See [Microsoft enrollment and refresh](authentication/user-oauth.md#enrolling-and-refreshing-microsoft-with-host-owned-storage).
+
+Configure the app registration and an explicit tenant GUID, `common`, `organizations` or `consumers`. The new flow requires `openid`, `profile`, `offline_access` and `User.Read` scopes plus the intended mail scopes; the default Microsoft OAuth scopes now include `User.Read`. Host state adapters must preserve the trailing optional `OAuthState::authority` field. Grant adapters must preserve the verified identity, `metadata['object_id']`, credential revision and private nonce fingerprint.
+
+Delegated shared access requires the signed-in user's mailbox permissions and a successful read of that target. It supports delta-only discovery; required shared live read/send/watch has a separate application-grant setup contract. Enrollment, scopes and `/me` success do not establish mailbox permission or live readiness. Live-provider and shared-lock deployment acceptance remain separate gates.
+
 ### Received Addresses and Headers
 
 Gmail message mapping now parses received addresses and decodes encoded names and subjects. For example, `"Doe, Jane" <jane@example.com>` produces one recipient named `Doe, Jane`, and `=?ISO-8859-1?Q?Andr=E9?=` becomes `André`. Quoted local parts, comments, groups, repeated recipient headers and Unicode addresses retain their mailbox values. Empty groups add no recipients. Graph's structured names and addresses remain separate, and its already decoded text is preserved.
@@ -37,6 +45,12 @@ Existing eager Gmail method signatures remain available. A query that reaches it
 Gmail single-message, query and legacy delta reads now hydrate externalized text and enforce response, decoded-content, MIME-part and hydration limits. Invalid base64url, inconsistent sizes, missing content and unsupported charsets throw instead of becoming empty text. `body()` also throws when no text body exists; valid empty text remains valid. See [Gmail body limits](messages.md#gmail-body-limits) for defaults and the optional concrete-resource limits.
 
 Externalized unnamed text is no longer advertised as an attachment. Named text files and inline files retain their metadata, and inline file parts may use their Gmail part ID when no external attachment ID exists. The mandatory resource contracts and DTO constructor fields are unchanged.
+
+## Unreleased: Bounded Gmail History
+
+Explicit-grant Gmail resources also expose `SupportsIncrementalSync::incrementalSync(SyncScope, SyncBudget, SyncCheckpoint, ?SyncContinuation = null): ChangePage`. Reuse the initial-sync DTOs and retain evidence before advancing a continuation or completed checkpoint. The existing eager delta methods and custom-driver contracts remain available.
+
+History returns reconciliation candidates without created-versus-updated guesses. Requests read unfiltered changes to preserve label-exit evidence; hosts must recheck the selected scope and import policy before updating projections. Label removal does not establish message deletion. A history 404 requests an initial reset with the committed checkpoint's original folder and cutoff, without erasing retained local history. See [bounded Gmail history](delta-sync.md#bounded-gmail-history) for replay, expanded-record budgets and recovery.
 
 ## Checking Your Current Version
 

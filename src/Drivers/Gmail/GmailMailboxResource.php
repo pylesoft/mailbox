@@ -9,6 +9,7 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
 use Pyle\Mailbox\DTOs\ChangePage;
@@ -16,12 +17,13 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource, SupportsInitialSync, SupportsMessageSubmission
+class GmailMailboxResource implements MailboxResource, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission
 {
     public function __construct(
         private readonly GmailClient $client,
@@ -42,6 +44,15 @@ class GmailMailboxResource implements MailboxResource, SupportsInitialSync, Supp
         }
 
         return (new GmailInitialSync($this->client, $this->grantContext))->page($scope, $budget, $continuation);
+    }
+
+    public function incrementalSync(SyncScope $scope, SyncBudget $budget, SyncCheckpoint $checkpoint, ?SyncContinuation $continuation = null): ChangePage
+    {
+        if ($this->grantContext === null) {
+            throw new UnsupportedCapabilityException('Bounded synchronization requires an explicit grant context.');
+        }
+
+        return (new GmailHistorySync($this->client, $this->grantContext))->page($scope, $budget, $checkpoint, $continuation);
     }
 
     public function messages(): MessageQueryBuilder
