@@ -34,7 +34,7 @@ Mailbox handles steps 3-6 automatically. You only need to initiate the redirect 
 
 ## Prerequisites
 
-The browser flow below uses package persistence. If your application already owns its connection and grant storage, you may instead supply a currently valid token through [an explicit grant](#reading-with-an-explicit-grant).
+The browser routes below use package persistence. If your application owns its connection and grant storage, use [host-owned Gmail enrollment](#enrolling-gmail-with-host-owned-storage) and [read through an explicit grant](#reading-with-an-explicit-grant). Enabling package routes or supplying `user_reference` does not establish ownership of a connection.
 
 Before configuring either provider, run your migrations. Mailbox auto-loads its package migrations, and the user OAuth flow stores tokens in the `mailbox_oauth_tokens` table:
 
@@ -241,16 +241,11 @@ The callback query parameters and behavior are identical to the Microsoft flow d
 
 After a user completes the OAuth flow, Mailbox stores the access token and refresh token in the `mailbox_oauth_tokens` table. Both are encrypted at rest using Laravel's `encrypted` cast.
 
-### How Token Refresh Works
+### Current Runtime Support
 
-Access tokens are short-lived (typically 1 hour). When a token expires, Mailbox uses the stored refresh token to obtain a new access token without any user interaction:
+Gmail enrollment can now exchange a code into host-owned storage and use the enrolled access token through `Mailbox::forGrant()`. Your `GrantTokenProvider` must supply a currently valid token. Transparent delegated refresh is not implemented yet; storing a refresh token does not make configured drivers consume it. Ticket 05 covers coordinated refresh.
 
-1. Mailbox checks `expires_at` on the `MailboxOAuthToken` model before making an API call.
-2. If the token has expired (or is within the refresh buffer window), Mailbox sends the `refresh_token` to the provider's token endpoint.
-3. The provider returns a new `access_token` (and sometimes a new `refresh_token`).
-4. Mailbox updates the `mailbox_oauth_tokens` row with the fresh values and the new `expires_at` timestamp.
-
-This happens transparently — your application code does not need to handle token refresh.
+The configured Workspace service-account and Microsoft application modes retain their existing token acquisition. The database-backed browser routes remain available, but they do not bind legacy OAuth rows to the explicit runtime automatically. Do not select the first active row or infer ownership from its email or subject.
 
 ### When Refresh Tokens Expire
 
@@ -456,7 +451,56 @@ The SDK checks the host guard before loading the token and again before each HTT
 
 Each call creates an isolated provider resource and leaves the configured-driver cache and global configuration unchanged. Configured `mailbox()`, `forMailbox()`, custom creators, resolver replacements and existing driver/client constructors remain available. Custom drivers may implement the optional `SupportsGrantMailbox` contract; drivers without it throw `UnsupportedCapabilityException` only when asked to serve `forGrant()`.
 
-This entrypoint currently accepts valid supplied tokens. It does not enroll grants, discover old OAuth rows or transparently refresh expired tokens. A provider `401` fails with `AuthenticationException` without using configured service-account or application credentials. Host storage, authorization and durable job handling remain in your application. For SDK-only boot, [disable package persistence](../configuration.md#using-your-own-persistence) and leave the database-backed OAuth routes disabled.
+This entrypoint accepts valid supplied tokens. Use the Gmail enrollment service below to obtain them; the runtime does not discover old OAuth rows or transparently refresh expired tokens. A provider `401` fails with `AuthenticationException` without using configured service-account or application credentials. Host storage, authorization and durable job handling remain in your application. For SDK-only boot, [disable package persistence](../configuration.md#using-your-own-persistence) and leave the database-backed OAuth routes disabled.
+
+## Enrolling Gmail With Host-Owned Storage
+
+You may connect personal Gmail or Google Workspace accounts without package tables. Configure `mailbox.oauth.gmail.client_id`, `client_secret`, `redirect_uri` and scopes, including `openid` and a Gmail read scope. Register that exact callback URI on your Google Web OAuth client and configure the consent screen for the accounts you intend to support. Offline consent requests a refresh token, but Google may omit it.
+
+Supply three host adapters to the enrollment service:
+
+| Contract | Host responsibility |
+| --- | --- |
+| `OAuthEnrollmentGuard` | `assertAllowed($context, $hostContext)` authorizes the current principal, selected connection, grant and generation at initiation, before exchange and before commit. Derive the opaque host context from trusted session/application state. |
+| `OAuthStateStore` | `put($state, $payload)` stores the private `OAuthState` until `expiresAt`; `consume($state)` atomically removes it once across all callback workers. A cache `get` followed by `forget`, including Laravel's `Cache::pull`, does not satisfy this contract. |
+| `GrantStore` | `load($context)` loads that selected grant. `replace($context, $expected, $replacement)` atomically checks ownership, lifecycle generation and the expected identity/revision. A null expectation requires absence; return false on conflict. |
+
+```php
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Services\OAuth\GmailGrantOAuthService;
+
+// These adapters are implemented by your application.
+$oauth = new GmailGrantOAuthService($guard, $states, $grants);
+$context = new GrantContext(
+    connectionId: 'connection-42',
+    grantId: 'grant-19',
+    lifecycleGeneration: 'generation-3',
+    driver: 'gmail', // 'google-workspace' uses the same enrollment flow.
+    mailbox: 'person@gmail.com',
+);
+
+// Initiation: persist the selected context in your own trusted session state.
+$url = $oauth->authorizationUrl($context, $hostContext, '/settings/mailboxes');
+
+// Callback: recover context and hostContext from that session, not query input.
+$result = $oauth->handleCallback($context, $hostContext, $state, $code);
+
+// Your existing GrantTokenProvider loads this stored grant's valid access token.
+$message = Mailbox::forGrant($context, $tokens)->message($messageId)->get();
+```
+
+`OAuthState` binds the provider, selected context, client, redirect URI, host context, expected credential revision, nonce and S256 PKCE verifier. Callback consumption happens before the code exchange, including failed exchanges. Missing, expired, mismatched or replayed state fails before provider I/O. The host should consume abandoned error callbacks through its state adapter and restart authorization after failure.
+
+The SDK validates Google's issuer, subject, client audience/authorized party, expiry, issue time and initiation nonce. Its private decoder accepts only the ID token returned by the fixed Google token endpoint over verified TLS with client authentication and redirects disabled. This follows the [direct token-endpoint trust rule](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation) and [Google's server flow](https://developers.google.com/identity/openid-connect/openid-connect#obtainuserinfo). It is not a verifier for caller-supplied JWTs and does not accept an `id_token` from callback input or use a profile fallback.
+
+`StoredGrant` contains the verified `GrantIdentity`, expiry, granted scopes, a new revision, optional email and non-secret metadata (`display_name` and `hosted_domain`). Email and Workspace domain metadata do not choose credentials or authorize the host. If your application restricts Workspace domains, enforce that policy in its guarded `replace()` before accepting the new grant; an email suffix or authorization hint is insufficient. `GrantEnrollmentResult` returns the context, verified identity, email, expiry, safe `returnTo` and optional `userReference`, without tokens or a package model.
+
+A missing refresh-token field preserves an earlier token only from this same selected grant with exactly matching provider, normalized issuer, subject, client and tenant identity. An explicit invalid token or a different identity without a new refresh token fails. A returned token replaces the earlier one through the conditional write. Separate connections to the same account stay independent.
+
+Keep credentials and state encrypted in private storage. Use the `StoredGrant::accessToken()`, `refreshToken()`, `OAuthState::nonce()` and `codeVerifier()` accessors when mapping private storage; their JSON/debug representations intentionally omit secrets. Never reuse credential revisions. Reconnect/disconnect must invalidate the previous lifecycle generation, while ordinary token rotation keeps it. The store must enforce these checks atomically even if ownership changes between the final guard and the write. A rejected write never falls back to another grant.
+
+The default package browser controllers continue using the legacy model-backed services; your host-owned endpoints call this service directly. Safe return paths and allowed hosts use the same return policy as those controllers. Provider setup, live consent and live mailbox validation remain separate acceptance gates.
 
 ## What's Next
 

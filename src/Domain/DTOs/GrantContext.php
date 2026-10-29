@@ -21,4 +21,13 @@ final readonly class GrantContext
             }
         }
     }
+
+    public function matches(self $other): bool
+    {
+        return $this->connectionId === $other->connectionId
+            && $this->grantId === $other->grantId
+            && $this->lifecycleGeneration === $other->lifecycleGeneration
+            && $this->driver === $other->driver
+            && $this->mailbox === $other->mailbox;
+    }
 }
