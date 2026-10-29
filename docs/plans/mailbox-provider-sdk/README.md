@@ -4,7 +4,7 @@ This plan prepares `pylesoft/mailbox` for Gmail and Microsoft email integrations
 
 The [implementation specification](spec.md) records the confirmed behavior as user stories, implementation decisions, testing decisions and explicit exclusions.
 
-**Status:** design confirmed by Ian on 2026-10-29 after all 15 decisions and independent plan review. Confirmation covers the plan only; implementation and publication are not authorized. No source code, dependencies, database state, or provider configuration has been changed.
+**Status:** design confirmed by Ian on 2026-10-29 after all 15 decisions and independent plan review. Ian subsequently authorized local implementation through `matt:implement-spec` with subagents on `feat/mailbox-provider-sdk`. Publication, provider setup, live operations and consumer migration remain separate actions; open acceptance gates do not establish supported parity.
 
 ## Related consumer plan
 
