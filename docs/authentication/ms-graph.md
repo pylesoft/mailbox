@@ -53,7 +53,8 @@ Use that value as `MS365_CLIENT_SECRET` in your environment.
 1. In the app registration, go to **API permissions**.
 2. Click **Add a permission > Microsoft Graph > Application permissions**.
 3. Add the following permissions:
-   - `Mail.ReadWrite` (required for mailbox read/write operations)
+   - `Mail.ReadWrite` (required for mailbox read/write operations and staged draft preparation)
+   - `Mail.Send` when submitting a prepared draft
    - `User.Read.All` (recommended for tenant-wide user/directory reads and legacy `/users` probes)
 4. Click **Grant admin consent for [your tenant]**.
 
@@ -76,6 +77,8 @@ If you use one Entra app registration for both app-only and [user OAuth](user-oa
 ## Step 4: Restrict Mailbox Access (Recommended)
 
 By default, application permissions grant access to every mailbox in your tenant. You should restrict the app to only the mailboxes it needs.
+
+For new setup, follow Microsoft's [Application RBAC guidance](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac). The Application Access Policy example below describes the legacy policy path. RBAC and Entra permissions are independent; verify the application's complete effective access to the selected mailbox.
 
 > **Warning** Skipping this step means your application can read every mailbox in the organization. Always scope access in production.
 
@@ -217,7 +220,7 @@ Only request the Graph permissions your application actually uses. If you only r
 
 ### Restrict Mailbox Scope
 
-Always configure an Application Access Policy (Step 4) in production. Without it, a compromised credential grants access to every mailbox in your organization.
+Scope effective application authority to the intended mailboxes. Microsoft's current [Application RBAC guidance](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac) replaces Application Access Policies and explains that Exchange RBAC grants and Entra grants are independent. Existing policies remain relevant to legacy setups; verify all effective grants rather than assuming that a scoped RBAC assignment removes separately granted tenant-wide access.
 
 ### Monitor Token Events
 
@@ -371,6 +374,51 @@ Duplicates and out-of-order callbacks remain reconciliation hints. The host reta
 Use `$registration->lifecycle()` to inspect `active`, `expired` or `removed` state. Late valid change notifications for expired or removed registrations return `subscription_expired` or `subscription_removed` hints. All operations invoke the captured grant's lifecycle guard, including after provider I/O or raw callback parsing. Reconnect or disconnect invalidates older work without choosing another grant.
 
 Protocol fixtures verify these package paths. Account consent, actual shared-mailbox subscriptions, public callback delivery, renewal scheduling and deployed recovery remain separate host/live acceptance gates.
+
+## Require Shared-Mailbox Live Setup
+
+An explicit-grant resource also implements the optional `SupportsGraphSharedMailboxLive` capability. Call `requireSharedMailboxLive($registration)` when the host requires shared-mailbox live mode. Supply an active, unexpired `GraphSubscriptionRegistration` retained from a confirmed subscription operation in trusted host storage. Its connection, selected grant, lifecycle generation, provider and mailbox must match the resource exactly. Caller-supplied registration fields are not provider evidence.
+
+```php
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSharedMailboxLive;
+
+if (! $mailbox instanceof SupportsGraphSharedMailboxLive) {
+    throw new RuntimeException('This provider has no shared-mailbox live setup contract.');
+}
+
+$mailbox->requireSharedMailboxLive($registration);
+```
+
+The captured host token/lifecycle adapter must additionally implement the optional `VerifiesGraphSharedMailboxLiveAccess` interface. Its `assertSharedMailboxLive(GrantContext, GraphSubscriptionConfiguration): void` method verifies trusted setup evidence for that exact context and the registration's configuration:
+
+- The selected grant uses application permissions for one known application and tenant.
+- Required consent and effective scoped mailbox authority are current. Body-only staged read/send needs `Mail.ReadWrite` and `Mail.Send`; basic message watch needs read authority. Delegated shared permissions cannot satisfy this application contract.
+- The canonical mailbox ID and tenant map to the selected target. Read, send and watch use that same grant, without combining authority or falling back to configured credentials.
+- The exact mailbox/folder scope and notification/lifecycle endpoints have supported, host-verified setup.
+
+Throw `UnsupportedCapabilityException` with a clear setup reason when any fact is missing or unverified. The host owns authorization evidence, its storage and verification; the SDK does not decode opaque access tokens or infer permission from obtaining a token. An adapter that implements only `GrantTokenProvider` remains valid for ordinary operations but cannot establish required-live setup. If a host wraps the supplied refresh provider, its captured outer adapter must expose the verifier and preserve lifecycle checks.
+
+The assertion makes no provider request and sends no probe mail. Success establishes configured, host-verified capability with a current bound registration. It does not establish live-provider acceptance, public callback delivery or recipient delivery. Explicit live acceptance must separately read, prepare/submit a chosen body-only message and create/maintain a subscription on the same selected grant; keep that evidence separate from setup facts.
+
+This check stores no live flag and does not block later reads or sends merely because push expires. The host owns availability policy, renewal, recovery and when to require setup again. Existing per-request lifecycle checks still reject invalidated grants. Keep initial/incremental catch-up reconciliation in every mode: notifications can be delayed or missed, and server discovery does not select a host browser-update mechanism.
+
+### Account and Authentication Capabilities
+
+This matrix describes authorization and discovery contracts. Real provider permissions and notification delivery remain separate acceptance gates; a listed path is not proof that a specific account passed live validation.
+
+| Account | Selected authentication | Discovery with required setup | Required shared-mailbox live contract |
+| --- | --- | --- | --- |
+| Personal Gmail | Delegated user grant | Gmail watch or delta-only | Not applicable; use Gmail watch setup |
+| Google Workspace user | Delegated user grant | Gmail watch or delta-only | Not applicable; use Gmail watch setup |
+| Google Workspace mailbox | Authorized service account with domain delegation | Gmail watch or delta-only | Not applicable; use Gmail watch setup |
+| Microsoft 365 user's own mailbox | Delegated work/school grant | Basic Graph subscription or delta-only | Not a shared-mailbox application contract |
+| Outlook.com/Hotmail user's own mailbox | Delegated personal-account grant | Basic Graph subscription or delta-only | Not a shared-mailbox application contract |
+| Microsoft 365 mailbox | Explicit application grant | Basic Graph subscription or delta-only | Available for shared targets only after this setup assertion |
+| Microsoft shared mailbox | Authorized delegated user grant | Delta-only; shared delegated scopes do not support subscriptions | Rejected; explicitly select a separate authorized application grant |
+| Microsoft shared mailbox | Explicit scoped application grant | Basic Graph subscription plus mandatory catch-up, or delta-only when live is not requested | Requires one application grant for read/send/watch, current bound registration and host verifier |
+| Legacy configured Gmail/service account or Graph/application mode | Existing configured driver | Existing reads/delta remain available; explicit notification contracts need a captured grant | Configured token acquisition alone cannot satisfy this assertion |
+
+Shared native reply/forward and shared large-file combinations are not established by this body-only setup contract. Keep those parity claims gated on combined protocol checks and designated live validation. No tenant provisioning, host browser events, durable receipts or scheduling are performed by the SDK.
 
 ## What's Next
 
