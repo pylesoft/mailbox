@@ -14,6 +14,14 @@ Under the hood, each provider tracks changes differently. Mailbox abstracts thes
 
 In both cases, the result is the same: a `DeltaResultDto` containing three collections and a token to use next time.
 
+### Graph continuations
+
+Graph next and delta links contain opaque queries. Mailbox preserves their encoded bytes, query order and repeated parameters when following pages or resuming a folder. Absolute URLs, API-relative paths, root-relative paths and links relative to the current resource are supported. Do not decode, rebuild or append query parameters to these links.
+
+Each link must stay on the configured Graph API origin and the exact mailbox, folder and operation being read. A link from another folder cannot resume the current folder. Missing or malformed links, conflicting next/delta links, repeated pages and missing collection data throw `ApiRequestException`; they do not produce a completed empty result. Graph message queries also throw when the configured page limit prevents completion.
+
+Treat `deltaLink` as private checkpoint state. Store it unchanged in private application storage and reuse it only for the same mailbox and folder. Client and result debug dumps redact secrets, while the existing property and array/JSON serialization retain the checkpoint for persistence. This validation does not replace host authorization or the grant-bound checkpoint format planned for bounded synchronization.
+
 ## Your First Sync
 
 To run a delta sync, call `delta()` on a folder resource. On the very first call, pass `null` (or omit the argument entirely) to perform a full baseline sync:

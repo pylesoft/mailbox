@@ -48,7 +48,7 @@ it('sends json and query requests through the shared api request pipeline', func
     expect($history[3]['request']->getMethod())->toBe('DELETE');
 });
 
-it('returns stream bodies and preserves absolute download urls', function (): void {
+it('returns stream bodies and preserves trusted absolute download urls', function (): void {
     $history = [];
     $handler = HandlerStack::create(new MockHandler([
         new Response(200, [], 'stream-body'),
@@ -61,10 +61,10 @@ it('returns stream bodies and preserves absolute download urls', function (): vo
     ]);
 
     $api = new TestPerformsApiRequestsClient(['queue_retry_strategy' => 'sleep'], $client);
-    $stream = $api->stream('https://downloads.example.test/files/report.pdf', 'Inbox@example.com');
+    $stream = $api->stream('https://api.example.test/v1/files/report.pdf', 'Inbox@example.com');
 
     expect((string) $stream)->toBe('stream-body');
-    expect((string) $history[0]['request']->getUri())->toBe('https://downloads.example.test/files/report.pdf');
+    expect((string) $history[0]['request']->getUri())->toBe('https://api.example.test/v1/files/report.pdf');
 });
 
 it('exposes retry helpers for retry-after parsing, backoff calculation, and queue release', function (): void {
