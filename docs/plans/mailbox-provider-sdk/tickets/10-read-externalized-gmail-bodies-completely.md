@@ -28,3 +28,7 @@ Return complete Gmail text bodies when the provider externalizes MIME parts, wit
 - Read messages through real Gmail HTTP and mapping code with inline/externalized text, nested multipart, encodings, named text files, inline images and empty-but-valid bodies.
 - Cover malformed encoding, missing part responses, actual payload overflow and interrupted hydration; assert both returned content and the absence of false attachments.
 
+## Comments
+
+- 2026-10-29: Claimed by the ticket 10 implementer on `feat/mailbox-sdk-10`, based on integration `0e68d17`. Scope is Gmail body hydration, strict body decoding and shared body/file classification through the existing message resources and DTOs. Q13 already confirms the public resource plus real Guzzle/provider-HTTP test seam. Shared bounded HTTP transport remains ticket 12's responsibility and will be reused after integration. No live provider, consumer, dependency or publication changes.
+
