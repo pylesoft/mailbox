@@ -34,7 +34,7 @@ Mailbox handles steps 3-6 automatically. You only need to initiate the redirect 
 
 ## Prerequisites
 
-The browser routes below use package persistence. If your application owns its connection and grant storage, use [host-owned Gmail enrollment](#enrolling-gmail-with-host-owned-storage) and [read through an explicit grant](#reading-with-an-explicit-grant). Enabling package routes or supplying `user_reference` does not establish ownership of a connection.
+The browser routes below use package persistence. If your application owns its connection and grant storage, use host-owned [Gmail](#enrolling-gmail-with-host-owned-storage) or [Microsoft](#enrolling-and-refreshing-microsoft-with-host-owned-storage) enrollment and [read through an explicit grant](#reading-with-an-explicit-grant). Enabling package routes or supplying `user_reference` does not establish ownership of a connection.
 
 Before configuring either provider, run your migrations. Mailbox auto-loads its package migrations, and the user OAuth flow stores tokens in the `mailbox_oauth_tokens` table:
 
@@ -451,7 +451,7 @@ The SDK checks the host guard before loading the token and again before each HTT
 
 Each call creates an isolated provider resource and leaves the configured-driver cache and global configuration unchanged. Configured `mailbox()`, `forMailbox()`, custom creators, resolver replacements and existing driver/client constructors remain available. Custom drivers may implement the optional `SupportsGrantMailbox` contract; drivers without it throw `UnsupportedCapabilityException` only when asked to serve `forGrant()`.
 
-This entrypoint accepts valid supplied tokens or the refreshing provider below. Use the Gmail enrollment service to obtain a selected grant; the runtime does not discover old OAuth rows. A provider `401` fails with `AuthenticationException` without using configured service-account or application credentials. Host storage, authorization and durable job handling remain in your application. For SDK-only boot, [disable package persistence](../configuration.md#using-your-own-persistence) and leave the database-backed OAuth routes disabled.
+This entrypoint accepts valid supplied tokens or the refreshing provider below. Use the Gmail or Microsoft enrollment service to obtain a selected grant; the runtime does not discover old OAuth rows. A provider `401` fails with `AuthenticationException` without using configured service-account or application credentials. Host storage, authorization and durable job handling remain in your application. For SDK-only boot, [disable package persistence](../configuration.md#using-your-own-persistence) and leave the database-backed OAuth routes disabled.
 
 ## Enrolling Gmail With Host-Owned Storage
 
@@ -533,6 +533,58 @@ The lock key uses the exact connection/grant tuple across mailbox targets, revis
 An omitted refresh token retains the secret from that same reloaded, verified identity. A returned rotation replaces it atomically and keeps the original nonce fingerprint. A refresh response may omit its ID token. If present, its issuer, subject and audience must match the selected identity, with valid issue time and expiry. An optional returned nonce must match the stored original fingerprint; a mismatch or missing baseline fails closed. An omitted nonce remains valid. Returned scopes replace the stored scopes; an omitted scope retains the previous list.
 
 Catch `GrantRefreshException` to inspect `retryable` and `retryAfterSeconds`. Coordination failures, transport errors, rate limits and temporary provider failures are retryable. Client setup and malformed credential responses are non-retryable refresh errors. `GrantAccessDeniedException` reports revoked, invalid or insufficient delegated authority and identity/lifecycle changes; request reconnect or apply your host's authorization policy. Exceptions omit raw provider bodies and secrets. The SDK performs no refresh retries, releases no enclosing job and never falls back to configured credentials. Your application decides when to retry.
+
+## Enrolling and Refreshing Microsoft With Host-Owned Storage
+
+You may connect work/school Microsoft 365 and personal Outlook.com or Hotmail accounts without package tables. `MsGraphGrantOAuthService` uses the same host guards, atomic state consumption, conditional grant storage and safe return policy as Gmail enrollment. Keep the package's legacy browser routes disabled when your host owns these endpoints.
+
+Configure `mailbox.drivers.ms-graph.client_id`, `client_secret` and `tenant_id` for the selected Entra Web app registration, plus `mailbox.oauth.ms_graph.redirect_uri` and `scopes`. Register the exact redirect URI and choose supported account types that match the intended users. The authority must be one of these values:
+
+| `tenant_id` | Accounts accepted by the SDK |
+| --- | --- |
+| An explicit tenant GUID | That tenant, including users signing into it as guests |
+| `organizations` | Organizational tenants |
+| `consumers` | The personal Microsoft account tenant |
+| `common` | Organizational and personal Microsoft accounts |
+
+The actual ID-token issuer must be `https://login.microsoftonline.com/{tid}/v2.0`; `common`, `organizations` and `consumers` are authority selectors, never literal issuers. Other clouds, tenant-domain aliases and arbitrary authority URLs are not supported by this flow.
+
+Request `openid`, `profile`, `offline_access` and `User.Read`, plus the delegated mail permissions your application needs. `User.Read` permits the identity check through Graph `/me`. For own-mailbox reads, request `Mail.Read` or `Mail.ReadWrite`; organizational shared reads require `Mail.Read.Shared` or `Mail.ReadWrite.Shared` and the signed-in user's actual Exchange access to that target. Configure those scopes explicitly and obtain user or administrator consent according to the tenant's policy. A registration that only accepts organizational users cannot enroll personal accounts by changing the authority alone.
+
+```php
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Services\OAuth\MsGraphGrantOAuthService;
+use Pyle\Mailbox\Services\OAuth\MsGraphGrantRefresher;
+use Pyle\Mailbox\Support\CacheGrantRefreshLock;
+use Pyle\Mailbox\Support\RefreshingGrantTokenProvider;
+
+$oauth = new MsGraphGrantOAuthService($enrollmentGuard, $states, $grants);
+$context = new GrantContext('connection-42', 'grant-19', 'generation-3', 'ms-graph', 'person@example.com');
+
+// Initiation and callback recover these contexts from trusted host state.
+$url = $oauth->authorizationUrl($context, $hostContext, '/settings/mailboxes');
+$result = $oauth->handleCallback($context, $hostContext, $state, $code);
+
+$tokens = new RefreshingGrantTokenProvider(
+    $accessGuard, $grants, new CacheGrantRefreshLock('mailbox-refresh'), new MsGraphGrantRefresher,
+);
+$message = Mailbox::forGrant($context, $tokens)->message($messageId)->get();
+```
+
+The state binds the authority, client, redirect URI, selected context, host context, expected revision, nonce and S256 PKCE verifier. Host state adapters must persist the optional `OAuthState::authority` field as well as its private nonce and verifier. Changing the authority or client during enrollment requires a fresh authorization attempt.
+
+The SDK checks the direct token response's v2 issuer, tenant, subject, audience, optional authorized party, expiry, issue time, not-before time and nonce. Graph `/me.id` must match the ID token's `oid`. The `GrantIdentity` subject is the distinct pairwise OIDC `sub`; `StoredGrant::metadata['object_id']` retains the verified Graph object ID. Email and profile names are display metadata, never grant selectors. The private decoder accepts only ID tokens received directly from the fixed Microsoft HTTPS token endpoint with client authentication, TLS verification and redirects disabled; it does not decode Graph access tokens or verify caller-supplied JWTs. See Microsoft's [identity claims](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference) and [authorization-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow).
+
+Enrollment requires a renewable token. An omitted refresh token preserves the previous secret and nonce fingerprint only for the same selected grant and matching verified identity and object ID. Refresh uses the verified tenant's token endpoint and the shared lock/reload/conditional replacement path described above. It preserves an omitted refresh secret, stores rotations, advances the credential revision and keeps the lifecycle generation. An optional refresh ID token must match the original subject, tenant, issuer, client and object ID; a returned nonce must match the original fingerprint. An omitted ID token is valid. Returned scope values describe the response; they do not establish consent or resource access by themselves.
+
+`OAuthEnrollmentException` reports invalid or incomplete enrollment/setup, including a rejected profile identity check. Refresh uses `GrantRefreshException` for retryable coordination/transport/429/temporary failures and non-retryable client setup or malformed responses. `GrantAccessDeniedException` reports lost/insufficient delegated authority or a changed identity/lifecycle. These errors omit raw responses and credentials. None selects configured application credentials as a fallback.
+
+### Shared-Mailbox Access
+
+After the host authorizes another mailbox for the same grant, create a `GrantContext` with the same connection, grant and generation and that mailbox as the target. The shared refresh lock spans these targets. A Graph read must succeed under that delegated token; successful enrollment or `/me` does not prove permission to the shared mailbox. Provider denial remains an access error.
+
+Delegated shared-mailbox discovery is delta-only. Microsoft [does not support shared/delegated change subscriptions with the shared delegated mail scopes](https://learn.microsoft.com/en-us/graph/outlook-share-messages-folders). Required live shared read/send/watch uses a separately selected, scoped application-permission grant and its dedicated capability/setup checks; this enrollment API does not establish that setup or combine grants. Existing configured application-permission integrations retain their current path. Live account, consent, shared-lock deployment and mailbox acceptance remain separate validation gates.
 
 ## What's Next
 

@@ -34,3 +34,7 @@ Add Microsoft delegated enrollment and refresh using the established host-owned 
 
 Reuse the provider-neutral enrollment and refresh seams introduced by tickets 04 and 05 rather than creating a second manager hierarchy.
 
+## Comments
+
+- 2026-10-29: Claimed by the ticket 06 implementer on `feat/mailbox-sdk-06`, based on integration `00beee6f4eff5a0ab01b9399d946b1a63e5164ef`; ancestry confirmed and no upstream configured. Approved Q13 seams are the public SDK/provider APIs with HTTP fakes and host enrollment/state/store/lock ports. Waiting for the global verification slot before dependency setup or checks.
+
