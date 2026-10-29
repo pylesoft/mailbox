@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailDeltaSync;
 use Pyle\Mailbox\Drivers\Gmail\GmailFolderResource;
@@ -11,6 +10,7 @@ use Pyle\Mailbox\Drivers\Gmail\GmailMailboxResource;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('resolves gmail labels and builds folder resources directly', function (): void {
     $client = new class extends FakeGmailClient

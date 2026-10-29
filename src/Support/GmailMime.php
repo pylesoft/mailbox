@@ -91,7 +91,7 @@ final class GmailMime
     }
 
     /**
-     * @param array<string, mixed> $part
+     * @param  array<string, mixed>  $part
      * @return list<array{name: string, value: string}>
      */
     public static function headers(array $part): array
@@ -110,7 +110,7 @@ final class GmailMime
     }
 
     /**
-     * @param array<string, mixed> $part
+     * @param  array<string, mixed>  $part
      * @return list<array<string, mixed>>
      */
     public static function children(array $part): array
@@ -129,8 +129,8 @@ final class GmailMime
     }
 
     /**
-     * @param array<string, mixed> $part
-     * @param array<string, mixed> $child
+     * @param  array<string, mixed>  $part
+     * @param  array<string, mixed>  $child
      */
     public static function isRelatedRoot(array $part, array $child, int $index): bool
     {
@@ -156,7 +156,7 @@ final class GmailMime
     }
 
     /**
-     * @param array<string, mixed> $part
+     * @param  array<string, mixed>  $part
      * @return list<array<string, mixed>>
      */
     public static function files(array $part, bool $relatedRoot = false): array

@@ -95,7 +95,7 @@ class GmailMessageResource implements MessageResource
     /** @return Collection<int, AttachmentDto> */
     public function attachments(): Collection
     {
-        $message = $this->client->getBounded($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), ['format' => 'full'], $this->mailbox);
+        $message = $this->client->getBounded($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), ['format' => 'full'], $this->mailbox, retry: true);
         $parts = GmailMime::files((array) ($message['payload'] ?? []));
 
         return collect($parts)

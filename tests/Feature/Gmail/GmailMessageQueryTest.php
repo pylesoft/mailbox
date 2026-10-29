@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageQuery;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('queries gmail messages and maps DTOs', function (): void {
     $client = new class extends FakeGmailClient

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageResource;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('performs gmail message operations', function (): void {
     $client = new class extends FakeGmailClient

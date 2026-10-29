@@ -10,10 +10,10 @@ use Pyle\Mailbox\Support\ResponseBudget;
 abstract class FakeGmailClient extends GmailClient
 {
     /**
-     * @param array<string, mixed> $query
+     * @param  array<string, mixed>  $query
      * @return array<string, mixed>
      */
-    public function getBounded(string $endpoint, ResponseBudget $budget, array $query = [], ?string $mailbox = null): array
+    public function getBounded(string $endpoint, ResponseBudget $budget, array $query = [], ?string $mailbox = null, bool $retry = false): array
     {
         return $this->get($endpoint, $query, $mailbox);
     }

@@ -3,16 +3,22 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\FnStream;
-use Pyle\Mailbox\DTOs\GrantContext;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
+use Illuminate\Contracts\Queue\Job;
+use Pyle\Mailbox\Contracts\MailboxResource;
+use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
-use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
 it('reads externalized Gmail text as body without advertising it as a file', function (): void {
@@ -295,20 +301,45 @@ it('does not complete an incremental round when an external body is missing', fu
     expect(fn () => $mailbox->folder('INBOX')->delta('100'))->toThrow(MailboxException::class, 'External Gmail body content was not available.');
 });
 
+it('preserves safe Gmail message retries without releasing the enclosing host job', function (bool $transportFailure): void {
+    $job = Mockery::mock(Job::class);
+    $job->shouldNotReceive('release');
+    app()->instance('queue.job', $job);
+    $history = [];
+    $resource = gmailBodyResource([
+        $transportFailure ? new ConnectException('Private connection detail.', new Request('GET', 'https://gmail.googleapis.com/gmail/v1/users/reader%40example.com/messages/message')) : new Response(503, [], '{}'),
+        ['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => ['data' => 'T0s', 'size' => 2]]],
+    ], $history);
+
+    expect($resource->body()->content)->toBe('OK')
+        ->and($history)->toHaveCount(2);
+})->with([false, true]);
+
+it('charges retry responses against the same Gmail body byte budget', function (): void {
+    $history = [];
+    $message = ['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => ['data' => 'T0s', 'size' => 2]]];
+    $error = '{"error":"'.str_repeat('x', 150).'"}';
+    $resource = gmailBodyResource([new Response(503, [], $error), $message], $history);
+    $budget = strlen($error) + strlen(json_encode($message, JSON_THROW_ON_ERROR)) - 1;
+
+    expect(fn () => $resource->get(new BodyReadLimits(maxResponseBytes: $budget)))->toThrow(ResponseLimitExceededException::class)
+        ->and($history)->toHaveCount(2);
+});
+
 /**
- * @param array<int, array<string, mixed>|Response|Throwable> $responses
- * @param array<int, array<string, mixed>> $history
+ * @param  array<int, array<string, mixed>|Response|Throwable>  $responses
+ * @param  array<int, array<string, mixed>>  $history
  */
-function gmailBodyResource(array $responses, array &$history): \Pyle\Mailbox\Contracts\MessageResource
+function gmailBodyResource(array $responses, array &$history): MessageResource
 {
     return gmailBodyMailbox($responses, $history)->message('message');
 }
 
 /**
- * @param array<int, array<string, mixed>|Response|Throwable> $responses
- * @param array<int, array<string, mixed>> $history
+ * @param  array<int, array<string, mixed>|Response|Throwable>  $responses
+ * @param  array<int, array<string, mixed>>  $history
  */
-function gmailBodyMailbox(array $responses, array &$history): \Pyle\Mailbox\Contracts\MailboxResource
+function gmailBodyMailbox(array $responses, array &$history): MailboxResource
 {
     $stack = HandlerStack::create(new MockHandler(array_map(
         static fn (array|Response|Throwable $response): Response|Throwable => is_array($response)

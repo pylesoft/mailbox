@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailDeltaSync;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('performs initial gmail delta sync', function (): void {
     $client = new class extends FakeGmailClient

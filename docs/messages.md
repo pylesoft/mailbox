@@ -340,7 +340,7 @@ echo $body->content;
 
 ### Gmail Body Limits
 
-Gmail reads share an 8 MiB response budget across the message and its body fetches. They also allow up to 4 MiB of decoded body content, 32 external body fetches and 256 MIME parts per message. The byte limit includes all text alternatives, checks wire bytes and UTF-8 output, and checks the combined body. The limits apply to actual content, including responses whose declared length is wrong.
+Gmail reads share an 8 MiB response budget across the message and its body fetches. They also allow up to 4 MiB of decoded body content, 32 external body parts and 256 examined MIME parts per message. The byte limit includes all text alternatives, checks wire bytes and UTF-8 output, and checks the combined body. The limits apply to actual content, including responses whose declared length is wrong. Safe read retries use the configured retry policy and consume the same response budget, without releasing the host's enclosing job.
 
 You may pass different limits to the concrete Gmail message resource's `get()` or `body()` method:
 

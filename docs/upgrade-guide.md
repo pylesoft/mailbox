@@ -32,6 +32,12 @@ Explicit-grant Gmail resources now expose the optional `SupportsInitialSync` cap
 
 Existing eager Gmail method signatures remain available. A query that reaches its page limit or repeats a page token now throws `ApiRequestException` instead of silently returning a partial collection. Eager initial delta captures its history baseline before listing and refuses completion without a baseline. Consumers that intentionally read a subset may keep using `take()`; consumers that need resumable imports should use the new capability.
 
+## Gmail Body Completeness
+
+Gmail single-message, query and legacy delta reads now hydrate externalized text and enforce response, decoded-content, MIME-part and hydration limits. Invalid base64url, inconsistent sizes, missing content and unsupported charsets throw instead of becoming empty text. `body()` also throws when no text body exists; valid empty text remains valid. See [Gmail body limits](messages.md#gmail-body-limits) for defaults and the optional concrete-resource limits.
+
+Externalized unnamed text is no longer advertised as an attachment. Named text files and inline files retain their metadata, and inline file parts may use their Gmail part ID when no external attachment ID exists. The mandatory resource contracts and DTO constructor fields are unchanged.
+
 ## Checking Your Current Version
 
 You can check which version of Mailbox you have installed at any time:
@@ -67,12 +73,6 @@ Watch the repository on GitHub and subscribe to release notifications. Each rele
 The [CHANGELOG](https://github.com/pylesoft/mailbox/blob/master/CHANGELOG.md) in the repository root tracks every release with a summary of changes grouped by type: Added, Changed, Deprecated, Removed, Fixed, and Security.
 
 ## Upgrade Template
-
-### Gmail Body Completeness
-
-Gmail single-message, query and legacy delta reads now hydrate externalized text and enforce response, decoded-content, MIME-part and hydration limits. Invalid base64url, inconsistent sizes, missing content and unsupported charsets throw instead of becoming empty text. `body()` also throws when no text body exists; valid empty text remains valid. See [Gmail body limits](messages.md#gmail-body-limits) for defaults and the optional concrete-resource limits.
-
-Externalized unnamed text is no longer advertised as an attachment. Named text files and inline files retain their metadata, and inline file parts may use their Gmail part ID when no external attachment ID exists. The mandatory resource contracts and DTO constructor fields are unchanged.
 
 When a new major version is released, its upgrade notes will follow this format:
 

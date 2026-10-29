@@ -10,8 +10,8 @@ use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Exceptions\MailboxException;
-use Pyle\Mailbox\Support\ReceivedHeaders;
 use Pyle\Mailbox\Support\GmailMime;
+use Pyle\Mailbox\Support\ReceivedHeaders;
 
 /** @implements Arrayable<string, mixed> */
 final readonly class MessageDto implements Arrayable, JsonSerializable

@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\Gmail;
 
-use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\Exceptions\MailboxException;
-use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 final class GmailMessageReader
@@ -33,7 +33,7 @@ final class GmailMessageReader
         $this->responses = $responses ?? new ResponseBudget($this->limits->maxResponseBytes);
         $this->parts = $this->hydrations = $this->bodyBytes = 0;
         $endpoint = sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($messageId));
-        $message = $this->client->getBounded($endpoint, $this->responses, ['format' => 'full'], $this->mailbox);
+        $message = $this->client->getBounded($endpoint, $this->responses, ['format' => 'full'], $this->mailbox, retry: true);
         if (is_array($message['payload'] ?? null)) {
             $message['payload'] = $this->hydrate($message['payload'], $endpoint);
             $body = GmailMime::body($message['payload']);
@@ -46,7 +46,7 @@ final class GmailMessageReader
     }
 
     /**
-     * @param array<string, mixed> $part
+     * @param  array<string, mixed>  $part
      * @return array<string, mixed>
      */
     private function hydrate(array $part, string $endpoint, bool $relatedRoot = false): array
@@ -66,7 +66,7 @@ final class GmailMessageReader
                 throw new ResponseLimitExceededException('Gmail body read exceeded the hydration limit.');
             }
             try {
-                $external = $this->client->getBounded($endpoint.'/attachments/'.rawurlencode($body['attachmentId']), $this->responses, mailbox: $this->mailbox);
+                $external = $this->client->getBounded($endpoint.'/attachments/'.rawurlencode($body['attachmentId']), $this->responses, mailbox: $this->mailbox, retry: true);
             } catch (ResourceNotFoundException) {
                 throw new MailboxException('External Gmail body content was not available.');
             }

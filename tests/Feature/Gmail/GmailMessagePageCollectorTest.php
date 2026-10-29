@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageFilterer;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessagePageCollector;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('hydrates gmail pages, applies filters, deduplicates ids, and stops on repeated page tokens', function (): void {
     $client = new class extends FakeGmailClient
