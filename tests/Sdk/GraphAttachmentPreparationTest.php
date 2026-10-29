@@ -8,6 +8,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
+use Psr\Http\Message\RequestInterface;
 use Pyle\Mailbox\Contracts\SupportsDraftAttachmentPreparation;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -19,9 +20,14 @@ use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
 it('attaches a chosen small file to the acknowledged immutable draft without sending', function (): void {
     $history = [];
+    $payload = null;
     $mailbox = graphAttachmentMailbox([
         new Response(201, [], '{"id":"immutable-draft="}'),
-        new Response(201, ['request-id' => 'attach-1'], '{"id":"attachment-1"}'),
+        static function (RequestInterface $request) use (&$payload): Response {
+            $payload = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+            return new Response(201, ['request-id' => 'attach-1'], '{"id":"attachment-1"}');
+        },
     ], $history);
     $file = new PreparedFile('host-file-1', 'résumé.txt', 'text/plain', 5,
         static fn () => Utils::streamFor('hello'), hash('sha256', 'hello'), true, 'chosen-cid');
@@ -44,7 +50,7 @@ it('attaches a chosen small file to the acknowledged immutable draft without sen
         ->and($history)->toHaveCount(2)
         ->and($history[1]['request']->getMethod())->toBe('POST')
         ->and($history[1]['request']->getUri()->getPath())->toBe('/v1.0/users/sender%40example.com/messages/immutable-draft%3D/attachments')
-        ->and(json_decode((string) $history[1]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR))->toBe([
+        ->and($payload)->toBe([
             '@odata.type' => '#microsoft.graph.fileAttachment', 'name' => 'résumé.txt', 'contentType' => 'text/plain',
             'isInline' => true, 'contentId' => 'chosen-cid', 'contentBytes' => 'aGVsbG8=',
         ]);

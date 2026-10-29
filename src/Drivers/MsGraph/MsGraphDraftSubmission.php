@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
 use InvalidArgumentException;
+use Pyle\Mailbox\DTOs\AttachmentPreparation;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\PreparedFile;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionEvidence;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
@@ -19,6 +22,11 @@ use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\PreparedMessageMime;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
+use Pyle\Mailbox\Support\ResponseBudget;
+use Pyle\Mailbox\Support\SubmissionBody;
+use GuzzleHttp\Psr7\Utils;
+use Psr\Http\Message\StreamInterface;
+use Pyle\Mailbox\Exceptions\MailboxException;
 
 final readonly class MsGraphDraftSubmission
 {
@@ -35,16 +43,98 @@ final readonly class MsGraphDraftSubmission
         ], $this->context->mailbox, maxResponseBytes: 4_194_304);
         $data = json_decode($response->body() ?? '', true);
         $draftId = is_array($data) && self::validId($data['id'] ?? null) ? $data['id'] : null;
-        $outcome = $response->status === 201 && $draftId !== null ? PreparationOutcome::Prepared : PreparationOutcome::Uncertain;
+        $outcome = $response->status === 201 && $draftId !== null
+            ? ($message->files === [] ? PreparationOutcome::Prepared : PreparationOutcome::Preparing) : PreparationOutcome::Uncertain;
         if (self::rejected($response->status)) {
             $outcome = PreparationOutcome::Rejected;
         }
 
         return new SubmissionPreparation(
             $this->context, $outcome, $message->correlationId,
-            $outcome === PreparationOutcome::Prepared ? $draftId : null,
+            in_array($outcome, [PreparationOutcome::Prepared, PreparationOutcome::Preparing], true) ? $draftId : null,
             $response->status, $response->headers, $this->fingerprint($message, $payload),
         );
+    }
+
+    public function prepareAttachments(SubmissionPreparation $preparation, PreparedMessage $message, SubmissionLimits $limits, int $maxRequestBytes): SubmissionPreparation
+    {
+        $draftId = $this->assertIntent($preparation, $message);
+        if ($preparation->outcome !== PreparationOutcome::Preparing) {
+            throw new InvalidArgumentException('Attachment preparation requires an acknowledged incomplete draft.');
+        }
+        $remaining = $limits->maxTotalFileBytes;
+        foreach ($message->files as $file) {
+            if ($file->byteLength > min($limits->maxFileBytes, $remaining)) {
+                throw new UnsupportedCapabilityException('The prepared files exceed the caller file byte limits.');
+            }
+            $remaining -= $file->byteLength;
+        }
+        $file = $message->files[count($preparation->attachments)] ?? null;
+        if ($file === null || $file->byteLength >= 3_000_000) {
+            throw new UnsupportedCapabilityException('This preparation step requires a selected small file.');
+        }
+        $body = $this->smallFilePayload($file, $limits, $maxRequestBytes);
+        try {
+            $response = $this->client->requestOnce('POST', $this->endpoint().'/'.rawurlencode($draftId).'/attachments', [
+                'body' => $body, 'headers' => ['Content-Type' => 'application/json', 'Prefer' => 'IdType="ImmutableId"'],
+            ], $this->context->mailbox);
+        } finally {
+            $body->close();
+        }
+        $data = json_decode($response->body() ?? '');
+        $attachmentId = $response->status === 201 && $data instanceof \stdClass && self::validId($data->id ?? null) ? $data->id : null;
+        $outcome = $attachmentId !== null ? PreparationOutcome::Prepared
+            : (self::rejected($response->status) ? PreparationOutcome::Rejected : PreparationOutcome::Uncertain);
+        $attachments = [...$preparation->attachments, new AttachmentPreparation($file->identity, $outcome,
+            $attachmentId === null ? 0 : $file->byteLength, $attachmentId, $response->status, $response->headers)];
+
+        return new SubmissionPreparation($preparation->context,
+            $outcome === PreparationOutcome::Prepared && count($attachments) < count($message->files) ? PreparationOutcome::Preparing : $outcome,
+            $preparation->correlationId, $draftId, $response->status, $response->headers,
+            $preparation->intentFingerprint(), $preparation->conversationId, $attachments);
+    }
+
+    private function smallFilePayload(PreparedFile $file, SubmissionLimits $limits, int $maxRequestBytes): StreamInterface
+    {
+        $budget = new ResponseBudget(min($maxRequestBytes, 3_999_999), $limits->maxMemoryBytes);
+        $budget->assertMemoryAvailable(65_536);
+        $source = $file->openVerified();
+        $body = null;
+        try {
+            $temporary = tmpfile();
+            if ($temporary === false) {
+                throw new MailboxException('The private attachment spool could not be created.');
+            }
+            $body = Utils::streamFor($temporary);
+            $metadata = json_encode(['@odata.type' => '#microsoft.graph.fileAttachment', 'name' => $file->name,
+                'contentType' => $file->mediaType, 'isInline' => $file->inline, 'contentId' => $file->contentId], JSON_THROW_ON_ERROR);
+            $this->write($body, substr($metadata, 0, -1).',"contentBytes":"', $budget);
+            $tail = '';
+            while (! $source->eof()) {
+                $budget->assertMemoryAvailable(65_536);
+                $chunk = $tail.$source->read(8190);
+                $length = strlen($chunk) - strlen($chunk) % 3;
+                $tail = substr($chunk, $length);
+                $this->write($body, base64_encode(substr($chunk, 0, $length)), $budget);
+            }
+            $this->write($body, base64_encode($tail).'"}', $budget);
+            $body->rewind();
+
+            return new SubmissionBody($body, $budget);
+        } catch (\Throwable $exception) {
+            $body?->close();
+            throw $exception;
+        } finally {
+            $source->close();
+        }
+    }
+
+    private function write(StreamInterface $stream, string $bytes, ResponseBudget $budget): void
+    {
+        $budget->consume(strlen($bytes));
+        if ($stream->write($bytes) !== strlen($bytes)) {
+            throw new MailboxException('The private attachment spool could not be written.');
+        }
     }
 
     public function submit(SubmissionPreparation $preparation, PreparedMessage $message): SubmissionResult
@@ -182,7 +272,7 @@ final readonly class MsGraphDraftSubmission
             $complete = $last->status === 200 && $updated instanceof \stdClass && ($updated->id ?? null) === $draftId && ($updated->isDraft ?? null) === true;
         }
 
-        return new SubmissionPreparation($this->context, $complete ? PreparationOutcome::Prepared : PreparationOutcome::Uncertain,
+        return new SubmissionPreparation($this->context, $complete ? ($message->files === [] ? PreparationOutcome::Prepared : PreparationOutcome::Preparing) : PreparationOutcome::Uncertain,
             $message->correlationId, $draftId, $last->status, $last->headers, $this->fingerprint($message, $payload), $draft->conversationId);
     }
 
@@ -209,6 +299,10 @@ final readonly class MsGraphDraftSubmission
 
     private function fingerprint(PreparedMessage $message, string $payload): string
     {
+        if ($message->files !== []) {
+            $payload .= json_encode(array_map(static fn (PreparedFile $file): array => [$file->identity, $file->name,
+                $file->mediaType, $file->byteLength, $file->fingerprint(), $file->inline, $file->contentId], $message->files), JSON_THROW_ON_ERROR);
+        }
         $context = $message->context;
         if ($context === null) {
             return hash('sha256', $payload);
@@ -226,8 +320,8 @@ final readonly class MsGraphDraftSubmission
         if ($maxRequestBytes < 1) {
             throw new InvalidArgumentException('The submission byte budget must be positive.');
         }
-        if ($message->files !== [] || ($message->textBody !== null && $message->htmlBody !== null)) {
-            throw new UnsupportedCapabilityException('Graph draft submission supports one text or HTML body without files.');
+        if ($message->textBody !== null && $message->htmlBody !== null) {
+            throw new UnsupportedCapabilityException('Graph draft submission supports one text or HTML body.');
         }
         PreparedMessageMime::validate($message);
         $headers = [];

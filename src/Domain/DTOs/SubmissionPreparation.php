@@ -8,7 +8,10 @@ use Pyle\Mailbox\Enums\PreparationOutcome;
 
 final readonly class SubmissionPreparation
 {
-    /** @param array<string, list<string>> $headers */
+    /**
+     * @param array<string, list<string>> $headers
+     * @param list<AttachmentPreparation> $attachments
+     */
     public function __construct(
         public GrantContext $context,
         public PreparationOutcome $outcome,
@@ -18,6 +21,7 @@ final readonly class SubmissionPreparation
         public array $headers = [],
         #[\SensitiveParameter] private string $intentFingerprint = '',
         public ?string $conversationId = null,
+        public array $attachments = [],
     ) {}
 
     public function intentFingerprint(): string
@@ -31,6 +35,7 @@ final readonly class SubmissionPreparation
         return [
             'context' => $this->context, 'outcome' => $this->outcome, 'correlationId' => $this->correlationId,
             'draftId' => $this->draftId, 'status' => $this->status, 'headers' => $this->headers, 'conversationId' => $this->conversationId,
+            'attachments' => $this->attachments,
         ];
     }
 }
