@@ -62,6 +62,7 @@ final readonly class MsGraphDraftSubmission
 
     public function prepareAttachments(SubmissionPreparation $preparation, PreparedMessage $message, SubmissionLimits $limits, int $maxRequestBytes): SubmissionPreparation
     {
+        (new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes))->assertMemoryAvailable(65_536);
         $draftId = $this->assertIntent($preparation, $message);
         if ($preparation->outcome !== PreparationOutcome::Preparing) {
             throw new InvalidArgumentException('Attachment preparation requires an acknowledged incomplete draft.');
@@ -143,6 +144,7 @@ final readonly class MsGraphDraftSubmission
 
     public function inspectAttachments(SubmissionPreparation $preparation, PreparedMessage $message, SubmissionLimits $limits): SubmissionPreparation
     {
+        (new ResponseBudget(4_194_304, $limits->maxMemoryBytes))->assertMemoryAvailable(65_536);
         $draftId = $this->assertIntent($preparation, $message);
         $index = $this->attachmentIndex($preparation, $message);
         $progress = $preparation->attachments[$index] ?? null;
@@ -227,7 +229,8 @@ final readonly class MsGraphDraftSubmission
                 && ($data->nextExpectedRanges ?? null) === [(string) $end]
                 && $this->sameSessionExpiry($data, $session));
             $outcome = $acknowledged ? ($attachmentId === null ? PreparationOutcome::Preparing : PreparationOutcome::Prepared)
-                : (in_array($response->status, [401, 403, 404, 410], true) ? PreparationOutcome::Expired : PreparationOutcome::Uncertain);
+                : (in_array($response->status, [401, 403, 404, 410], true) ? PreparationOutcome::Expired
+                    : (self::rejected($response->status) ? PreparationOutcome::Rejected : PreparationOutcome::Uncertain));
 
             return new AttachmentPreparation($file->identity, $outcome, $acknowledged ? $end : $progress->acknowledgedBytes,
                 $attachmentId, $response->status, $response->headers, $session);
