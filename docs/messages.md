@@ -797,7 +797,7 @@ Names, subjects and text headers support UTF-8. Text and HTML bodies must also c
 | `SubmissionOutcome::Rejected` | A known rejection response, such as HTTP 400, 401, 403 or 429, was observed. | Retain the response evidence and decide how to correct or schedule the operation. |
 | `SubmissionOutcome::Uncertain` | A timeout, 5xx, redirect, oversized/interrupted response or malformed acknowledgement prevents a reliable acceptance decision. | Retain the original operation and investigate it. Uncertainty does not authorize another send. |
 
-`SubmissionResult` contains `provider`, `outcome`, `correlationId`, nullable HTTP `status`, safe response `headers`, and nullable validated `messageId` / `threadId`. It is not a fetched `MessageDto`. An empty Gmail 202 is uncertain; it does not have Graph's send-acceptance semantics.
+`SubmissionResult` contains `provider`, `outcome`, `correlationId`, nullable HTTP `status`, safe response `headers`, nullable validated `messageId` / `threadId`, and a trailing nullable selected-grant `context`. Legacy results can omit that context; inspection must not infer an original authorization binding from the mailbox alone. It is not a fetched `MessageDto`. An empty Gmail 202 is uncertain; it does not have Graph's send-acceptance semantics.
 
 The SDK retains safe request identity, Date and Retry-After response headers. Authorization, cookies, redirect/upload URLs, arbitrary response bodies and raw transport exceptions are excluded from public submission evidence. If no response was observed, `status` is `null`. A response body beyond 64 KiB cannot establish acceptance, but its observed status and safe headers remain available.
 
@@ -928,6 +928,8 @@ This capability requires an explicit grant context. It does not add methods to m
 An uncertain preparation never causes another draft creation or an automatic send. The draft may be visible in Outlook and may remain after an interrupted or failed operation. The SDK does not automatically delete it.
 
 When creation was acknowledged but later native cleanup or normalization was interrupted, the uncertain preparation retains its original `draftId` and provider conversation identity. A missing creation acknowledgement has no trustworthy draft identity. Neither case establishes that a send was attempted.
+
+Native handles require their retained provider conversation identity when reconstructed for send or inspection. Graph send results also retain the preparation's selected-grant context. Keep this binding through durable storage; an unrelated connection or grant cannot inspect the preparation under the same mailbox address.
 
 `submitPrepared` checks the context, generation and original intent before provider I/O. It then reads the immutable draft, verifies its content and explicit To/Cc/Bcc lists, and makes one send request. Missing, changed, incomplete or unverifiable draft state stops before send. Each phase checks the selected grant again; a disconnected or superseded grant never falls back to configured application credentials.
 
