@@ -16,6 +16,8 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\PreparedFile;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
@@ -52,6 +54,8 @@ arch('DTOs are final readonly classes')
         HealthCheckResult::class,
         MessageDto::class,
         PreparedMessage::class,
+        PreparedFile::class,
+        SubmissionLimits::class,
         SubmissionPreparation::class,
         SubmissionResult::class,
         SyncBudget::class,

@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Support;
 
+use GuzzleHttp\Psr7\Utils;
 use InvalidArgumentException;
+use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Exception\ExceptionInterface;
@@ -17,26 +22,94 @@ use Symfony\Component\Mime\Part\Multipart\AlternativePart;
 use Symfony\Component\Mime\Part\Multipart\MixedPart;
 use Symfony\Component\Mime\Part\Multipart\RelatedPart;
 use Symfony\Component\Mime\Part\TextPart;
+use Throwable;
 
 final class PreparedMessageMime
 {
-    public static function encode(PreparedMessage $message, int $maxBytes = 1_048_576): string
+    public static function encode(PreparedMessage $message, int $maxBytes = 1_048_576, ?SubmissionLimits $limits = null): string
+    {
+        $limits ??= new SubmissionLimits;
+        $budget = new ResponseBudget($maxBytes, $limits->maxMemoryBytes);
+        self::preflight($message, $maxBytes, $limits, $budget);
+        $mime = '';
+        foreach (self::chunks($message, $maxBytes, $budget) as $chunk) {
+            $budget->assertMemoryAvailable(strlen($mime) + strlen($chunk) * 2 + 65_536);
+            $mime .= $chunk;
+        }
+
+        return $mime;
+    }
+
+    public static function gmailPayload(PreparedMessage $message, int $maxRequestBytes, ?SubmissionLimits $limits = null): StreamInterface
+    {
+        $limits ??= new SubmissionLimits;
+        $budget = new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes);
+        $payload = null;
+        try {
+            self::preflight($message, $maxRequestBytes, $limits, $budget);
+            $payload = self::temporaryFile();
+            self::write($payload, '{"raw":"', $budget);
+            $tail = '';
+            foreach (self::chunks($message, min($maxRequestBytes, 36_700_160), $budget) as $chunk) {
+                $budget->assertMemoryAvailable(strlen($chunk) * 4 + 65_536);
+                $chunk = $tail.$chunk;
+                $length = strlen($chunk) - strlen($chunk) % 3;
+                $tail = substr($chunk, $length);
+                self::write($payload, strtr(base64_encode(substr($chunk, 0, $length)), '+/', '-_'), $budget);
+            }
+            self::write($payload, rtrim(strtr(base64_encode($tail), '+/', '-_'), '=').'"}', $budget);
+            rewind($payload);
+
+            return new SubmissionBody(Utils::streamFor($payload), $budget);
+        } catch (Throwable $exception) {
+            if (is_resource($payload)) {
+                fclose($payload);
+            }
+            if ($exception instanceof ResponseLimitExceededException) {
+                throw new UnsupportedCapabilityException('The Gmail request exceeds its wire or memory allocation budget.');
+            }
+            throw $exception;
+        }
+    }
+
+    private static function preflight(PreparedMessage $message, int $maxBytes, SubmissionLimits $limits, ResponseBudget $budget): void
     {
         if ($maxBytes < 1) {
             throw new InvalidArgumentException('The submission byte budget must be positive.');
         }
-        self::validate($message);
-        $inputBytes = strlen($message->textBody ?? '') + strlen($message->htmlBody ?? '') + strlen($message->subject) + strlen($message->correlationId);
+        $remainingFileBytes = $limits->maxTotalFileBytes;
+        $metadataBytes = strlen($message->subject) + strlen($message->correlationId);
         foreach ($message->headers as $name => $value) {
-            $inputBytes += strlen($name) + strlen($value);
+            $metadataBytes += (is_string($name) ? strlen($name) : 0) + (is_string($value) ? strlen($value) : 0);
         }
         foreach ([$message->to, $message->cc, $message->bcc, [$message->sender]] as $addresses) {
             foreach ($addresses as $address) {
-                $inputBytes += strlen($address->name) + strlen($address->address);
+                if ($address instanceof EmailAddressDto) {
+                    $metadataBytes += strlen($address->name) + strlen($address->address) + 4096;
+                }
             }
         }
         foreach ($message->files as $file) {
-            $inputBytes += $file->byteLength + strlen($file->name) + strlen($file->mediaType);
+            if ($file instanceof PreparedFile) {
+                $metadataBytes += strlen($file->name) + strlen($file->mediaType) + strlen($file->identity) + strlen($file->contentId ?? '') + 4096;
+            }
+        }
+        if ($metadataBytes > intdiv(PHP_INT_MAX - 262_144, 8)) {
+            throw new UnsupportedCapabilityException('The prepared metadata exceeds its allocation budget.');
+        }
+        // shortcut: allocation reservations target measured 64-bit PHP 8.4; remeasure other runtime heap guarantees.
+        $budget->assertMemoryAvailable($metadataBytes * 8 + 262_144);
+        self::validate($message);
+        $inputBytes = strlen($message->textBody ?? '') + strlen($message->htmlBody ?? '');
+        foreach ($message->files as $file) {
+            if ($file->byteLength > min($limits->maxFileBytes, $remainingFileBytes)) {
+                throw new UnsupportedCapabilityException('The prepared files exceed the decoded file byte budget.');
+            }
+            $remainingFileBytes -= $file->byteLength;
+            if ($file->byteLength > $maxBytes - $inputBytes) {
+                throw new UnsupportedCapabilityException('The prepared content exceeds the submission byte budget.');
+            }
+            $inputBytes += $file->byteLength;
             if ($file->contentId !== null) {
                 try {
                     new Address($file->contentId);
@@ -48,34 +121,43 @@ final class PreparedMessageMime
         if ($inputBytes > $maxBytes) {
             throw new UnsupportedCapabilityException('The prepared content exceeds the submission byte budget.');
         }
-        try {
-            return self::serialize($message, $maxBytes);
-        } catch (ExceptionInterface) {
-            throw new InvalidArgumentException('The prepared message contains an invalid or unsupported MIME field.');
-        }
     }
 
-    private static function serialize(PreparedMessage $message, int $maxBytes): string
+    /** @return iterable<string> */
+    private static function chunks(PreparedMessage $message, int $maxBytes, ResponseBudget $budget): iterable
     {
+        $snapshots = [];
+        try {
         $email = (new Email)
             ->from(self::address($message->sender))
             ->to(...array_map(self::address(...), $message->to))
             ->cc(...array_map(self::address(...), $message->cc))
             ->bcc(...array_map(self::address(...), $message->bcc))
             ->subject($message->subject);
-        $body = $message->textBody === null ? null : new TextPart($message->textBody, 'utf-8');
+        $body = null;
+        if ($message->textBody !== null) {
+            $snapshot = self::temporaryFile();
+            $snapshots[] = $snapshot;
+            self::write($snapshot, $message->textBody);
+            $body = new TextPart($snapshot, 'utf-8', 'plain', 'base64');
+        }
         if ($message->htmlBody !== null) {
-            $html = new TextPart($message->htmlBody, 'utf-8', 'html');
+            $snapshot = self::temporaryFile();
+            $snapshots[] = $snapshot;
+            self::write($snapshot, $message->htmlBody);
+            $html = new TextPart($snapshot, 'utf-8', 'html', 'base64');
             $body = $body === null ? $html : new AlternativePart($body, $html);
+        }
+        if ($body === null) {
+            throw new InvalidArgumentException('The prepared message requires text or HTML content.');
         }
         foreach ($message->headers as $name => $value) {
             $email->getHeaders()->addTextHeader($name, $value);
         }
         $email->getHeaders()->addTextHeader('X-Mailbox-Correlation-Id', $message->correlationId);
-        $snapshots = [];
         $inlineParts = $attachments = [];
-        try {
             foreach ($message->files as $file) {
+                $budget->assertMemoryAvailable(262_144);
                 $snapshot = $file->openVerified()->detach();
                 $snapshots[] = $snapshot;
                 $part = new DataPart($snapshot, $file->name, $file->mediaType);
@@ -105,21 +187,47 @@ final class PreparedMessageMime
                 $headers->addMailboxListHeader('Bcc', array_map(self::address(...), $message->bcc));
             }
 
-            $mime = $headers->toString();
+            $header = $headers->toString();
+            $mimeBytes = strlen($header);
+            if ($mimeBytes > $maxBytes) {
+                throw new UnsupportedCapabilityException('The encoded MIME exceeds its byte budget.');
+            }
+            yield $header;
             foreach ($email->getBody()->toIterable() as $chunk) {
-                if (strlen($mime) + strlen($chunk) > $maxBytes) {
+                if (strlen($chunk) > $maxBytes - $mimeBytes) {
                     throw new UnsupportedCapabilityException('The encoded MIME exceeds the submission byte budget.');
                 }
-                $mime .= $chunk;
+                $mimeBytes += strlen($chunk);
+                yield $chunk;
             }
-
-            return $mime;
+        } catch (ExceptionInterface) {
+            throw new InvalidArgumentException('The prepared message contains an invalid or unsupported MIME field.');
         } finally {
             foreach ($snapshots as $snapshot) {
                 if (is_resource($snapshot)) {
                     fclose($snapshot);
                 }
             }
+        }
+    }
+
+    /** @return resource */
+    private static function temporaryFile(): mixed
+    {
+        $stream = @tmpfile();
+        if ($stream === false) {
+            throw new MailboxException('Private submission spooling is unavailable.');
+        }
+
+        return $stream;
+    }
+
+    /** @param resource $stream */
+    private static function write(mixed $stream, string $bytes, ?ResponseBudget $budget = null): void
+    {
+        $budget?->consume(strlen($bytes));
+        if ($bytes !== '' && @fwrite($stream, $bytes) !== strlen($bytes)) {
+            throw new MailboxException('The private submission spool could not be written.');
         }
     }
 

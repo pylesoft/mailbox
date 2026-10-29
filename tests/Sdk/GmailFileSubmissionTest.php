@@ -9,11 +9,15 @@ use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\FnStream;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
+use GuzzleHttp\Promise\Create;
+use Psr\Http\Message\RequestInterface;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
+use Pyle\Mailbox\Contracts\SupportsSubmissionLimits;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
@@ -113,6 +117,53 @@ it('rejects duplicate selected file identities or Content-IDs before opening sou
         ->and($history)->toBe([]);
 })->with(['duplicate identity' => true, 'duplicate Content-ID' => false]);
 
+it('enforces configurable decoded file limits before opening any selected source', function (bool $aggregate): void {
+    $opened = false;
+    $source = static function () use (&$opened) {
+        $opened = true;
+
+        return Utils::streamFor('bytes');
+    };
+    $files = [new PreparedFile('first', 'first.bin', 'application/octet-stream', 5, $source, hash('sha256', 'bytes'))];
+    if ($aggregate) {
+        $files[] = new PreparedFile('second', 'second.bin', 'application/octet-stream', 5, $source, hash('sha256', 'bytes'));
+    }
+    $history = [];
+    $mailbox = fileSubmissionMailbox([], $history);
+    expect($mailbox)->toBeInstanceOf(SupportsSubmissionLimits::class);
+    $limited = $mailbox->withSubmissionLimits(new SubmissionLimits(maxFileBytes: $aggregate ? 5 : 4, maxTotalFileBytes: 9));
+
+    expect(fn () => $limited->submit(fileSubmissionMessage($files)))->toThrow(UnsupportedCapabilityException::class)
+        ->and($opened)->toBeFalse()
+        ->and($history)->toBe([]);
+})->with(['single file' => false, 'aggregate files' => true]);
+
+it('bounds a buffering HTTP handler before it can materialize the whole Gmail JSON body', function (): void {
+    $received = false;
+    $attempts = 0;
+    $body = null;
+    $http = new Client(['handler' => static function (RequestInterface $request) use (&$received, &$attempts, &$body) {
+        $attempts++;
+        $body = $request->getBody();
+        $buffer = (string) $body;
+        $received = $buffer !== '';
+
+        return Create::promiseFor(new Response(200, [], '{"id":"accepted-file-message"}'));
+    }]);
+    $history = [];
+    $mailbox = fileSubmissionMailbox([], $history, $http)->withSubmissionLimits(new SubmissionLimits(maxMemoryBytes: 2_097_152));
+    $bytes = str_repeat('x', 1_048_576);
+    $file = new PreparedFile('host-1', 'bounded.bin', 'application/octet-stream', strlen($bytes), static fn () => Utils::streamFor($bytes), hash('sha256', $bytes));
+
+    $result = $mailbox->submit(fileSubmissionMessage([$file]), maxRequestBytes: 4_194_304);
+
+    expect($result->outcome)->toBe(SubmissionOutcome::Uncertain)
+        ->and($result->status)->toBeNull()
+        ->and($received)->toBeFalse()
+        ->and($attempts)->toBe(1)
+        ->and($body->getSize())->toBeNull();
+});
+
 it('rejects a same-length changed source after reopening with the original persisted fingerprint', function (): void {
     $path = tempnam(sys_get_temp_dir(), 'mailbox-host-');
     file_put_contents($path, 'first');
@@ -194,9 +245,11 @@ function fileSubmissionMessage(array $files, string $htmlBody = '<p>Chosen HTML 
  * @param list<mixed> $responses
  * @param array<int, mixed> $history
  */
-function fileSubmissionMailbox(array $responses, array &$history): SupportsMessageSubmission
+function fileSubmissionMailbox(array $responses, array &$history, ?Client $http = null): SupportsMessageSubmission
 {
     $handler = HandlerStack::create(new MockHandler($responses));
+    // Retain only these small fixture requests after the SDK closes its owned wire spool.
+    $handler->push(Middleware::mapRequest(static fn (RequestInterface $request): RequestInterface => $request->withBody(Utils::streamFor((string) $request->getBody()))));
     $handler->push(Middleware::history($history));
     $tokens = new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'private-token'],
@@ -205,6 +258,6 @@ function fileSubmissionMailbox(array $responses, array &$history): SupportsMessa
     return Mailbox::forGrant(
         new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com'),
         $tokens,
-        new Client(['handler' => $handler]),
+        $http ?? new Client(['handler' => $handler]),
     );
 }

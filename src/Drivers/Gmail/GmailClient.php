@@ -11,6 +11,7 @@ use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionResult;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
@@ -21,7 +22,6 @@ use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
-use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Support\PreparedMessageMime;
 
@@ -51,16 +51,16 @@ class GmailClient
         return 'gmail';
     }
 
-    public function submitMessage(PreparedMessage $message, string $mailbox, int $maxRequestBytes = 1_048_576): SubmissionResult
+    public function submitMessage(PreparedMessage $message, string $mailbox, int $maxRequestBytes = 1_048_576, ?SubmissionLimits $limits = null): SubmissionResult
     {
-        $raw = PreparedMessageMime::encode($message, $maxRequestBytes);
-        $payload = json_encode(['raw' => rtrim(strtr(base64_encode($raw), '+/', '-_'), '=')], JSON_THROW_ON_ERROR);
-        if (strlen($payload) > $maxRequestBytes) {
-            throw new UnsupportedCapabilityException('The Gmail JSON request exceeds the submission byte budget.');
+        $payload = PreparedMessageMime::gmailPayload($message, $maxRequestBytes, $limits);
+        try {
+            $response = $this->requestOnce('POST', 'users/'.rawurlencode($mailbox).'/messages/send', [
+                'body' => $payload, 'headers' => ['Content-Type' => 'application/json'],
+            ], $mailbox);
+        } finally {
+            $payload->close();
         }
-        $response = $this->requestOnce('POST', 'users/'.rawurlencode($mailbox).'/messages/send', [
-            'body' => $payload, 'headers' => ['Content-Type' => 'application/json'],
-        ], $mailbox);
         $data = json_decode($response->body() ?? '', true);
         $messageId = is_array($data) && is_string($data['id'] ?? null) && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $data['id']) === 1 ? $data['id'] : null;
         $threadId = is_array($data) && is_string($data['threadId'] ?? null) && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $data['threadId']) === 1 ? $data['threadId'] : null;

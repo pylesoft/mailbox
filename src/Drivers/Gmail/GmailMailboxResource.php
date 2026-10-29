@@ -12,10 +12,12 @@ use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
+use Pyle\Mailbox\Contracts\SupportsSubmissionLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionResult;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
@@ -23,18 +25,30 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission
+class GmailMailboxResource implements MailboxResource, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission, SupportsSubmissionLimits
 {
     public function __construct(
         private readonly GmailClient $client,
         private readonly GmailDeltaSync $deltaSync,
         private readonly string $emailAddress,
         private readonly ?GrantContext $grantContext = null,
+        private readonly ?SubmissionLimits $submissionLimits = null,
     ) {}
 
     public function submit(PreparedMessage $message, int $maxRequestBytes = 1_048_576): SubmissionResult
     {
-        return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes);
+        return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes, $this->submissionLimits);
+    }
+
+    public function withSubmissionLimits(SubmissionLimits $limits): SupportsMessageSubmission
+    {
+        return new self(
+            client: $this->client,
+            deltaSync: $this->deltaSync,
+            emailAddress: $this->emailAddress,
+            grantContext: $this->grantContext,
+            submissionLimits: $limits,
+        );
     }
 
     public function initialSync(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation = null): ChangePage
