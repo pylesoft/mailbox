@@ -9,10 +9,14 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionPreparation;
+use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
@@ -20,7 +24,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsDraftSubmission, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -29,6 +33,25 @@ class MsGraphMailboxResource implements MailboxResource, SupportsIncrementalSync
         private readonly string $emailAddress,
         private readonly ?GrantContext $grantContext = null,
     ) {}
+
+    public function prepareSubmission(PreparedMessage $message, int $maxRequestBytes = 4_000_000): SubmissionPreparation
+    {
+        return $this->draftSubmission()->prepare($message, $maxRequestBytes);
+    }
+
+    public function submitPrepared(SubmissionPreparation $preparation, PreparedMessage $message): SubmissionResult
+    {
+        return $this->draftSubmission()->submit($preparation, $message);
+    }
+
+    private function draftSubmission(): MsGraphDraftSubmission
+    {
+        if ($this->grantContext === null) {
+            throw new UnsupportedCapabilityException('Draft submission requires an explicit grant context.');
+        }
+
+        return new MsGraphDraftSubmission($this->client, $this->grantContext);
+    }
 
     public function initialSync(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation = null): ChangePage
     {

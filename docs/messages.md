@@ -747,6 +747,68 @@ Your application owns durable operation state and recovery. Persist the chosen m
 
 Nonempty `files` are explicitly unsupported by this submission path. Raw MIME input and signed/encrypted MIME reconstruction are also unsupported. File sources, large-file limits and reply/forward preparation are separate capabilities; the SDK does not infer them from a body or silently transform arbitrary MIME.
 
+## Preparing and Sending a Graph Draft
+
+Graph exposes the optional `SupportsDraftSubmission` capability. Your application explicitly starts preparation, retains the returned draft identity, then requests send in a separate call. Constructing or editing a `PreparedMessage` makes no provider request.
+
+```php
+use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
+use Pyle\Mailbox\Enums\PreparationOutcome;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+
+$mailbox = Mailbox::forGrant($context, $tokens);
+
+if (! $mailbox instanceof SupportsDraftSubmission) {
+    throw new UnsupportedCapabilityException('This mailbox does not support draft submission.');
+}
+
+$preparation = $mailbox->prepareSubmission($message);
+
+// Retain this preparation and the original message in your durable private storage.
+if ($preparation->outcome === PreparationOutcome::Prepared) {
+    // A separate authorized host operation may now request send.
+    $result = $mailbox->submitPrepared($preparation, $message);
+}
+```
+
+This capability requires an explicit grant context. It does not add methods to mandatory resource contracts or change Gmail's direct submission API. `PreparedMessage::sender` maps to Graph's `from` field; Graph sets the actual `sender` according to the selected authorization and Exchange permissions.
+
+### Retaining Preparation and Send Evidence
+
+`SubmissionPreparation` retains the selected context and generation, caller correlation, preparation outcome, immutable `draftId`, observed status and safe headers. Its private original-intent fingerprint binds the later call to the same message. Retain every constructor field, including the value returned by `intentFingerprint()`, when reconstructing a handle from private host storage. Ordinary JSON and debug output omit that fingerprint; PHP serialization retains it for trusted private storage.
+
+| Preparation outcome | Meaning |
+| --- | --- |
+| `PreparationOutcome::Prepared` | Graph returned HTTP 201 and a valid immutable draft identity. No send has been requested. |
+| `PreparationOutcome::Rejected` | A definite rejection response was observed. No send has been requested. |
+| `PreparationOutcome::Uncertain` | A draft may exist, but its creation acknowledgement is missing or unusable. No send has been requested. |
+
+An uncertain preparation never causes another draft creation or an automatic send. The draft may be visible in Outlook and may remain after an interrupted or failed operation. The SDK does not automatically delete it.
+
+`submitPrepared` checks the context, generation and original intent before provider I/O. It then reads the immutable draft, verifies its content and explicit To/Cc/Bcc lists, and makes one send request. Missing, changed, incomplete or unverifiable draft state stops before send. Each phase checks the selected grant again; a disconnected or superseded grant never falls back to configured application credentials.
+
+Failed verification throws `ApiRequestException` with the observed `status` and filtered safe `headers`, including an available request ID. It retains no raw response body or secret-bearing cause, and no send has been requested.
+
+Verification ignores JSON object-key order, recipient-list order, email-domain casing, header-name/body-type casing, and CRLF versus LF body line endings. Recipient counts, local address parts, display names, subject, header values and body content remain unchanged. Additional provider-generated headers are allowed; each caller-selected header and correlation must appear exactly once. No HTML rewriting, whitespace trimming or changed recipient/content value is treated as harmless normalization.
+
+An empty HTTP 202 returns `SubmissionOutcome::Accepted` with status, safe headers and the original correlation. `messageId` and `threadId` remain `null`; retain the separate preparation handle for its draft identity. Acceptance does not prove delivery. Timeout, 5xx, redirects and malformed or interrupted acknowledgements remain uncertain, without replay, enclosing-job release or cleanup.
+
+The host owns durable operation state, exclusive submission scheduling and any recovery decision. Separate explicit calls are not deduplicated by the SDK. Do not add retry middleware to an injected HTTP client. Treat provider drafts as submission artifacts and prevent concurrent editing; verification is a pre-send observation, not an atomic lock against other Outlook clients.
+
+### Graph Limits and Permissions
+
+This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers. Supplying both body formats, nonempty files, raw MIME, native reply/forward intent, or unsupported headers requires a separate capability; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above.
+
+`maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget and remain strictly below Graph's 4 MB write limit. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow, truncation or inconsistent unencoded Content-Length preserves observed status and safe headers without establishing successful preparation, verification or send.
+
+One-attempt receipts request identity encoding and disable automatic decompression. An encoded response is closed without reading its body; its status and safe headers remain available, but it cannot establish preparation or send acceptance. This keeps compressed bytes from expanding before the response budget can run.
+
+Every preparation, verification and send request explicitly uses `Prefer: IdType="ImmutableId"`. Existing reads still honor the configured `prefer_immutable_ids` value. The new phases do not change that configuration.
+
+Own-mailbox preparation requires `Mail.ReadWrite`, and sending requires `Mail.Send`, with the appropriate delegated or administrator-consented application permissions. Organizational delegated shared access also requires `Mail.ReadWrite.Shared`, `Mail.Send.Shared`, and the target's Exchange mailbox permissions. Sending through the target mailbox requires Full Access plus Send As or Send on Behalf. Token acquisition alone does not establish these permissions, and rejection never switches grants. See Microsoft's [draft creation](https://learn.microsoft.com/en-us/graph/api/user-post-messages?view=graph-rest-1.0), [draft send](https://learn.microsoft.com/en-us/graph/api/message-send?view=graph-rest-1.0), [shared sending](https://learn.microsoft.com/en-us/graph/outlook-send-mail-from-other-user), and [immutable identity](https://learn.microsoft.com/en-us/graph/outlook-immutable-id) guidance.
+
+Live account permissions, provider normalization and delivery remain separate acceptance gates. HTTP fixtures do not establish them.
+
 ## What's Next
 
 - [Attachments](attachments.md) -- downloading, streaming, and working with individual attachments in depth

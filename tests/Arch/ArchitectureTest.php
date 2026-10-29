@@ -16,6 +16,7 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
@@ -26,6 +27,7 @@ use Pyle\Mailbox\Enums\ConnectionStatus;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\Importance;
 use Pyle\Mailbox\Enums\MatchOperator;
+use Pyle\Mailbox\Enums\PreparationOutcome;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Enums\SyncStatus;
 use Pyle\Mailbox\Enums\WellKnownFolder;
@@ -50,6 +52,7 @@ arch('DTOs are final readonly classes')
         HealthCheckResult::class,
         MessageDto::class,
         PreparedMessage::class,
+        SubmissionPreparation::class,
         SubmissionResult::class,
         SyncBudget::class,
         SyncCheckpoint::class,
@@ -93,6 +96,7 @@ test('enums are backed string enums', function (): void {
         Importance::class,
         MatchOperator::class,
         SubmissionOutcome::class,
+        PreparationOutcome::class,
         FilterableField::class,
     ];
 

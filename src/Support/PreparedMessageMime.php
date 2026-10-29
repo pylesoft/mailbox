@@ -80,7 +80,7 @@ final class PreparedMessageMime
         return new Address($address->address, $address->name);
     }
 
-    private static function validate(PreparedMessage $message): void
+    public static function validate(PreparedMessage $message): void
     {
         self::headerText($message->subject);
         self::headerText($message->correlationId);
@@ -118,6 +118,11 @@ final class PreparedMessageMime
             self::headerText($address->address);
             if ($address->address !== trim($address->address)) {
                 throw new InvalidArgumentException('Prepared email addresses must not contain surrounding whitespace.');
+            }
+            try {
+                self::address($address);
+            } catch (ExceptionInterface) {
+                throw new InvalidArgumentException('The prepared message contains an invalid email address.');
             }
         }
     }
