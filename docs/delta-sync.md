@@ -44,7 +44,7 @@ Every page has exactly one progress outcome:
 | `checkpoint` | The initial listing round finished. Retain all page evidence before promoting this `SyncCheckpoint`. |
 | `resetRequired` | The provider operation requires a reset of the original scope. This shared outcome is available for change capabilities; the initial Gmail listing does not infer a reset from a limit. |
 
-The SDK reads the Gmail profile history ID **before** its first message listing. Every resumed page keeps that original baseline. The completed initial checkpoint contains this pre-scan ID, so later history reconciliation can observe arrivals and changes that occurred during the scan. It does not claim that the mailbox was unchanged while listing. Use the bounded Gmail history capability below to reconcile from that checkpoint. Graph bounded delta remains a separate implementation slice.
+The SDK reads the Gmail profile history ID **before** its first message listing. Every resumed page keeps that original baseline. The completed initial checkpoint contains this pre-scan ID, so later history reconciliation can observe arrivals and changes that occurred during the scan. It does not claim that the mailbox was unchanged while listing. Use the bounded Gmail history capability below to reconcile from that checkpoint.
 
 ### Retaining and resuming pages
 
@@ -120,6 +120,37 @@ if ($page->resetRequired) {
 Use `null` for `$storedRecoveryContinuation` on the first recovery call. Retain and resume initial-scan continuations separately from history continuations. The new initial scan captures its baseline before listing, so history reconciliation from its completed checkpoint can catch changes arriving during recovery. Promote that checkpoint only after retaining all recovery evidence, then begin a new history round. A reset does not clear local messages, widen the import policy or choose a new retention window.
 
 See the [Gmail history reference](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.history/list) for record pagination and expiry semantics.
+
+## Bounded Graph Folder Delta
+
+Explicit-grant Graph resources expose the same `SupportsInitialSync` and `SupportsIncrementalSync` capabilities. Call `initialSync($scope, $budget, $continuation)` to establish a baseline, then `incrementalSync($scope, $budget, $checkpoint, $continuation)` to reconcile from the retained checkpoint. Keep passing the original checkpoint throughout an incremental round. Configured resources keep their existing eager folder API; bounded synchronization requires an explicit grant context.
+
+A `SyncScope` with a folder ID covers that exact provider folder, without its children. A null folder selects mailbox-wide discovery: the SDK enumerates root folders and their children, including hidden folders, before reading a separate message delta for every discovered folder. Each incremental mailbox round enumerates the hierarchy again, initializes newly discovered folders, and resumes known folders from their own delta links. This covers the hierarchy observed during that round, not an atomic snapshot of a changing hierarchy. The host schedules future reconciliation to discover later changes.
+
+Graph delta returns unfiltered message-ID candidates. Although `importSince` remains bound to the state, the SDK deliberately does not push it into a `receivedDateTime` delta filter: Microsoft documents a 5,000-message ceiling for filtered delta. Recheck content, folder membership and the original import policy before updating the host projection. A completed checkpoint means the unfiltered delta round finished; it does not assert that every candidate satisfies the host's cutoff.
+
+### Folder evidence and progress
+
+Graph pages add two optional fields to the shared `ChangePage`; Gmail pages leave both empty:
+
+| Field | Meaning |
+| --- | --- |
+| `coveredFolders` | Exact folder IDs discovered so far in this round. Enumeration may still be unfinished while a continuation exists. |
+| `folderChanges` | A list of records containing `folderId`, `upserts` and `removals`, preserving the folder associated with each observation. |
+
+The existing flat `upserts` and `removals` remain available as deduplicated reconciliation candidates. A message moved from one covered folder to another can appear in both arrays. Graph `@removed` means removal **from that folder**, including a move; even a provider reason of `deleted` does not establish mailbox-wide message deletion. Neither array authorizes erasing retained history. Upserts do not guess creation versus update from an etag. Repeated or conflicting evidence requires idempotent reconciliation through the message resource.
+
+Continuations retain unfinished hierarchy enumeration and separate per-folder next/delta links. A completed folder's link stays in the continuation while other folders remain unfinished; it is not promoted into a whole-mailbox checkpoint. `SyncCheckpoint::position` is a private JSON envelope containing a `folders` list of `{folderId, deltaLink}` records. Preserve the complete string unchanged. Its enclosing identity binds the provider, explicit grant and generation, mailbox, exact folder scope, cutoff and supported format. Treat these DTOs as trusted host state, not as untrusted input.
+
+Only the final delta response for every covered folder, after enumeration finishes, produces a completed checkpoint. Retain every page's evidence before retaining its continuation or promoting its checkpoint. Replaying an unretained page may repeat IDs. Missing, conflicting, malformed or cyclic next/delta links cannot complete a round. Documented `mailfolders('ID')` and slash-based folder paths are accepted as equivalent only for the same exact folder ID and mailbox; opaque query bytes remain unchanged.
+
+### Budgets and recovery
+
+`maxPages` and `maxRequests` bound all hierarchy and delta requests in a call. `maxItems` bounds provider collection entries retained during that call, including discovered folder entries; duplicate entries also consume that budget. `maxResponseBytes` bounds aggregate actual response bytes, including error bodies, before decoding. A provider page exceeding the available item or byte budget retains the position before that page. Increase an insufficient budget and replay; the SDK never trims an over-budget page and promotes its token. Bounded requests make one attempt.
+
+An HTTP 410 or the documented `syncStateNotFound` provider code requests a reset with `resetRequired: true` and reason `delta_expired`. Recovery starts a new initial scan using the **original checkpoint's exact scope and cutoff**, retains existing local history, and promotes the replacement checkpoint only after all covered work finishes. Missing folders, permission errors and unrelated invalid requests remain explicit failures; they are not treated as expired state. The transport retains only the allowlisted reset code, never the provider's free-form error message or body. Graph Outlook token lifetime has no fixed duration.
+
+See Microsoft's [message delta](https://learn.microsoft.com/en-us/graph/delta-query-messages), [folder hierarchy](https://learn.microsoft.com/en-us/graph/api/mailfolder-list-childfolders?view=graph-rest-1.0) and [delta reset](https://learn.microsoft.com/en-us/graph/delta-query-overview) references. Fixture checks establish package behavior; live delegated/shared-mailbox coverage remains a separate acceptance gate.
 
 ## How Delta Sync Works
 

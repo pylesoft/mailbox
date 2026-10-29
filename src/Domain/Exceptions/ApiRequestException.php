@@ -12,6 +12,7 @@ final class ApiRequestException extends MailboxException
         public readonly ?string $endpoint = null,
         int $code = 0,
         ?\Throwable $previous = null,
+        public readonly ?string $providerCode = null,
     ) {
         parent::__construct($message, $code, $previous);
     }
