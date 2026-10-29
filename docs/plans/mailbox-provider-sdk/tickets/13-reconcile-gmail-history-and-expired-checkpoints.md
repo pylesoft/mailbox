@@ -29,3 +29,7 @@ Reconcile Gmail changes from a committed checkpoint and recover expired history 
 - Exercise real public Gmail synchronization paths with paginated history, replay/interruption, history expiry and events arriving during recovery.
 - Assert reset scope/cutoff preservation, unchanged local-retention responsibility and the absence of checkpoint promotion before retained work completes.
 
+## Comments
+
+- 2026-10-29: Claimed by `mailbox_ticket_13` on clean `feat/mailbox-sdk-13`, based on integration `9161f2ddc0fb1c4ff358265415394d6ef2c4467f`, with no upstream. Scope is bounded Gmail history and scoped expiry recovery using ticket 12's existing progress/budget contracts. Q13's approved public SDK/real-Guzzle HTTP-fake seam and host lifecycle adapter apply; SDK tests forbid database access. No provider, host persistence/job/retention, watch, publication or consumer operations are included.
+

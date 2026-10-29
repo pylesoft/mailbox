@@ -32,6 +32,12 @@ Explicit-grant Gmail resources now expose the optional `SupportsInitialSync` cap
 
 Existing eager Gmail method signatures remain available. A query that reaches its page limit or repeats a page token now throws `ApiRequestException` instead of silently returning a partial collection. Eager initial delta captures its history baseline before listing and refuses completion without a baseline. Consumers that intentionally read a subset may keep using `take()`; consumers that need resumable imports should use the new capability.
 
+## Unreleased: Bounded Gmail History
+
+Explicit-grant Gmail resources also expose `SupportsIncrementalSync::incrementalSync(SyncScope, SyncBudget, SyncCheckpoint, ?SyncContinuation = null): ChangePage`. Reuse the initial-sync DTOs and retain evidence before advancing a continuation or completed checkpoint. The existing eager delta methods and custom-driver contracts remain available.
+
+History returns reconciliation candidates without created-versus-updated guesses. Requests read unfiltered changes to preserve label-exit evidence; hosts must recheck the selected scope and import policy before updating projections. Label removal does not establish message deletion. A history 404 requests an initial reset with the committed checkpoint's original folder and cutoff, without erasing retained local history. See [bounded Gmail history](delta-sync.md#bounded-gmail-history) for replay, expanded-record budgets and recovery.
+
 ## Checking Your Current Version
 
 You can check which version of Mailbox you have installed at any time:
