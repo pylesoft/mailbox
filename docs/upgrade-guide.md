@@ -1,6 +1,22 @@
 # Upgrade Guide
 
-Mailbox follows [semantic versioning](https://semver.org), so breaking changes only appear in major releases. This page will document every breaking change, deprecation, and required migration step as new versions are released. For now, the package has no breaking changes to document -- but the structure is here and ready for when that day comes.
+Mailbox follows [semantic versioning](https://semver.org). Review the relevant upgrade notes before changing your installed version. The provider SDK notes below describe unreleased work and do not establish release or live-provider readiness.
+
+## Unreleased Provider SDK
+
+### Received Addresses and Headers
+
+Gmail message mapping now parses received addresses and decodes encoded names and subjects. For example, `"Doe, Jane" <jane@example.com>` produces one recipient named `Doe, Jane`, and `=?ISO-8859-1?Q?Andr=E9?=` becomes `André`. Quoted local parts, comments, groups, repeated recipient headers and Unicode addresses retain their mailbox values. Empty groups add no recipients. Graph's structured names and addresses remain separate, and its already decoded text is preserved.
+
+The existing `MessageDto` and `EmailAddressDto` fields and resource interfaces remain unchanged. Recipient groups flatten into the existing recipient arrays; group names and comments remain available in the original `raw` payload. The singular `from` and `sender` fields cannot represent multiple mailboxes, so those values now fail explicitly instead of selecting or inventing an address.
+
+Malformed address structure, truncated delimiters or encoded words, invalid encoded bytes, unsupported header charsets, and malformed provider address/header collections throw `Pyle\Mailbox\Exceptions\MailboxException`. Missing optional fields still use the existing null or empty values. Received header text must contain valid UTF-8 bytes, with other supported charsets declared in encoded words. Parsing does not perform DNS or mailbox-deliverability checks, and the parser's token limits remain explicit failures. Body hydration and outbound serialization have separate implementation and acceptance gates.
+
+### Parser Dependency
+
+Inbound parsing requires `zbateson/mail-mime-parser:^4.0.8` in production. Its types remain internal; applications continue using Mailbox DTOs. Run `composer update pylesoft/mailbox --with-all-dependencies` and review the resulting lock file and audit before upgrading.
+
+Mailbox excludes `php-di/php-di` versions below `6.3.0`, a transitive parser dependency. PHP-DI 6.1 still requires the abandoned SuperClosure package; 6.2 removes that dependency but retains deprecated `ReflectionParameter::getClass()` calls. [PHP-DI 6.3](https://github.com/PHP-DI/PHP-DI/blob/6.3.0/src/Definition/Source/ReflectionBasedAutowiring.php) uses `getType()` instead. This narrow exclusion retains compatible 6.x and 7.x versions without adding another direct dependency.
 
 ## Checking Your Current Version
 

@@ -33,3 +33,7 @@ Replace lossy address splitting and header decoding at the real incoming-message
 
 This slice does not choose recipient defaults or reply-all policy. Outbound Symfony Mime and explicit Egulias requirements are completed with the first submission slice.
 
+## Comments
+
+- 2026-10-29: Claimed by the ticket 09 implementation agent on `feat/mailbox-sdk-09`, after integrating `feat/mailbox-provider-sdk` at `7d673704`. Scope: inbound address/header parsing, existing DTO/resource mapping, focused HTTP-boundary regression tests, and the first approved parser dependency update. No outbound behavior or consumer changes.
+

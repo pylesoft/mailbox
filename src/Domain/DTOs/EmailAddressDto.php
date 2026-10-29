@@ -7,6 +7,8 @@ namespace Pyle\Mailbox\DTOs;
 use Illuminate\Contracts\Support\Arrayable;
 use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
+use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Support\ReceivedHeaders;
 
 /** @implements Arrayable<string, mixed> */
 final readonly class EmailAddressDto implements Arrayable, JsonSerializable
@@ -22,32 +24,27 @@ final readonly class EmailAddressDto implements Arrayable, JsonSerializable
     public static function fromMsGraph(array $data): self
     {
         $emailAddress = $data['emailAddress'] ?? $data;
+        if (! is_array($emailAddress) || ! is_string($emailAddress['address'] ?? null) || (isset($emailAddress['name']) && ! is_string($emailAddress['name']))) {
+            throw new MailboxException('Malformed received Graph email address.');
+        }
+        $parsed = self::fromGmail($emailAddress['address']);
+        if ($parsed->address !== trim($emailAddress['address'])) {
+            throw new MailboxException('Expected a structured Graph email address.');
+        }
 
         return new self(
             name: (string) ($emailAddress['name'] ?? ''),
-            address: (string) ($emailAddress['address'] ?? ''),
+            address: $parsed->address,
         );
     }
 
     public static function fromGmail(string $value): self
     {
-        $trimmed = trim($value);
-
-        if ($trimmed === '') {
-            return new self(name: '', address: '');
+        $addresses = ReceivedHeaders::addresses($value);
+        if (count($addresses) !== 1) {
+            throw new MailboxException('Expected one received email address.');
         }
 
-        if (preg_match('/^(?:"?([^"]*)"?\s*)?<([^>]+)>$/', $trimmed, $matches) === 1) {
-            return new self(
-                name: trim((string) $matches[1]),
-                address: trim((string) $matches[2]),
-            );
-        }
-
-        if (str_contains($trimmed, '@')) {
-            return new self(name: '', address: $trimmed);
-        }
-
-        return new self(name: $trimmed, address: '');
+        return $addresses[0];
     }
 }
