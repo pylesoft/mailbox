@@ -6,6 +6,7 @@ namespace Pyle\Mailbox\Exceptions;
 
 final class ApiRequestException extends MailboxException
 {
+    /** @param array<string, list<string>> $headers */
     public function __construct(
         string $message,
         public readonly ?int $status = null,
@@ -13,6 +14,7 @@ final class ApiRequestException extends MailboxException
         int $code = 0,
         ?\Throwable $previous = null,
         public readonly ?string $providerCode = null,
+        public readonly array $headers = [],
     ) {
         parent::__construct($message, $code, $previous);
     }
