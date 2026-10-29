@@ -4,6 +4,14 @@ Mailbox follows [semantic versioning](https://semver.org). Review the relevant u
 
 ## Unreleased Provider SDK
 
+### Consumer Compatibility and Acceptance
+
+The [provider SDK guide](provider-sdk.md) distinguishes configured and explicit-grant paths, optional capabilities and host-owned durable state. Keep your current configured driver keys, `google-workspace` alias, constructors, raw clients, custom creators/resolvers and mandatory custom-driver interfaces. New capability checks do not require implementing unrelated methods on a legacy driver.
+
+Review your resulting production lock and audit: inbound parsing, MIME serialization and validation are direct runtime requirements (`zbateson/mail-mime-parser`, `symfony/mime`, `egulias/email-validator`). Do not rely on development Laravel transitives. Symfony Mime requires the approved security minima `^7.4.22 || ^8.1.10`; the 8.1 branch needs PHP 8.4.1 or later, while 7.4 covers PHP 8.2/8.3.
+
+The [local compatibility receipt](plans/mailbox-provider-sdk/compatibility.md) records isolated consumer and platform evidence. It does not publish a release, change an application's dependencies or prove provider acceptance. Required own/shared native reply/forward, 10 MiB and 20 MiB file, notification renewal and recovery cases remain in the [live acceptance ledger](plans/mailbox-provider-sdk/live-acceptance.md).
+
 ### Legacy OAuth Records and Reconnect
 
 Keep existing connections, mailbox/message references, configuration and OAuth rows when upgrading. The additive selected-grant migration does not reconstruct ownership, bind old credentials, merge rows or delete history.

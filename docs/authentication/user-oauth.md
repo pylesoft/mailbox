@@ -4,6 +4,8 @@ Your application may connect personal Gmail, Google Workspace, Microsoft 365 and
 
 If you use configured [Microsoft application permissions](ms-graph.md) or [Gmail service-account delegation](gmail.md), continue using those modes. They remain separate from delegated OAuth and do not select stored user credentials automatically.
 
+The [provider SDK guide](../provider-sdk.md) maps these authorization modes to optional capabilities. Account-specific consent, permissions and live acceptance remain explicit [open gates](../plans/mailbox-provider-sdk/live-acceptance.md).
+
 ## Upgrading Legacy Browser Enrollment
 
 `GmailUserOAuthService` and `MsGraphUserOAuthService` retain their public signatures but no longer initiate enrollment or exchange codes. They throw `OAuthEnrollmentException` with a reconnect instruction before creating state, contacting a provider or writing tokens. The old signatures cannot establish trusted host ownership, verified provider/client identity or a current lifecycle generation. Earlier global subject/email lookups could reassign a token to another connection.

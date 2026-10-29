@@ -4,6 +4,8 @@ Most mail integrations eventually need to download files -- invoices, contracts,
 
 Attachments are accessed through the message resource. You start with a message ID, then branch into metadata listing, single-file downloads, bulk downloads, or raw streaming.
 
+For outgoing files, use [prepared immutable files](messages.md#prepared-files) and [staged Graph attachment preparation](messages.md#preparing-graph-attachments). The host's 10 MiB-per-file and 20 MiB aggregate targets remain separate [live acceptance cases](plans/mailbox-provider-sdk/live-acceptance.md), including Microsoft's shared/delegated large-file limitation.
+
 ## Listing Attachments
 
 To see what files are attached to a message without downloading anything, call `attachments()` on a message resource:
@@ -39,7 +41,7 @@ echo $file->path; // "mailbox-attachments/invoices_acme_com/AAMk.../invoice-2025
 echo $file->disk; // "local"
 ```
 
-The `download()` method fetches the file content from the provider, saves it to your configured Laravel filesystem disk, and returns an `AttachmentFileDto` with the storage location. If the file has already been downloaded (same content, same path), the download is skipped and `alreadyExisted` is set to `true`.
+The `download()` method fetches the file content from the provider, saves it to your configured Laravel filesystem disk, and returns an `AttachmentFileDto` with the storage location. If that destination already has the same verified content, the stored file is reused and `alreadyExisted` is set to `true`. Provider bytes are still read to verify the match.
 
 ### Retrieving Metadata Only
 

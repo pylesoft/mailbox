@@ -345,7 +345,7 @@ The cached token may have been invalidated server-side. Mailbox automatically re
 
 ## User OAuth Alternative
 
-For scenarios where end users must grant consent through a browser (e.g. connecting personal Gmail accounts, or SaaS applications where you do not control the Workspace domain), Mailbox provides a separate user OAuth flow with redirect and callback routes. This flow stores per-user refresh tokens in your database.
+For personal Gmail accounts or Workspace users granting browser consent, use the host-owned enrollment service, guarded grant storage and explicit runtime in [User OAuth](user-oauth.md). Your application owns initiation/callback endpoints and authorization. Legacy package enrollment routes fail closed and do not attach renewable credentials automatically.
 
 See [Gmail User OAuth](user-oauth.md) for the full setup guide.
 
