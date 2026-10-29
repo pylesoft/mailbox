@@ -14,10 +14,12 @@ use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
+use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Support\GrantAuthorization;
 
 class GmailClient
 {
@@ -29,6 +31,7 @@ class GmailClient
         private readonly GmailTokenManager $tokenManager,
         private readonly RateLimiter $rateLimiter,
         ?Client $client = null,
+        private readonly ?GrantAuthorization $grantAuthorization = null,
     ) {
         $this->bootApiClient(
             $this->config,
@@ -64,7 +67,7 @@ class GmailClient
     private function defaultHeaders(string $mailboxKey): array
     {
         return [
-            'Authorization' => 'Bearer '.$this->tokenManager->getToken($mailboxKey),
+            'Authorization' => 'Bearer '.($this->grantAuthorization?->accessToken($mailboxKey) ?? $this->tokenManager->getToken($mailboxKey)),
             'Accept' => 'application/json',
         ];
     }
@@ -113,7 +116,7 @@ class GmailClient
         int $durationMs,
         bool &$reauthAttempted,
     ): bool {
-        if ($reauthAttempted) {
+        if ($reauthAttempted || $this->grantAuthorization !== null) {
             return false;
         }
 
@@ -229,6 +232,10 @@ class GmailClient
         string $mailboxKey,
         int $attempt,
     ): ApiRequestException {
+        if ($e instanceof GrantAccessDeniedException) {
+            throw $e;
+        }
+
         $this->logInfo('Gmail request failed with unexpected throwable', [
             'method' => $method,
             'endpoint' => $endpoint,

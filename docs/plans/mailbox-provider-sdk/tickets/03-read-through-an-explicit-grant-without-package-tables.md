@@ -33,3 +33,7 @@ Introduce the smallest additive connection-bound entrypoint that makes a real ma
 
 This is the expand step. A currently valid supplied token is sufficient for this slice; enrollment and expired-token refresh are delivered separately. Keep one writer for shared contracts even when other tickets are available.
 
+## Comments
+
+- 2026-10-29: Claimed by the ticket 03 implementation agent on `feat/mailbox-sdk-03`, based on integration `6f09204`. Scope: additive explicit-grant reads, host lifecycle/token seam, optional persistence, and compatibility verification. Enrollment, refresh, provider setup and publication remain outside this slice.
+

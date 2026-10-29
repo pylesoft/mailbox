@@ -16,6 +16,16 @@ This copies the package's config file to `config/mailbox.php`. Migrations are lo
 php artisan vendor:publish --tag=mailbox-stubs
 ```
 
+## Using Your Own Persistence
+
+If your application stores its own connections and grants, you may disable package migration registration before the application boots:
+
+```env
+MAILBOX_PERSISTENCE_ENABLED=false
+```
+
+This sets `mailbox.persistence.enabled` to `false`. Core provider reads through [explicit grants](authentication/user-oauth.md#reading-with-an-explicit-grant) then work without package tables. The default remains `true` for existing Eloquent integrations. Package model helpers, persistence commands and the existing database-backed OAuth routes still require package tables; keep those routes disabled for SDK-only usage.
+
 ## Minimal `.env` Examples
 
 Most applications only need one provider. Here is the bare minimum for each.
@@ -362,6 +372,9 @@ Here is every environment variable Mailbox reads, collected in one place:
 ```env
 # Driver
 MAILBOX_DRIVER=ms-graph
+
+# Package migrations (disable when your host owns persistence)
+MAILBOX_PERSISTENCE_ENABLED=true
 
 # Microsoft Graph credentials
 MS365_TENANT_ID=

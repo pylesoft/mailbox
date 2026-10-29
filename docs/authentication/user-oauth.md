@@ -34,6 +34,8 @@ Mailbox handles steps 3-6 automatically. You only need to initiate the redirect 
 
 ## Prerequisites
 
+The browser flow below uses package persistence. If your application already owns its connection and grant storage, you may instead supply a currently valid token through [an explicit grant](#reading-with-an-explicit-grant).
+
 Before configuring either provider, run your migrations. Mailbox auto-loads its package migrations, and the user OAuth flow stores tokens in the `mailbox_oauth_tokens` table:
 
 ```bash
@@ -411,6 +413,46 @@ For Gmail: Google only issues a refresh token on the first consent. If the user 
 ### Tokens Become Invalid After `APP_KEY` Rotation
 
 Because `access_token` and `refresh_token` are encrypted with Laravel's `APP_KEY`, rotating the key without re-encrypting existing tokens makes them unreadable. If this happens, affected users will need to reconnect their mailboxes through the OAuth flow again.
+
+## Reading With an Explicit Grant
+
+You may read through a grant chosen by your application without querying Mailbox's tables. Supply the connection ID, grant ID, current reconnect/disconnect generation, configured driver name and target mailbox together:
+
+```php
+use Pyle\Mailbox\Contracts\GrantTokenProvider;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\Facades\Mailbox;
+
+/** @var GrantTokenProvider $tokens Your application's storage and lifecycle adapter. */
+$context = new GrantContext(
+    connectionId: 'connection-42',
+    grantId: 'grant-17',
+    lifecycleGeneration: '3',
+    driver: 'gmail', // Or ms-graph / an existing configured alias.
+    mailbox: 'person@example.com',
+);
+
+$message = Mailbox::forGrant($context, $tokens)->message('provider-message-id')->get();
+```
+
+Implement `GrantTokenProvider` in your application:
+
+```php
+interface GrantTokenProvider
+{
+    public function assertActive(GrantContext $context): void;
+
+    public function accessToken(GrantContext $context): string;
+}
+```
+
+`assertActive()` must check that the selected grant belongs to the connection, that its provider identity matches the configured driver, that the generation is current and connected, and that it permits the target mailbox. Check the verified subject, tenant/issuer and OAuth client registration where applicable. Throw `Pyle\Mailbox\Exceptions\GrantAccessDeniedException` when access is no longer valid. `accessToken()` loads a currently valid token for that exact grant; it must never search by mailbox address or choose the first active token.
+
+The SDK checks the host guard before loading the token and again before each HTTP attempt, including retries and later reads through a retained resource. Reconnect and disconnect must change the host generation or reject the old context. Ordinary token rotation keeps the same lifecycle generation. Separate connections can select different grants for the same external account, while one grant can permit several mailbox targets.
+
+Each call creates an isolated provider resource and leaves the configured-driver cache and global configuration unchanged. Configured `mailbox()`, `forMailbox()`, custom creators, resolver replacements and existing driver/client constructors remain available. Custom drivers may implement the optional `SupportsGrantMailbox` contract; drivers without it throw `UnsupportedCapabilityException` only when asked to serve `forGrant()`.
+
+This entrypoint currently accepts valid supplied tokens. It does not enroll grants, discover old OAuth rows or transparently refresh expired tokens. A provider `401` fails with `AuthenticationException` without using configured service-account or application credentials. Host storage, authorization and durable job handling remain in your application. For SDK-only boot, [disable package persistence](../configuration.md#using-your-own-persistence) and leave the database-backed OAuth routes disabled.
 
 ## What's Next
 
