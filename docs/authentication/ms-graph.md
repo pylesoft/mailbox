@@ -291,6 +291,87 @@ The cached token may have been invalidated server-side. Mailbox automatically re
 - Check the Entra app registration still has the correct permissions and admin consent.
 - Clear the Mailbox token cache: run `php artisan cache:forget mailbox_token:{tenant}:{client}` or flush the configured cache store.
 
+## Basic Graph Subscriptions
+
+Explicit-grant Graph resources expose the optional `SupportsGraphSubscriptions` capability. You may create, renew and remove basic message subscriptions without Mailbox tables. Configured reads and delta-only consumers do not require subscription setup.
+
+```php
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
+use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
+use Pyle\Mailbox\Facades\Mailbox;
+
+$mailbox = Mailbox::forGrant($context, $tokens);
+
+if (! $mailbox instanceof SupportsGraphSubscriptions) {
+    throw new RuntimeException('This provider does not support Graph subscriptions.');
+}
+
+$configuration = new GraphSubscriptionConfiguration(
+    tenantId: $trustedTenantId,
+    providerMailboxId: $trustedCanonicalMailboxId,
+    notificationUrl: 'https://app.example.com/graph/changes',
+    lifecycleNotificationUrl: 'https://app.example.com/graph/lifecycle',
+    clientState: $privateRandomClientState,
+    folderId: 'inbox',
+);
+
+$registration = $mailbox->createSubscription(
+    $configuration,
+    new DateTimeImmutable('+1 day'),
+);
+```
+
+The request targets the mailbox in the selected grant context. The host establishes the canonical mailbox ID and tenant mapping from trusted provider or setup evidence. A callback's resource path cannot establish that mapping. Canonical mailbox IDs are opaque provider identities; the SDK does not require an organizational GUID shape. Omit `folderId` to subscribe to all messages in the selected mailbox. Only known folder aliases normalize case; opaque folder IDs remain exact. Retain `clientState` privately: JSON and debug output omit that secret.
+
+### Permissions and Endpoint Setup
+
+Your host must configure public HTTPS notification and lifecycle endpoints. Use an appropriate Microsoft registration, read permission and consent for the selected mailbox. Delegated subscriptions cover the signed-in user's own mailbox. Shared or delegated folders require application permissions; Outlook sharing permissions such as `Mail.Read.Shared` do not support subscriptions. Required live shared-mailbox mode uses the same explicitly selected application grant for read, send and subscription operations. See Microsoft's [Outlook notification prerequisites](https://learn.microsoft.com/en-us/graph/outlook-change-notifications-overview).
+
+### Renewal and Removal
+
+Retain the registration in trusted host storage and renew it before its provider-returned expiry:
+
+```php
+$renewed = $mailbox->renewSubscription($registration, new DateTimeImmutable('+1 day'));
+$removed = $mailbox->removeSubscription($renewed);
+```
+
+Creation and renewal request a future expiry within the basic Outlook limit of seven days. Microsoft may normalize short requests to its minimum lifetime, so retain the returned expiry. Renewal rejects expired or removed registrations before HTTP; reconcile and create a new registration explicitly. Removal sends an empty-body `DELETE` and returns a registration whose status is `removed` after a confirmed empty `204` response. Your host owns scheduling and durable registration updates. See the [subscription lifetime reference](https://learn.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-1.0#subscription-lifetime).
+
+These operations make one provider attempt. An unconfirmed acknowledgement throws `ApiRequestException` with the available status and safe response headers. The SDK does not replay a possibly completed write or release the enclosing host job. Keep the original attempt and reconcile uncertain provider state before creating another subscription.
+
+### Validate Raw Callbacks
+
+Retain the trusted configuration before starting creation: Graph validates both callback URLs during the create request, before a registration has been returned. Pass the raw PSR-7 request to the handshake method:
+
+```php
+$response = $mailbox->subscriptionHandshake($request, $configuration);
+```
+
+Your host returns that response within ten seconds. It contains HTTP `200`, `text/plain; charset=utf-8` and the opaque token decoded exactly once. The SDK checks the configured callback URL, POST method and token shape. The validation token does not authorize a notification or establish a mailbox mapping. See Microsoft's [webhook validation contract](https://learn.microsoft.com/en-us/graph/change-notifications-delivery-webhooks#notificationurl-validation).
+
+For a notification, select the context and registrations from trusted host storage, then validate the raw request:
+
+```php
+$hints = $mailbox->subscriptionNotifications($request, [$registration]);
+```
+
+Every registration must belong to this resource's captured connection, grant, generation and mailbox. Give each context an appropriate trusted endpoint or routing boundary; a batch containing unknown subscriptions fails as a whole. The SDK checks the client-state secret, tenant, subscription expiry evidence, endpoint and canonical mailbox resource. A folder subscription retains its original folder scope even when Graph identifies a changed message by its mailbox-level path.
+
+Basic requests use `includeResourceData=false`. Legitimate basic callbacks may contain `resourceData` identity metadata such as the message ID, `@odata.id`, type and etag. Its presence alone does not request rich mode. Encrypted content, rich validation-token envelopes, certificate management and decryption are unsupported. Callback results contain no message body or synchronization checkpoint.
+
+The default body limit is 64 KiB, enforced while reading the request stream. You may supply a smaller or larger host limit as the third argument. The host owns the request stream; use a seekable body if earlier middleware consumed it. Callback validation makes no provider request and dispatches no queue job or event.
+
+### Lifecycle and Recovery
+
+Lifecycle callbacks use the configured lifecycle URL and the same subscription, tenant and secret binding. Graph omits the message resource from these events; the SDK returns the retained registration scope with a `missed`, `subscriptionRemoved` or `reauthorizationRequired` reason. Your host reconciles and restores or reauthorizes the registration as appropriate. See Microsoft's [lifecycle guidance](https://learn.microsoft.com/en-us/graph/change-notifications-lifecycle-events).
+
+Duplicates and out-of-order callbacks remain reconciliation hints. The host retains the complete receipt durably before acknowledgement, deduplicates dispatch and reconciles from committed per-folder synchronization progress. A hint never advances that progress or publishes provider data. Keep recovery scans even in live mode; webhook delivery can be delayed or lost.
+
+Use `$registration->lifecycle()` to inspect `active`, `expired` or `removed` state. Late valid change notifications for expired or removed registrations return `subscription_expired` or `subscription_removed` hints. All operations invoke the captured grant's lifecycle guard, including after provider I/O or raw callback parsing. Reconnect or disconnect invalidates older work without choosing another grant.
+
+Protocol fixtures verify these package paths. Account consent, actual shared-mailbox subscriptions, public callback delivery, renewal scheduling and deployed recovery remain separate host/live acceptance gates.
+
 ## What's Next
 
 - [User OAuth](user-oauth.md) -- browser-based sign-in with per-user refresh tokens for MS Graph and Gmail.

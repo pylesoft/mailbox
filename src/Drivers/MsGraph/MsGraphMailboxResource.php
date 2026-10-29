@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\Contracts\FolderResource;
+use Pyle\Mailbox\Contracts\GrantAccessGuard;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
@@ -15,10 +18,14 @@ use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\GraphChangeHint;
+use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
+use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionEvidence;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
@@ -31,7 +38,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -39,7 +46,46 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         private readonly MsGraphDeltaSync $deltaSync,
         private readonly string $emailAddress,
         private readonly ?GrantContext $grantContext = null,
+        private readonly ?GrantAccessGuard $grantGuard = null,
     ) {}
+
+    public function createSubscription(GraphSubscriptionConfiguration $configuration, \DateTimeImmutable $expiresAt): GraphSubscriptionRegistration
+    {
+        return $this->subscriptions()->create($configuration, $expiresAt);
+    }
+
+    public function renewSubscription(GraphSubscriptionRegistration $registration, \DateTimeImmutable $expiresAt): GraphSubscriptionRegistration
+    {
+        return $this->subscriptions()->renew($registration, $expiresAt);
+    }
+
+    public function removeSubscription(GraphSubscriptionRegistration $registration): GraphSubscriptionRegistration
+    {
+        return $this->subscriptions()->remove($registration);
+    }
+
+    public function subscriptionHandshake(#[\SensitiveParameter] RequestInterface $request, GraphSubscriptionConfiguration $configuration): ResponseInterface
+    {
+        return $this->subscriptions()->handshake($request, $configuration);
+    }
+
+    /**
+     * @param  list<GraphSubscriptionRegistration>  $registrations
+     * @return list<GraphChangeHint>
+     */
+    public function subscriptionNotifications(#[\SensitiveParameter] RequestInterface $request, array $registrations, int $maxRequestBytes = 65_536): array
+    {
+        return $this->subscriptions()->notifications($request, $registrations, $maxRequestBytes);
+    }
+
+    private function subscriptions(): MsGraphSubscriptions
+    {
+        if ($this->grantContext === null || $this->grantGuard === null) {
+            throw new UnsupportedCapabilityException('Graph subscriptions require an explicit grant context and lifecycle guard.');
+        }
+
+        return new MsGraphSubscriptions($this->client, $this->grantContext, $this->grantGuard);
+    }
 
     public function conversation(string $conversationId, SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation = null, ?BodyReadLimits $limits = null): ConversationRead
     {
