@@ -33,3 +33,8 @@ Use explicit caller context to submit Gmail replies and forwards, then inspect s
 
 Attachment-bearing forwards use the separate file capability when available. This slice is verifiable with body-only replies/forwards and must not silently select or copy files.
 
+
+## Comments
+
+- 2026-10-29: Claimed by mailbox_ticket_17 for local implementation with matt:implement-spec, TDD and the approved public SDK/HTTP-fake seam. Based on integration a8e8a3ae2867a24b13a0f45c69d01c16aa8b101c; waiting for ticket 20 shared context/evidence contracts before behavioral RED/GREEN. No publication or live provider operations.
+
