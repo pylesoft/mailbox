@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Tests\Support;
 
+use Closure;
 use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\VerifiesGraphSharedMailboxLiveAccess;
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -19,10 +20,12 @@ final class GraphSharedMailboxHostTokens implements GrantTokenProvider, Verifies
     /** @var list<GrantContext> */
     public array $verifiedContexts = [];
 
+    public ?Closure $afterVerification = null;
+
     public function __construct(private readonly GrantContext $context, private readonly GraphSubscriptionConfiguration $configuration)
     {
         $this->tokens = new TestGrantTokenProvider([
-            $context->grantId => ['connection' => $context->connectionId, 'generation' => $context->lifecycleGeneration, 'mailboxes' => [$context->mailbox], 'token' => 'selected-application-token'],
+            $context->grantId => ['connection' => $context->connectionId, 'generation' => $context->lifecycleGeneration, 'mailboxes' => [$context->mailbox], 'token' => 'selected-token'],
         ]);
     }
 
@@ -45,5 +48,6 @@ final class GraphSharedMailboxHostTokens implements GrantTokenProvider, Verifies
             throw new UnsupportedCapabilityException('The host requires '.$this->missingSetup.'.');
         }
         $this->verifiedContexts[] = $context;
+        $this->afterVerification?->__invoke();
     }
 }

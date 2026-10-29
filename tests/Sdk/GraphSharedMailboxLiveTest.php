@@ -19,12 +19,14 @@ use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 use Pyle\Mailbox\Tests\Support\GraphSharedMailboxHostTokens;
+use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
 it('does not treat a selected token as proof of required shared mailbox live capability', function (): void {
     $history = [];
-    $handler = HandlerStack::create(new MockHandler);
+    $handler = HandlerStack::create(new MockHandler([
+        new Response(200, [], '{"value":[],"@odata.deltaLink":"https://graph.microsoft.com/v1.0/users/shared%40example.com/mailFolders/inbox/messages/delta?$deltatoken=selected"}'),
+    ]));
     $handler->push(Middleware::history($history));
     $tokens = new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['shared@example.com'], 'token' => 'selected-token'],
@@ -46,6 +48,12 @@ it('does not treat a selected token as proof of required shared mailbox live cap
         ->and($tokens->tokenReads)->toBe(0)
         ->and($history)->toBe([])
         ->and(config('database.default'))->toBe('sdk-forbidden');
+
+    $page = $mailbox->initialSync(new SyncScope('inbox'), new SyncBudget);
+
+    expect($page->checkpoint)->not->toBeNull()
+        ->and($history)->toHaveCount(1)
+        ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
 });
 
 it('rejects a foreign or inactive subscription before declaring required live setup', function (string $change): void {
@@ -73,14 +81,14 @@ it('rejects a foreign or inactive subscription before declaring required live se
         ->and($tokens->verifiedContexts)->toBe([]);
 })->with(['connection', 'grant', 'generation', 'mailbox', 'expired', 'removed']);
 
-it('rejects delegated live authority without elevation and keeps the same authorized grant available for delta only', function (): void {
+it('rejects missing live prerequisites without elevation and keeps the authorized grant available for delta only', function (string $missingSetup): void {
     $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'shared@example.com');
     $configuration = new GraphSubscriptionConfiguration(
         'tenant-1', 'canonical-user-1', 'https://host.example/graph/changes',
         'https://host.example/graph/lifecycle', 'private-client-state', 'inbox',
     );
     $tokens = new GraphSharedMailboxHostTokens($context, $configuration);
-    $tokens->missingSetup = 'application authority instead of delegated authority';
+    $tokens->missingSetup = $missingSetup;
     $history = [];
     $handler = HandlerStack::create(new MockHandler([
         new Response(200, [], json_encode([
@@ -92,7 +100,7 @@ it('rejects delegated live authority without elevation and keeps the same author
     $mailbox = Mailbox::forGrant($context, $tokens, new Client(['handler' => $handler]));
     $registration = new GraphSubscriptionRegistration($context, $configuration, 'subscription-1', new DateTimeImmutable('+1 day'));
 
-    expect(fn () => $mailbox->requireSharedMailboxLive($registration))->toThrow(UnsupportedCapabilityException::class, 'delegated authority')
+    expect(fn () => $mailbox->requireSharedMailboxLive($registration))->toThrow(UnsupportedCapabilityException::class, $missingSetup)
         ->and($tokens->tokens->tokenReads)->toBe(0)
         ->and($history)->toBe([]);
 
@@ -101,8 +109,59 @@ it('rejects delegated live authority without elevation and keeps the same author
     expect($page->upserts)->toBe(['changed-1'])
         ->and($page->checkpoint)->not->toBeNull()
         ->and($history)->toHaveCount(1)
-        ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-application-token');
-});
+        ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
+})->with([
+    'application authority instead of delegated authority',
+    'verified tenant consent',
+    'scoped mailbox read/write authority',
+    'scoped mailbox send authority',
+    'scoped mailbox watch authority',
+    'supported push setup',
+]);
+
+it('requires host verification of the retained subscription tenant mailbox scope and endpoints', function (string $change): void {
+    $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'shared@example.com');
+    $configuration = new GraphSubscriptionConfiguration(
+        'tenant-1', 'canonical-user-1', 'https://host.example/graph/changes',
+        'https://host.example/graph/lifecycle', 'private-client-state', 'inbox',
+    );
+    $tokens = new GraphSharedMailboxHostTokens($context, $configuration);
+    $mailbox = Mailbox::forGrant($context, $tokens, new Client(['handler' => new MockHandler]));
+    $foreignConfiguration = new GraphSubscriptionConfiguration(
+        $change === 'tenant' ? 'foreign-tenant' : 'tenant-1',
+        $change === 'canonical mailbox' ? 'foreign-mailbox' : 'canonical-user-1',
+        $change === 'notification endpoint' ? 'https://foreign.example/changes' : 'https://host.example/graph/changes',
+        $change === 'lifecycle endpoint' ? 'https://foreign.example/lifecycle' : 'https://host.example/graph/lifecycle',
+        'private-client-state', $change === 'folder scope' ? 'foreign-folder' : 'inbox',
+    );
+    $registration = new GraphSubscriptionRegistration($context, $foreignConfiguration, 'subscription-1', new DateTimeImmutable('+1 day'));
+
+    expect(fn () => $mailbox->requireSharedMailboxLive($registration))->toThrow(UnsupportedCapabilityException::class, 'host has not verified')
+        ->and($tokens->tokens->tokenReads)->toBe(0)
+        ->and($tokens->verifiedContexts)->toBe([]);
+})->with(['tenant', 'canonical mailbox', 'folder scope', 'notification endpoint', 'lifecycle endpoint']);
+
+it('rejects captured grant revocation before or during host setup verification', function (bool $duringVerification): void {
+    $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'shared@example.com');
+    $configuration = new GraphSubscriptionConfiguration(
+        'tenant-1', 'canonical-user-1', 'https://host.example/graph/changes',
+        'https://host.example/graph/lifecycle', 'private-client-state', 'inbox',
+    );
+    $tokens = new GraphSharedMailboxHostTokens($context, $configuration);
+    $mailbox = Mailbox::forGrant($context, $tokens, new Client(['handler' => new MockHandler]));
+    $revoke = function () use ($tokens): void {
+        $tokens->tokens->grants['grant']['generation'] = '2';
+    };
+    if ($duringVerification) {
+        $tokens->afterVerification = $revoke;
+    } else {
+        $revoke();
+    }
+    $registration = new GraphSubscriptionRegistration($context, $configuration, 'subscription-1', new DateTimeImmutable('+1 day'));
+
+    expect(fn () => $mailbox->requireSharedMailboxLive($registration))->toThrow(GrantAccessDeniedException::class)
+        ->and($tokens->tokens->tokenReads)->toBe(0);
+})->with([false, true]);
 
 it('checks host setup and explicitly reads submits and subscribes through one selected application grant', function (): void {
     $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'shared@example.com');
@@ -132,6 +191,8 @@ it('checks host setup and explicitly reads submits and subscribes through one se
         new Response(201, [], '{"id":"immutable-draft"}'),
         new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
         new Response(202),
+        new Response(200, [], '{"value":[{"id":"catch-up-1"}],"@odata.deltaLink":"https://graph.microsoft.com/v1.0/users/shared%40example.com/mailFolders/inbox/messages/delta?$deltatoken=baseline"}'),
+        new Response(200, [], '{"value":[{"id":"missed-change"}],"@odata.deltaLink":"https://graph.microsoft.com/v1.0/users/shared%40example.com/mailFolders/inbox/messages/delta?$deltatoken=catchup"}'),
     ]));
     $handler->push(Middleware::history($history));
     $tokens = new GraphSharedMailboxHostTokens($context, $configuration);
@@ -164,6 +225,18 @@ it('checks host setup and explicitly reads submits and subscribes through one se
         ->and($history[2]['request']->getUri()->getPath())->toBe('/v1.0/users/shared%40example.com/messages')
         ->and($history[4]['request']->getUri()->getPath())->toBe('/v1.0/users/shared%40example.com/messages/immutable-draft/send');
     foreach ($history as $entry) {
-        expect($entry['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-application-token');
+        expect($entry['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
     }
+
+    $scope = new SyncScope('inbox');
+    $initial = $mailbox->initialSync($scope, new SyncBudget);
+    $removed = new GraphSubscriptionRegistration($context, $configuration, 'subscription-1', $expiresAt, 'removed');
+    expect(fn () => $mailbox->requireSharedMailboxLive($removed))->toThrow(UnsupportedCapabilityException::class);
+    $catchUp = $mailbox->incrementalSync($scope, new SyncBudget, $initial->checkpoint);
+
+    expect($initial->upserts)->toBe(['catch-up-1'])
+        ->and($catchUp->upserts)->toBe(['missed-change'])
+        ->and($catchUp->checkpoint)->not->toBeNull()
+        ->and($history)->toHaveCount(7)
+        ->and($history[6]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
 });
