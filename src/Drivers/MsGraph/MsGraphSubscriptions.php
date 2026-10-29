@@ -5,13 +5,22 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
 use DateTimeImmutable;
+use GuzzleHttp\Psr7\Query;
+use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Uri;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Contracts\GrantAccessGuard;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
+use Pyle\Mailbox\DTOs\GraphChangeHint;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
+use Pyle\Mailbox\Exceptions\InvalidChangeNotificationException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 final readonly class MsGraphSubscriptions
 {
@@ -43,6 +52,154 @@ final readonly class MsGraphSubscriptions
         }
 
         return new GraphSubscriptionRegistration($this->context, $registration->configuration, $registration->subscriptionId, $registration->expiresAt, 'removed');
+    }
+
+    public function handshake(#[\SensitiveParameter] RequestInterface $request, GraphSubscriptionConfiguration $configuration): ResponseInterface
+    {
+        $this->guard->assertActive($this->context);
+        $query = Query::parse($request->getUri()->getQuery());
+        $token = $query['validationToken'] ?? null;
+        if ($request->getMethod() !== 'POST' || strtolower(trim(explode(';', $request->getHeaderLine('Content-Type'), 2)[0])) !== 'text/plain'
+            || ! is_string($token) || $token === '' || strlen($request->getUri()->getQuery()) > 65_536 || preg_match('/[\x00-\x1f\x7f]/', $token)
+            || (! self::callbackUrlMatches($request, $configuration->notificationUrl, true) && ! self::callbackUrlMatches($request, $configuration->lifecycleNotificationUrl, true))) {
+            throw new InvalidChangeNotificationException('The Graph validation request does not match a configured endpoint or valid opaque token.');
+        }
+        $this->guard->assertActive($this->context);
+
+        return new Response(200, ['Content-Type' => 'text/plain; charset=utf-8'], $token);
+    }
+
+    private static function callbackUrlMatches(#[\SensitiveParameter] RequestInterface $request, #[\SensitiveParameter] string $url, bool $validation = false): bool
+    {
+        $expected = new Uri($url);
+        $query = Query::parse($request->getUri()->getQuery());
+        if ($validation) {
+            unset($query['validationToken']);
+        }
+
+        return (string) $request->getUri()->withQuery('') === (string) $expected->withQuery('') && $query === Query::parse($expected->getQuery());
+    }
+
+    /**
+     * @param list<GraphSubscriptionRegistration> $registrations
+     * @return list<GraphChangeHint>
+     */
+    public function notifications(#[\SensitiveParameter] RequestInterface $request, array $registrations, int $maxRequestBytes): array
+    {
+        $known = [];
+        foreach ($registrations as $registration) {
+            $this->assertRegistration($registration);
+            if (isset($known[$registration->subscriptionId])) {
+                throw new InvalidSyncStateException('Graph callback registrations must have distinct subscription identities.');
+            }
+            $known[$registration->subscriptionId] = $registration;
+        }
+        if ($known === [] || ! array_is_list($registrations) || $request->getMethod() !== 'POST'
+            || strtolower(trim(explode(';', $request->getHeaderLine('Content-Type'), 2)[0])) !== 'application/json'
+            || ! in_array(strtolower(trim($request->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
+            throw new InvalidChangeNotificationException('Graph notifications require known registrations and an identity-encoded JSON POST.');
+        }
+        $budget = new ResponseBudget($maxRequestBytes);
+        $body = '';
+        try {
+            $stream = $request->getBody();
+            if ($stream->isSeekable()) {
+                $stream->rewind();
+            }
+            while (true) {
+                $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
+                if ($chunk === '' && $stream->eof()) {
+                    break;
+                }
+                if ($chunk === '') {
+                    throw new \RuntimeException;
+                }
+                $budget->consume(strlen($chunk));
+                $body .= $chunk;
+            }
+            $contentLength = $request->getHeaderLine('Content-Length');
+            if ($request->hasHeader('Content-Length') && (! ctype_digit($contentLength)
+                || ltrim($contentLength, '0') !== ltrim((string) strlen($body), '0'))) {
+                throw new \RuntimeException;
+            }
+            $envelope = json_decode($body, flags: JSON_THROW_ON_ERROR, depth: 16);
+        } catch (\Throwable) {
+            throw new InvalidChangeNotificationException('The Graph notification body is unreadable, malformed or exceeds its byte budget.');
+        }
+        if (! $envelope instanceof \stdClass || ! is_array($envelope->value ?? null) || ! array_is_list($envelope->value) || $envelope->value === []) {
+            throw new InvalidChangeNotificationException('Graph notifications require a non-empty notification collection.');
+        }
+        if (property_exists($envelope, 'validationTokens')) {
+            throw new UnsupportedCapabilityException('Rich encrypted Graph notifications and token/decryption management are unsupported.');
+        }
+        $hints = [];
+        foreach ($envelope->value as $event) {
+            if (! $event instanceof \stdClass || ! is_string($event->subscriptionId ?? null) || ! isset($known[$event->subscriptionId])) {
+                throw new InvalidChangeNotificationException('The Graph notification does not match a known subscription.');
+            }
+            $registration = $known[$event->subscriptionId];
+            $configuration = $registration->configuration;
+            $lifecycle = property_exists($event, 'lifecycleEvent');
+            $expiry = self::parseExpiry($event->subscriptionExpirationDateTime ?? null);
+            if (! is_string($event->clientState ?? null) || ! hash_equals($configuration->clientState(), $event->clientState)
+                || ($event->tenantId ?? null) !== $configuration->tenantId || $expiry === null || $expiry > $registration->expiresAt
+                || ! self::callbackUrlMatches($request, $lifecycle ? $configuration->lifecycleNotificationUrl : $configuration->notificationUrl)) {
+                throw new InvalidChangeNotificationException('The Graph notification secret, tenant, expiry or endpoint does not match its registration.');
+            }
+            if (property_exists($event, 'encryptedContent')) {
+                throw new UnsupportedCapabilityException('Rich encrypted Graph notifications and certificate/decryption management are unsupported.');
+            }
+            $reason = $registration->lifecycle() === 'active' ? 'mailbox_changed' : 'subscription_'.$registration->lifecycle();
+            if ($lifecycle) {
+                if (! in_array($event->lifecycleEvent, ['missed', 'subscriptionRemoved', 'reauthorizationRequired'], true)
+                    || property_exists($event, 'changeType') || property_exists($event, 'resource') || property_exists($event, 'resourceData')) {
+                    throw new InvalidChangeNotificationException('The Graph lifecycle notification does not match a supported subscription event.');
+                }
+                $reason = $event->lifecycleEvent;
+            } else {
+                $messageId = $this->notificationMessageId($event->resource ?? null, $configuration);
+                if (! in_array($event->changeType ?? null, ['created', 'updated', 'deleted'], true) || $messageId === null) {
+                    throw new InvalidChangeNotificationException('The Graph notification does not match the registered message resource.');
+                }
+                if (property_exists($event, 'resourceData')) {
+                    $data = $event->resourceData;
+                    if (! $data instanceof \stdClass || ($data->id ?? null) !== $messageId
+                        || (property_exists($data, '@odata.type') && (! is_string($data->{'@odata.type'}) || strcasecmp($data->{'@odata.type'}, '#Microsoft.Graph.Message') !== 0))
+                        || (property_exists($data, '@odata.etag') && (! is_string($data->{'@odata.etag'}) || preg_match('/[\x00-\x1f\x7f]/', $data->{'@odata.etag'})))
+                        || (property_exists($data, '@odata.id') && $this->notificationMessageId($data->{'@odata.id'}, $configuration) !== $messageId)) {
+                        throw new InvalidChangeNotificationException('Basic Graph notification identity metadata does not match its resource.');
+                    }
+                    if (array_diff(array_keys(get_object_vars($data)), ['id', '@odata.id', '@odata.type', '@odata.etag']) !== []) {
+                        throw new UnsupportedCapabilityException('Graph notifications support basic identity metadata without resource payload or decryption.');
+                    }
+                }
+            }
+            $id = $event->id ?? null;
+            if ($id !== null && (! is_string($id) || $id === '' || strlen($id) > 1024 || preg_match('/[\x00-\x1f\x7f]/', $id))) {
+                throw new InvalidChangeNotificationException('The Graph notification identity is malformed.');
+            }
+            $hints[] = new GraphChangeHint($this->context, $registration->subscriptionId, $configuration->resource($this->context), $reason, $id);
+        }
+        $this->guard->assertActive($this->context);
+
+        return $hints;
+    }
+
+    private function notificationMessageId(#[\SensitiveParameter] mixed $resource, GraphSubscriptionConfiguration $configuration): ?string
+    {
+        if (! is_string($resource) || preg_match('~\A/?users/([^/]+)/(?:mailFolders/([^/]+)/)?messages/([^/]+)\z~i', $resource, $parts, PREG_UNMATCHED_AS_NULL) !== 1) {
+            return null;
+        }
+        $mailbox = rawurldecode($parts[1]);
+        $folder = $parts[2] === null ? null : rawurldecode($parts[2]);
+        $message = rawurldecode($parts[3]);
+        if (($mailbox !== $configuration->providerMailboxId && $mailbox !== $configuration->providerMailboxId.'@'.$configuration->tenantId && strcasecmp($mailbox, $this->context->mailbox) !== 0)
+            || ($folder !== null && $configuration->folderId !== null && $folder !== $configuration->folderId)
+            || $message === '' || preg_match('/[\x00-\x20\x7f?#\\\\]/', $message)) {
+            return null;
+        }
+
+        return $message;
     }
 
     private function confirmedRegistration(ProviderWriteResponse $response, GraphSubscriptionConfiguration $configuration, int $status, ?string $subscriptionId = null): GraphSubscriptionRegistration

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\DTOs;
 
 use InvalidArgumentException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
 final readonly class GraphSubscriptionConfiguration
 {
@@ -15,7 +16,13 @@ final readonly class GraphSubscriptionConfiguration
         public string $lifecycleNotificationUrl,
         #[\SensitiveParameter] private string $clientState,
         public ?string $folderId = null,
+        bool $includeResourceData = false,
+        #[\SensitiveParameter] ?string $encryptionCertificate = null,
+        #[\SensitiveParameter] ?string $encryptionCertificateId = null,
     ) {
+        if ($includeResourceData || $encryptionCertificate !== null || $encryptionCertificateId !== null) {
+            throw new UnsupportedCapabilityException('Graph subscriptions support basic notifications only; rich mode and certificate/decryption management are unsupported.');
+        }
         foreach ([$tenantId, $providerMailboxId] as $identity) {
             if ($identity === '' || preg_match('/[\x00-\x20\x7f\/\\\\?#%@]/', $identity) || in_array($identity, ['.', '..'], true)) {
                 throw new InvalidArgumentException('Graph subscriptions require trusted tenant and canonical mailbox identities.');

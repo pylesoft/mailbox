@@ -7,6 +7,11 @@ use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Utils;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
@@ -18,6 +23,8 @@ use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Exceptions\InvalidChangeNotificationException;
+use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
@@ -166,6 +173,193 @@ it('keeps a malformed subscription acknowledgement private and does not replay t
     expect($history)->toHaveCount(1);
 });
 
+it('returns the URL-decoded opaque Graph validation token as a plain-text handshake response', function (string $endpoint): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $request = new Request('POST', $endpoint.'?validationToken=opaque%20%2B%2F%25token', ['Content-Type' => 'text/plain; charset=utf-8']);
+
+    $response = $mailbox->subscriptionHandshake($request, graphSubscriptionConfiguration());
+
+    expect($response->getStatusCode())->toBe(200)
+        ->and($response->getHeaderLine('Content-Type'))->toBe('text/plain; charset=utf-8')
+        ->and((string) $response->getBody())->toBe('opaque +/%token')
+        ->and($history)->toBe([])
+        ->and(config('database.default'))->toBe('sdk-forbidden');
+})->with(['changes' => 'https://host.example/graph/changes', 'lifecycle' => 'https://host.example/graph/lifecycle']);
+
+it('validates a basic Graph notification batch with canonical identity metadata as scoped reconciliation hints', function (): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $registration = graphSubscriptionRegistration();
+    $first = graphSubscriptionEvent($registration);
+    $second = $first;
+    $second['id'] = 'older-notification';
+    $second['resource'] = 'Users/canonical-user-1/Messages/message-1=';
+    $second['resourceData']['@odata.id'] = 'Users/canonical-user-1/Messages/message-1=';
+    Event::fake();
+    Queue::fake();
+
+    $hints = $mailbox->subscriptionNotifications(new Request('POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json'], json_encode(['value' => [$first, $second, $first]], JSON_THROW_ON_ERROR)), [$registration]);
+
+    expect($hints)->toHaveCount(3)
+        ->and($hints[0]->context)->toEqual($registration->context)
+        ->and($hints[0]->subscriptionId)->toBe('subscription-1')
+        ->and($hints[0]->resource)->toBe('users/shared%40example.com/mailFolders/inbox/messages')
+        ->and(array_column($hints, 'reason'))->toBe(['mailbox_changed', 'mailbox_changed', 'mailbox_changed'])
+        ->and(array_column($hints, 'notificationId'))->toBe(['notification-1', 'older-notification', 'notification-1'])
+        ->and($history)->toBe([]);
+    $public = json_encode($hints, JSON_THROW_ON_ERROR).print_r($hints, true);
+    expect($public)->not->toContain('private-client-state');
+    expect($public)->not->toContain('resourceData');
+    expect($public)->not->toContain('checkpoint');
+    Event::assertNothingDispatched();
+    Queue::assertNothingPushed();
+});
+
+it('surfaces Graph lifecycle signals using retained subscription binding without a resource in the callback', function (string $reason): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $registration = graphSubscriptionRegistration();
+    $event = graphSubscriptionEvent($registration);
+    unset($event['resource'], $event['resourceData'], $event['changeType']);
+    $event['lifecycleEvent'] = $reason;
+
+    $hints = $mailbox->subscriptionNotifications(new Request('POST', 'https://host.example/graph/lifecycle', ['Content-Type' => 'application/json'], json_encode(['value' => [$event, $event]], JSON_THROW_ON_ERROR)), [$registration]);
+
+    expect($hints)->toHaveCount(2)
+        ->and($hints[0]->reason)->toBe($reason)
+        ->and($hints[0]->resource)->toBe('users/shared%40example.com/mailFolders/inbox/messages')
+        ->and($hints[0]->context)->toEqual($registration->context)
+        ->and($history)->toBe([]);
+})->with(['missed', 'subscriptionRemoved', 'reauthorizationRequired']);
+
+it('explicitly rejects rich Graph subscription setup before provider IO', function (array $unsupported): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+
+    expect(fn () => $mailbox->createSubscription(new GraphSubscriptionConfiguration(...[
+        'tenantId' => 'tenant-1', 'providerMailboxId' => 'canonical-user-1',
+        'notificationUrl' => 'https://host.example/graph/changes', 'lifecycleNotificationUrl' => 'https://host.example/graph/lifecycle',
+        'clientState' => 'private-client-state', ...$unsupported,
+    ]), new DateTimeImmutable('+1 day')))->toThrow(UnsupportedCapabilityException::class)
+        ->and($history)->toBe([]);
+})->with([
+    'rich mode' => [['includeResourceData' => true]],
+    'encryption certificate' => [['encryptionCertificate' => 'private-certificate']],
+    'certificate management' => [['encryptionCertificateId' => 'certificate-1']],
+]);
+
+it('rejects every untrusted basic Graph event before returning any batch hints', function (array $changes): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $registration = graphSubscriptionRegistration();
+    $valid = graphSubscriptionEvent($registration);
+    $invalid = array_replace_recursive($valid, $changes);
+    $hints = null;
+
+    expect(function () use ($mailbox, $registration, $valid, $invalid, &$hints): void {
+        $hints = $mailbox->subscriptionNotifications(graphSubscriptionRequest([$valid, $invalid]), [$registration]);
+    })->toThrow(InvalidChangeNotificationException::class)
+        ->and($hints)->toBeNull()
+        ->and($history)->toBe([]);
+})->with([
+    'wrong secret' => [['clientState' => 'wrong-secret']],
+    'malformed secret' => [['clientState' => false]],
+    'wrong tenant' => [['tenantId' => 'other-tenant']],
+    'unknown subscription' => [['subscriptionId' => 'unknown-subscription']],
+    'wrong mailbox' => [['resource' => 'users/another-mailbox/messages/message-1=']],
+    'wrong resource tenant' => [['resource' => 'users/canonical-user-1@other-tenant/messages/message-1=']],
+    'wrong folder' => [['resource' => 'users/canonical-user-1/mailFolders/other/messages/message-1=']],
+    'untrusted absolute resource' => [['resource' => 'https://evil.example/users/canonical-user-1/messages/message-1=']],
+    'resource query' => [['resource' => 'users/canonical-user-1/messages/message-1=?unexpected=true']],
+    'conflicting metadata identity' => [['resourceData' => ['id' => 'different-message']]],
+    'conflicting metadata path' => [['resourceData' => ['@odata.id' => 'Users/another-mailbox/Messages/message-1=']]],
+    'conflicting metadata type' => [['resourceData' => ['@odata.type' => '#Microsoft.Graph.Event']]],
+    'malformed metadata' => [['resourceData' => null]],
+    'malformed etag metadata' => [['resourceData' => ['@odata.etag' => []]]],
+    'malformed expiry' => [['subscriptionExpirationDateTime' => 'private-invalid-expiry']],
+    'forged later expiry' => [['subscriptionExpirationDateTime' => '2099-01-01T00:00:00Z']],
+    'unknown change type' => [['changeType' => 'futureChange']],
+    'mixed change and lifecycle' => [['lifecycleEvent' => 'missed']],
+    'malformed notification identity' => [['id' => []]],
+]);
+
+it('rejects malformed Graph notification collections and wrong callback transport', function (string $body, string $method, string $url, array $headers): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+
+    expect(fn () => $mailbox->subscriptionNotifications(new Request($method, $url, $headers, $body), [graphSubscriptionRegistration()]))->toThrow(InvalidChangeNotificationException::class)
+        ->and($history)->toBe([]);
+})->with([
+    'malformed JSON' => ['{', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json']],
+    'root list' => ['[]', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json']],
+    'missing collection' => ['{}', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json']],
+    'object collection' => ['{"value":{}}', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json']],
+    'empty collection' => ['{"value":[]}', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json']],
+    'primitive event' => ['{"value":[false]}', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json']],
+    'wrong method' => ['{}', 'GET', 'https://host.example/graph/changes', ['Content-Type' => 'application/json']],
+    'wrong content type' => ['{}', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'text/plain']],
+    'encoded request' => ['{}', 'POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json', 'Content-Encoding' => 'gzip']],
+]);
+
+it('bounds actual callback reads without closing the host-owned body', function (): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $registration = graphSubscriptionRegistration();
+    $body = Utils::streamFor(json_encode(['value' => [graphSubscriptionEvent($registration)]], JSON_THROW_ON_ERROR));
+    $read = 0;
+    $stream = FnStream::decorate($body, ['read' => function (int $length) use ($body, &$read): string {
+        $chunk = $body->read($length);
+        $read += strlen($chunk);
+
+        return $chunk;
+    }]);
+
+    expect(fn () => $mailbox->subscriptionNotifications(new Request('POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json'], $stream), [$registration], 64))->toThrow(InvalidChangeNotificationException::class)
+        ->and($read)->toBe(65)
+        ->and($body->isReadable())->toBeTrue()
+        ->and($history)->toBe([]);
+});
+
+it('rejects a truncated raw callback even when its received JSON is syntactically valid', function (): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $registration = graphSubscriptionRegistration();
+    $body = json_encode(['value' => [graphSubscriptionEvent($registration)]], JSON_THROW_ON_ERROR);
+
+    expect(fn () => $mailbox->subscriptionNotifications(new Request('POST', 'https://host.example/graph/changes', [
+        'Content-Type' => 'application/json', 'Content-Length' => (string) (strlen($body) + 1),
+    ], $body), [$registration]))->toThrow(InvalidChangeNotificationException::class)
+        ->and($history)->toBe([]);
+});
+
+it('keeps rejected raw callback secrets out of exception traces and unreadable-stream errors', function (): void {
+    $history = [];
+    $mailbox = graphSubscriptionMailbox([], $history);
+    $body = FnStream::decorate(Utils::streamFor('private-body'), ['read' => static function (int $length): string {
+        throw new RuntimeException('private-client-state private-provider-body');
+    }]);
+    $previous = ini_set('zend.exception_ignore_args', '0');
+    try {
+        $mailbox->subscriptionNotifications(new Request('POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json'], $body), [graphSubscriptionRegistration()]);
+        test()->fail('An unreadable callback must not return hints.');
+    } catch (InvalidChangeNotificationException $exception) {
+        $public = (string) $exception.json_encode($exception->getTrace(), JSON_THROW_ON_ERROR).print_r($exception->getTrace(), true);
+        expect($public)->not->toContain('private-client-state');
+        expect($public)->not->toContain('private-provider-body');
+        expect($public)->not->toContain('private-body');
+        expect($exception->getPrevious())->toBeNull();
+    } finally {
+        ini_set('zend.exception_ignore_args', $previous);
+    }
+});
+
+/** @param list<array<string, mixed>> $events */
+function graphSubscriptionRequest(array $events): Request
+{
+    return new Request('POST', 'https://host.example/graph/changes', ['Content-Type' => 'application/json'], json_encode(['value' => $events], JSON_THROW_ON_ERROR));
+}
+
 function graphSubscriptionConfiguration(): GraphSubscriptionConfiguration
 {
     return new GraphSubscriptionConfiguration('tenant-1', 'canonical-user-1', 'https://host.example/graph/changes', 'https://host.example/graph/lifecycle', 'private-client-state', 'inbox');
@@ -184,6 +378,21 @@ function graphSubscriptionAcknowledgement(DateTimeImmutable $expiresAt): array
         'changeType' => 'created,updated,deleted', 'clientState' => 'private-client-state',
         'notificationUrl' => 'https://host.example/graph/changes', 'lifecycleNotificationUrl' => 'https://host.example/graph/lifecycle',
         'includeResourceData' => false, 'expirationDateTime' => $expiresAt->format(DATE_ATOM),
+    ];
+}
+
+/** @return array<string, mixed> */
+function graphSubscriptionEvent(GraphSubscriptionRegistration $registration): array
+{
+    return [
+        'id' => 'notification-1', 'subscriptionId' => $registration->subscriptionId,
+        'subscriptionExpirationDateTime' => $registration->expiresAt->format(DATE_ATOM),
+        'clientState' => 'private-client-state', 'tenantId' => 'tenant-1', 'changeType' => 'created',
+        'resource' => 'users/canonical-user-1@tenant-1/messages/message-1=',
+        'resourceData' => [
+            '@odata.type' => '#Microsoft.Graph.Message', '@odata.etag' => 'W/"version-1"',
+            '@odata.id' => 'Users/canonical-user-1@tenant-1/Messages/message-1=', 'id' => 'message-1=',
+        ],
     ];
 }
 

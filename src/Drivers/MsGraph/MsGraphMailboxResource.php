@@ -30,6 +30,8 @@ use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 
 class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftSubmission, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
 {
@@ -55,6 +57,20 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
     public function removeSubscription(GraphSubscriptionRegistration $registration): GraphSubscriptionRegistration
     {
         return $this->subscriptions()->remove($registration);
+    }
+
+    public function subscriptionHandshake(#[\SensitiveParameter] RequestInterface $request, GraphSubscriptionConfiguration $configuration): ResponseInterface
+    {
+        return $this->subscriptions()->handshake($request, $configuration);
+    }
+
+    /**
+     * @param list<GraphSubscriptionRegistration> $registrations
+     * @return list<\Pyle\Mailbox\DTOs\GraphChangeHint>
+     */
+    public function subscriptionNotifications(#[\SensitiveParameter] RequestInterface $request, array $registrations, int $maxRequestBytes = 65_536): array
+    {
+        return $this->subscriptions()->notifications($request, $registrations, $maxRequestBytes);
     }
 
     private function subscriptions(): MsGraphSubscriptions
