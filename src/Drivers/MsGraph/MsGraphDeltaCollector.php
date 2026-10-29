@@ -8,6 +8,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 final class MsGraphDeltaCollector
 {
@@ -15,20 +16,39 @@ final class MsGraphDeltaCollector
         private readonly GraphClient $client,
     ) {}
 
-    public function collect(string $mailbox, string $folderId, ?string $deltaToken): DeltaResultDto
+    public function collect(string $mailbox, string $folderId, #[\SensitiveParameter] ?string $deltaToken): DeltaResultDto
     {
         $created = collect();
         $updated = collect();
         $deleted = collect();
         $deltaLink = null;
-        $endpoint = $this->initialEndpoint($mailbox, $folderId, $deltaToken);
+        $scope = sprintf('users/%s/mailFolders/%s/messages/delta', rawurlencode($mailbox), rawurlencode($folderId));
+        $endpoint = $deltaToken === null ? $scope : $this->client->continuationEndpoint($deltaToken, $scope, $mailbox);
+        $seenEndpoints = [];
 
         do {
+            if (isset($seenEndpoints[$endpoint])) {
+                throw new ApiRequestException('The provider returned a cyclic continuation.');
+            }
+
+            $seenEndpoints[$endpoint] = true;
             $response = $this->client->get($endpoint, mailbox: $mailbox);
+            if (! isset($response['value']) || ! is_array($response['value'])) {
+                throw new ApiRequestException('The provider returned a missing or malformed collection.');
+            }
+
             $this->collectResponseItems($response, $mailbox, $folderId, $created, $updated, $deleted);
 
-            $deltaLink = isset($response['@odata.deltaLink']) ? (string) $response['@odata.deltaLink'] : $deltaLink;
-            $endpoint = isset($response['@odata.nextLink']) ? (string) $response['@odata.nextLink'] : '';
+            if (array_key_exists('@odata.nextLink', $response) && array_key_exists('@odata.deltaLink', $response)) {
+                throw new ApiRequestException('The provider returned conflicting continuation and completion links.');
+            }
+
+            if (array_key_exists('@odata.nextLink', $response)) {
+                $endpoint = $this->client->continuationEndpoint($response['@odata.nextLink'], $scope, $mailbox);
+            } else {
+                $deltaLink = $this->client->continuationEndpoint($response['@odata.deltaLink'] ?? null, $scope, $mailbox);
+                $endpoint = '';
+            }
         } while ($endpoint !== '');
 
         return new DeltaResultDto(
@@ -38,13 +58,6 @@ final class MsGraphDeltaCollector
             deltaLink: $deltaLink,
             fullSyncRequired: false,
         );
-    }
-
-    private function initialEndpoint(string $mailbox, string $folderId, ?string $deltaToken): string
-    {
-        return $deltaToken
-            ? $deltaToken
-            : sprintf('users/%s/mailFolders/%s/messages/delta', rawurlencode($mailbox), rawurlencode($folderId));
     }
 
     /**

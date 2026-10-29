@@ -20,7 +20,9 @@ use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 
 class GraphClient
 {
-    use PerformsApiRequests;
+    use PerformsApiRequests {
+        resolveTarget as private resolveApiTarget;
+    }
 
     /** @param array<string, mixed> $config */
     public function __construct(
@@ -44,6 +46,14 @@ class GraphClient
     protected function providerLabel(): string
     {
         return 'Graph';
+    }
+
+    private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
+    {
+        $target = $this->resolveApiTarget($endpoint, $mailbox);
+        $this->assertMailboxTarget($target, $mailbox);
+
+        return $target;
     }
 
     /**
