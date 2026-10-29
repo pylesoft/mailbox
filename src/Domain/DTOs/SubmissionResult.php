@@ -17,5 +17,6 @@ final readonly class SubmissionResult
         public array $headers = [],
         public ?string $messageId = null,
         public ?string $threadId = null,
+        public ?GrantContext $context = null,
     ) {}
 }

@@ -797,7 +797,7 @@ Names, subjects and text headers support UTF-8. Text and HTML bodies must also c
 | `SubmissionOutcome::Rejected` | A known rejection response, such as HTTP 400, 401, 403 or 429, was observed. | Retain the response evidence and decide how to correct or schedule the operation. |
 | `SubmissionOutcome::Uncertain` | A timeout, 5xx, redirect, oversized/interrupted response or malformed acknowledgement prevents a reliable acceptance decision. | Retain the original operation and investigate it. Uncertainty does not authorize another send. |
 
-`SubmissionResult` contains `provider`, `outcome`, `correlationId`, nullable HTTP `status`, safe response `headers`, and nullable validated `messageId` / `threadId`. It is not a fetched `MessageDto`. An empty Gmail 202 is uncertain; it does not have Graph's send-acceptance semantics.
+`SubmissionResult` contains `provider`, `outcome`, `correlationId`, nullable HTTP `status`, safe response `headers`, nullable validated `messageId` / `threadId`, and a trailing nullable selected-grant `context`. Legacy results can omit that context; inspection must not infer an original authorization binding from the mailbox alone. It is not a fetched `MessageDto`. An empty Gmail 202 is uncertain; it does not have Graph's send-acceptance semantics.
 
 The SDK retains safe request identity, Date and Retry-After response headers. Authorization, cookies, redirect/upload URLs, arbitrary response bodies and raw transport exceptions are excluded from public submission evidence. If no response was observed, `status` is `null`. A response body beyond 64 KiB cannot establish acceptance, but its observed status and safe headers remain available.
 
@@ -917,15 +917,19 @@ This capability requires an explicit grant context. It does not add methods to m
 
 ### Retaining Preparation and Send Evidence
 
-`SubmissionPreparation` retains the selected context and generation, caller correlation, preparation outcome, immutable `draftId`, observed status and safe headers. Its private original-intent fingerprint binds the later call to the same message. Retain every constructor field, including the value returned by `intentFingerprint()`, when reconstructing a handle from private host storage. Ordinary JSON and debug output omit that fingerprint; PHP serialization retains it for trusted private storage.
+`SubmissionPreparation` retains the selected context and generation, caller correlation, preparation outcome, immutable `draftId`, observed status and safe headers, and an optional provider `conversationId`. Its private original-intent fingerprint binds the later call to the same message. Retain every constructor field, including the value returned by `intentFingerprint()`, when reconstructing a handle from private host storage. Ordinary JSON and debug output omit that fingerprint; PHP serialization retains it for trusted private storage.
 
 | Preparation outcome | Meaning |
 | --- | --- |
-| `PreparationOutcome::Prepared` | Graph returned HTTP 201 and a valid immutable draft identity. No send has been requested. |
+| `PreparationOutcome::Prepared` | Graph acknowledged a valid immutable draft identity and any required native normalization. No send has been requested. |
 | `PreparationOutcome::Rejected` | A definite rejection response was observed. No send has been requested. |
-| `PreparationOutcome::Uncertain` | A draft may exist, but its creation acknowledgement is missing or unusable. No send has been requested. |
+| `PreparationOutcome::Uncertain` | A draft may exist, but creation, file cleanup or normalization is not fully acknowledged. No send has been requested. |
 
 An uncertain preparation never causes another draft creation or an automatic send. The draft may be visible in Outlook and may remain after an interrupted or failed operation. The SDK does not automatically delete it.
+
+When creation was acknowledged but later native cleanup or normalization was interrupted, the uncertain preparation retains its original `draftId` and provider conversation identity. A missing creation acknowledgement has no trustworthy draft identity. Neither case establishes that a send was attempted.
+
+Native handles require their retained provider conversation identity when reconstructed for send or inspection. Graph send results also retain the preparation's selected-grant context. Keep this binding through durable storage; an unrelated connection or grant cannot inspect the preparation under the same mailbox address.
 
 `submitPrepared` checks the context, generation and original intent before provider I/O. It then reads the immutable draft, verifies its content and explicit To/Cc/Bcc lists, and makes one send request. Missing, changed, incomplete or unverifiable draft state stops before send. Each phase checks the selected grant again; a disconnected or superseded grant never falls back to configured application credentials.
 
@@ -937,9 +941,75 @@ An empty HTTP 202 returns `SubmissionOutcome::Accepted` with status, safe header
 
 The host owns durable operation state, exclusive submission scheduling and any recovery decision. Separate explicit calls are not deduplicated by the SDK. Do not add retry middleware to an injected HTTP client. Treat provider drafts as submission artifacts and prevent concurrent editing; verification is a pre-send observation, not an atomic lock against other Outlook clients.
 
+### Native Graph Replies and Forwards
+
+Supply a trailing `ReplyForwardContext` on `PreparedMessage` to request native Graph reply or forward preparation. The context contains the selected operation, complete scoped conversation content and the exact source message ID:
+
+```php
+use Pyle\Mailbox\DTOs\ReplyForwardContext;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncScope;
+use Pyle\Mailbox\Enums\ReplyForwardOperation;
+
+$conversation = $mailbox->conversation(
+    $conversationId,
+    new SyncScope(folderId: $sourceFolderId),
+    new SyncBudget(maxPages: 4, maxRequests: 10),
+);
+
+$message = new PreparedMessage(
+    sender: $sender,
+    to: $chosenRecipients,
+    subject: $chosenSubject,
+    correlationId: $operationId,
+    textBody: $chosenBody,
+    cc: [],
+    bcc: [],
+    files: [],
+    context: new ReplyForwardContext(
+        ReplyForwardOperation::Reply,
+        $conversation,
+        $sourceMessageId,
+    ),
+);
+
+$preparation = $mailbox->prepareSubmission($message);
+```
+
+Use `ReplyForwardOperation::Forward` for native forwarding. Graph consumes this context through its existing optional draft capability; Gmail context behavior is implemented separately. An incomplete conversation, missing source, wrong provider/grant/generation/mailbox or unsupported context fails explicitly before draft creation. A resumed conversation read returns that page's retained messages; the host must assemble the complete selected content before constructing a complete snapshot when the source was on an earlier page.
+
+Preparation reads the source through its selected mailbox/folder scope, then invokes `createReply` or `createForward` with immutable IDs. It replaces the new draft's sender, subject, body and complete To/Cc/Bcc arrays with caller choices. It does not select reply-all recipients, infer historical Bcc or add quoted history. Custom headers and correlation are supplied during creation; later PATCH normalization updates only writable draft fields. The source message and its files are never changed.
+
+The empty file manifest is authoritative for native drafts. Preparation enumerates copied files even when `hasAttachments` is false and deletes them only from the new draft. This path accepts one complete metadata response containing at most 1,000 distinct attachment IDs and 4 MiB; unfinished, malformed or over-budget metadata leaves preparation uncertain before cleanup. An interrupted deletion or PATCH retains the acknowledged draft identity and stops without replay or send. Chosen-file uploads require the separate file capability.
+
+The intent fingerprint includes the operation, source, conversation, selected authorization and scope as well as chosen message fields. It excludes unrelated conversation history. Native replies retain the selected conversation; a native forward may return a different provider conversation, which the preparation retains and verifies before send. The same documented harmless normalization rules apply to native drafts; arbitrary HTML rewriting remains unverifiable rather than silently accepted.
+
+### Inspecting Graph Submission Evidence
+
+Graph also exposes optional `SupportsDraftSubmissionInspection`:
+
+```php
+use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
+use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
+
+if ($mailbox instanceof SupportsDraftSubmissionInspection) {
+    $evidence = $mailbox->inspectSubmission($preparation, $message);
+
+    if ($evidence->outcome === SubmissionEvidenceOutcome::SentCopyObserved) {
+        // Retain this provider observation alongside the original send result.
+    }
+}
+```
+
+Inspection requires the retained identity and original intent under the same selected authorization. It performs one bounded GET of that immutable ID in the same mailbox, using immutable ID and the chosen body-format preferences. It checks the explicit recipients, content, headers, complete file manifest, correlation, provider conversation when retained, and sent-copy state. It never creates, changes, sends or deletes a message.
+
+`SubmissionEvidence` carries the provider, selected context, original correlation, original `artifactId`, `outcome`, lookup status, safe headers and optional provider conversation. `SentCopyObserved` means Graph returned a matching non-draft sent copy; it does not prove delivery to recipients. A delayed draft, 404, denied or interrupted lookup, malformed content, mismatched identity/intent or incomplete response returns `Inconclusive`. The original artifact identity is retained even when the lookup is absent or mismatched.
+
+Keep preparation facts, the original `SubmissionResult` and later observations separately in durable host storage. An inconclusive lookup does not replace an earlier accepted response, and it never authorizes another send. Inspection cannot recover a missing creation identity. Microsoft documents that the [sent copy may not be available immediately](https://learn.microsoft.com/en-us/graph/outlook-immutable-id#immutable-id-with-sending-mail).
+
 ### Graph Limits and Permissions
 
-This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers. Supplying both body formats, nonempty files, raw MIME, native reply/forward intent, or unsupported headers requires a separate capability; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above.
+This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers, with optional explicit native reply/forward context. Supplying both body formats, nonempty files, raw MIME or unsupported headers requires a separate capability; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above. See Microsoft's [native reply](https://learn.microsoft.com/en-us/graph/api/message-createreply?view=graph-rest-1.0), [native forward](https://learn.microsoft.com/en-us/graph/api/message-createforward?view=graph-rest-1.0), [draft update](https://learn.microsoft.com/en-us/graph/api/message-update?view=graph-rest-1.0) and [attachment removal](https://learn.microsoft.com/en-us/graph/api/attachment-delete?view=graph-rest-1.0) references.
 
 `maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget and remain strictly below Graph's 4 MB write limit. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow, truncation or inconsistent unencoded Content-Length preserves observed status and safe headers without establishing successful preparation, verification or send.
 
