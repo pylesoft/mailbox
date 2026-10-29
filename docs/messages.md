@@ -795,7 +795,7 @@ You may supply one `Message-ID` in `headers`, such as `['Message-ID' => '<operat
 
 | Outcome | Meaning | Host responsibility |
 | --- | --- | --- |
-| `SubmissionOutcome::Accepted` | Gmail returned HTTP 200 with a valid message identity and, when supplied, a valid thread identity. | Retain the provider IDs and original correlation. Acceptance is not delivery proof. |
+| `SubmissionOutcome::Accepted` | Gmail returned HTTP 200 with a valid message identity and, when supplied, a valid thread identity. Contextual acknowledgements must also match the chosen reply or forward operation. | Retain the provider IDs and original correlation. Acceptance is not delivery proof. |
 | `SubmissionOutcome::Rejected` | A known rejection response, such as HTTP 400, 401, 403 or 429, was observed. | Retain the response evidence and decide how to correct or schedule the operation. |
 | `SubmissionOutcome::Uncertain` | A timeout, 5xx, redirect, oversized/interrupted response or malformed acknowledgement prevents a reliable acceptance decision. | Retain the original operation and investigate it. Uncertainty does not authorize another send. |
 
@@ -835,6 +835,8 @@ For replies, the SDK supplies the selected Gmail `threadId`, the source Message-
 For a forward, use `new ReplyForwardContext(ReplyForwardOperation::Forward, $completeConversation, $chosenSourceMessageId)`. The SDK validates the source context, then sends only the chosen message. It does not add the source thread ID or reply headers. Reply-only In-Reply-To and References headers are rejected for forwards. Historical recipients, Bcc, quoted content and files are never selected or copied automatically; pass any wanted content and immutable files explicitly.
 
 Incomplete reads, missing source content, unavailable reply identifiers, conflicting headers and context from another grant fail before send. Contextual submission requires an explicitly selected grant; configured sends without context remain available.
+
+A complete source may have a body or validated attachment metadata; an attachment-only source does not select its files for the new message. A reply acknowledgement must retain the requested thread. A forward acknowledgement must identify a different thread. Missing or mismatched thread evidence leaves the result `Uncertain` while preserving the actual provider IDs, status and safe headers.
 
 ### Inspecting a Sent Copy
 

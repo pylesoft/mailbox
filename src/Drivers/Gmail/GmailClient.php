@@ -4,33 +4,35 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\Gmail;
 
-use InvalidArgumentException;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\Event;
+use InvalidArgumentException;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
-use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionEvidence;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionResult;
-use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Enums\ReplyForwardOperation;
 use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
+use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
-use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Support\PreparedMessageMime;
+use Pyle\Mailbox\Support\ReceivedHeaders;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 class GmailClient
@@ -89,6 +91,12 @@ class GmailClient
         if (in_array($response->status, [400, 401, 403, 404, 405, 409, 410, 411, 412, 413, 414, 415, 422, 429], true)) {
             $outcome = SubmissionOutcome::Rejected;
         }
+        if ($outcome === SubmissionOutcome::Accepted && $message->context !== null
+            && ($threadId === null || ($message->context->operation === ReplyForwardOperation::Reply
+                ? $threadId !== $replyThread
+                : $threadId === $message->context->conversation->conversationId))) {
+            $outcome = SubmissionOutcome::Uncertain;
+        }
 
         return new SubmissionResult('gmail', $outcome, $message->correlationId, $response->status, $response->headers, $messageId, $threadId, $context);
     }
@@ -139,7 +147,14 @@ class GmailClient
             }
         }
 
-        return $found === [$correlationId];
+        if (count($found) !== 1) {
+            return false;
+        }
+        try {
+            return ReceivedHeaders::text($found[0]) === $correlationId;
+        } catch (MailboxException) {
+            return false;
+        }
     }
 
     protected function providerLabel(): string

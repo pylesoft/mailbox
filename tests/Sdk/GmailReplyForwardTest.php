@@ -3,9 +3,12 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use Psr\Http\Message\RequestInterface;
@@ -15,14 +18,14 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\ReplyForwardContext;
+use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncScope;
-use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\Enums\ReplyForwardOperation;
 use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
-use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 use ZBateson\MailMimeParser\MailMimeParser;
@@ -250,6 +253,284 @@ it('rejects stale Gmail inspection work after reconnect or disconnect without re
         ->and($history)->toHaveCount(1);
 })->with(['reconnect', 'disconnect']);
 
+it('keeps mismatched contextual Gmail acknowledgements uncertain while retaining provider facts', function (ReplyForwardOperation $operation, string $acknowledgement, ?string $observedThread): void {
+    $history = [];
+    $mailbox = gmailContextMailbox([
+        new Response(200, [], json_encode(['id' => 'thread', 'messages' => [gmailContextSource()]], JSON_THROW_ON_ERROR)),
+        new Response(200, ['X-Request-Id' => 'original'], $acknowledgement),
+    ], $history);
+    $conversation = $mailbox->conversation('thread', new SyncScope, new SyncBudget);
+
+    $result = $mailbox->submit(gmailContextMessage(new ReplyForwardContext($operation, $conversation, 'source')));
+
+    expect($result->outcome)->toBe(SubmissionOutcome::Uncertain)
+        ->and($result->status)->toBe(200)
+        ->and($result->messageId)->toBe('sent')
+        ->and($result->threadId)->toBe($observedThread)
+        ->and($result->headers)->toBe(['x-request-id' => ['original']])
+        ->and($result->correlationId)->toBe('reply-operation')
+        ->and($history)->toHaveCount(2);
+})->with([
+    'reply acknowledged in another thread' => [ReplyForwardOperation::Reply, '{"id":"sent","threadId":"wrong-thread"}', 'wrong-thread'],
+    'reply without thread evidence' => [ReplyForwardOperation::Reply, '{"id":"sent"}', null],
+    'forward acknowledged in the source thread' => [ReplyForwardOperation::Forward, '{"id":"sent","threadId":"thread"}', 'thread'],
+    'forward without thread evidence' => [ReplyForwardOperation::Forward, '{"id":"sent"}', null],
+]);
+
+it('leaves missing or mismatched Gmail metadata inconclusive and retains original acceptance', function (array|string $changes, int $status = 200): void {
+    $history = [];
+    $metadata = ['id' => 'sent', 'threadId' => 'thread', 'labelIds' => ['SENT'], 'payload' => [
+        'headers' => [['name' => 'X-Mailbox-Correlation-Id', 'value' => 'reply-operation']],
+    ]];
+    $body = is_array($changes) ? json_encode(array_replace($metadata, $changes), JSON_THROW_ON_ERROR) : $changes;
+    $mailbox = gmailContextMailbox([
+        new Response(200, ['X-Request-Id' => 'original'], '{"id":"sent","threadId":"thread"}'),
+        new Response($status, ['X-Request-Id' => 'inspection', 'Authorization' => 'Bearer private-response', 'Location' => 'https://private-upload'], $body),
+    ], $history);
+    $original = $mailbox->submit(gmailContextMessage());
+
+    $evidence = $mailbox->inspectSubmission($original);
+
+    expect($evidence->outcome)->toBe(SubmissionEvidenceOutcome::Inconclusive)
+        ->and($evidence->status)->toBe($status)
+        ->and($evidence->artifactId)->toBe('sent')
+        ->and($evidence->conversationId)->toBe('thread')
+        ->and($evidence->correlationId)->toBe('reply-operation')
+        ->and($original->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($original->headers)->toBe(['x-request-id' => ['original']])
+        ->and(array_map(static fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['POST', 'GET'])
+        ->and(json_encode($evidence, JSON_THROW_ON_ERROR))->not->toContain('private-response')->not->toContain('private-upload')->not->toContain('private-token');
+})->with([
+    'another message' => [['id' => 'other']],
+    'missing message ID' => [['id' => null]],
+    'another thread' => [['threadId' => 'other']],
+    'missing thread' => [['threadId' => null]],
+    'invalid thread' => [['threadId' => 'not/a/thread']],
+    'not sent' => [['labelIds' => ['INBOX']]],
+    'still a draft' => [['labelIds' => ['SENT', 'DRAFT']]],
+    'label object' => [['labelIds' => (object) ['SENT' => true]]],
+    'missing correlation' => [['payload' => ['headers' => []]]],
+    'another correlation' => [['payload' => ['headers' => [['name' => 'X-Mailbox-Correlation-Id', 'value' => 'other']]]]],
+    'truncated encoded correlation' => [['payload' => ['headers' => [['name' => 'X-Mailbox-Correlation-Id', 'value' => '=?UTF-8?Q?unfinished']]]]],
+    'duplicate correlation' => [['payload' => ['headers' => [['name' => 'X-Mailbox-Correlation-Id', 'value' => 'reply-operation'], ['name' => 'x-mailbox-correlation-id', 'value' => 'reply-operation']]]]],
+    'malformed header' => [['payload' => ['headers' => [['name' => 'X-Mailbox-Correlation-Id', 'value' => 12]]]]],
+    'header object' => [['payload' => ['headers' => (object) []]]],
+    'missing payload' => [['payload' => null]],
+    'invalid JSON' => ['{'],
+    'JSON list' => ['[]'],
+    'oversized body' => [str_repeat('x', 65_537)],
+    'delayed copy' => [[], 404],
+    'insufficient read scope' => [[], 403],
+    'server failure' => [[], 503],
+    'redirect' => [[], 307],
+]);
+
+it('keeps interrupted Gmail evidence reads inconclusive with owned cleanup and no resend', function (bool $timeout): void {
+    $history = [];
+    $closed = false;
+    $body = FnStream::decorate(Utils::streamFor('metadata'), [
+        'read' => static function (int $length): string {
+            throw new RuntimeException('private-token interrupted read');
+        },
+        'close' => static function () use (&$closed): void {
+            $closed = true;
+        },
+    ]);
+    $response = $timeout
+        ? new ConnectException('private-token timeout', new Request('GET', 'https://private-upload'))
+        : new Response(200, ['X-Request-Id' => 'inspection'], $body);
+    $mailbox = gmailContextMailbox([new Response(200, [], '{"id":"sent","threadId":"thread"}'), $response], $history);
+    $original = $mailbox->submit(gmailContextMessage());
+
+    $evidence = $mailbox->inspectSubmission($original);
+
+    expect($evidence->outcome)->toBe(SubmissionEvidenceOutcome::Inconclusive)
+        ->and($evidence->status)->toBe($timeout ? null : 200)
+        ->and($original->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and(array_map(static fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['POST', 'GET'])
+        ->and(json_encode($evidence, JSON_THROW_ON_ERROR))->not->toContain('private-token')->not->toContain('private-upload');
+    if (! $timeout) {
+        expect($closed)->toBeTrue();
+    }
+})->with([false, true]);
+
+it('replies to complete attachment-only Gmail sources without inheriting their files', function (): void {
+    $history = [];
+    $source = gmailContextSource();
+    $source['payload'] = ['mimeType' => 'application/pdf', 'filename' => 'original.pdf', 'headers' => $source['payload']['headers'],
+        'body' => ['attachmentId' => 'original-file', 'size' => 3]];
+    $mailbox = gmailContextMailbox([
+        new Response(200, [], json_encode(['id' => 'thread', 'messages' => [$source]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"id":"sent","threadId":"thread"}'),
+    ], $history);
+    $conversation = $mailbox->conversation('thread', new SyncScope, new SyncBudget);
+    expect($conversation->complete)->toBeTrue()
+        ->and($conversation->messages[0]->body)->toBeNull()
+        ->and($conversation->files[0]['attachment']->id)->toBe('original-file');
+
+    $result = $mailbox->submit(gmailContextMessage(new ReplyForwardContext(ReplyForwardOperation::Reply, $conversation, 'source')));
+
+    $payload = json_decode((string) $history[1]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $mime = (new MailMimeParser)->parse(base64_decode(strtr($payload['raw'], '-_', '+/'), true), false);
+    expect($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($mime->getAllAttachmentParts())->toBe([])
+        ->and($mime->getTextContent())->toBe('Only the chosen reply')
+        ->and($history)->toHaveCount(2);
+});
+
+it('rejects unavailable or conflicting Gmail reply context before sending', function (string $failure, string $exception): void {
+    $history = [];
+    $source = gmailContextSource();
+    $changes = [];
+    $budget = new SyncBudget;
+    $operation = ReplyForwardOperation::Reply;
+    $sourceId = 'source';
+    if ($failure === 'wrong thread') {
+        $source['threadId'] = 'another';
+    } elseif ($failure === 'missing source ID') {
+        unset($source['payload']['headers'][1]);
+        $source['payload']['headers'] = array_values($source['payload']['headers']);
+    } elseif ($failure === 'invalid source ID') {
+        $source['payload']['headers'][1]['value'] = '<invalid>';
+    } elseif ($failure === 'malformed references') {
+        $source['payload']['headers'][2]['value'] = '<truncated';
+    } elseif ($failure === 'missing body') {
+        $source['payload']['body'] = [];
+    } elseif ($failure === 'draft source') {
+        $source['labelIds'] = ['DRAFT'];
+    } elseif ($failure === 'unobserved subject') {
+        $changes['subject'] = 'Re: Réunion à Montréal';
+    } elseif ($failure === 'absent source') {
+        $sourceId = 'absent';
+    } elseif ($failure === 'conflicting reply header') {
+        $changes['headers'] = ['In-Reply-To' => '<someone-else@example.com>'];
+    } elseif ($failure === 'conflicting references') {
+        $changes['headers'] = ['References' => '<someone-else@example.com> <source@example.com>'];
+    } elseif ($failure === 'forward reply header') {
+        $operation = ReplyForwardOperation::Forward;
+        $changes['headers'] = ['References' => '<source@example.com>'];
+    } elseif ($failure === 'nontext header') {
+        $changes['headers'] = ['X-Chosen' => []];
+    } elseif ($failure === 'numeric header') {
+        $changes['headers'] = ['unsupported'];
+    }
+    $messages = [$source];
+    if ($failure === 'unfinished read') {
+        $older = gmailContextSource();
+        $older['id'] = 'older';
+        $messages = [$older, $source];
+        $budget = new SyncBudget(maxItems: 1);
+    }
+    $mailbox = gmailContextMailbox([
+        $failure === 'unavailable scope' ? new Response(404) : new Response(200, [], json_encode(['id' => 'thread', 'messages' => $messages], JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"id":"must-not-send","threadId":"thread"}'),
+    ], $history);
+    $conversation = $mailbox->conversation('thread', new SyncScope, $budget);
+    $message = gmailContextMessage(new ReplyForwardContext($operation, $conversation, $sourceId), $changes);
+
+    expect(fn () => $mailbox->submit($message))->toThrow($exception)
+        ->and($history)->toHaveCount(1);
+})->with([
+    'wrong thread' => ['wrong thread', UnsupportedCapabilityException::class],
+    'missing source ID' => ['missing source ID', UnsupportedCapabilityException::class],
+    'invalid source ID' => ['invalid source ID', InvalidArgumentException::class],
+    'malformed references' => ['malformed references', InvalidArgumentException::class],
+    'missing body' => ['missing body', UnsupportedCapabilityException::class],
+    'draft source' => ['draft source', UnsupportedCapabilityException::class],
+    'unobserved subject' => ['unobserved subject', UnsupportedCapabilityException::class],
+    'absent source' => ['absent source', UnsupportedCapabilityException::class],
+    'conflicting reply header' => ['conflicting reply header', UnsupportedCapabilityException::class],
+    'conflicting references' => ['conflicting references', UnsupportedCapabilityException::class],
+    'forward reply header' => ['forward reply header', UnsupportedCapabilityException::class],
+    'nontext header' => ['nontext header', InvalidArgumentException::class],
+    'numeric header' => ['numeric header', InvalidArgumentException::class],
+    'unfinished read' => ['unfinished read', UnsupportedCapabilityException::class],
+    'unavailable scope' => ['unavailable scope', UnsupportedCapabilityException::class],
+]);
+
+it('rejects malformed or duplicate chosen Message-IDs before any Gmail HTTP', function (array $headers): void {
+    $history = [];
+    $mailbox = gmailContextMailbox([], $history);
+
+    expect(fn () => $mailbox->submit(gmailContextMessage(changes: ['headers' => $headers])))->toThrow(InvalidArgumentException::class)
+        ->and($history)->toBe([]);
+})->with([
+    'duplicate case variants' => [['Message-ID' => '<chosen@example.com>', 'message-id' => '<other@example.com>']],
+    'multiple IDs' => [['Message-ID' => '<one@example.com> <two@example.com>']],
+    'invalid ID' => [['Message-ID' => '<invalid>']],
+    'missing brackets' => [['Message-ID' => 'chosen@example.com']],
+    'non-ASCII ID' => [['Message-ID' => '<é@example.com>']],
+]);
+
+it('hydrates complete older Gmail source context while keeping only the chosen outgoing body', function (): void {
+    $history = [];
+    $source = gmailContextSource();
+    $source['internalDate'] = '1262304000000';
+    $source['payload']['body'] = ['attachmentId' => 'source-body', 'size' => 11];
+    $mailbox = gmailContextMailbox([
+        new Response(200, [], json_encode(['id' => 'thread', 'messages' => [$source]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"data":"T2xkIGNvbnRleHQ","size":11}'),
+        new Response(200, [], '{"id":"sent","threadId":"thread"}'),
+    ], $history);
+    $conversation = $mailbox->conversation('thread', new SyncScope('INBOX', new DateTimeImmutable('2026-10-01')), new SyncBudget);
+
+    $result = $mailbox->submit(gmailContextMessage(new ReplyForwardContext(ReplyForwardOperation::Reply, $conversation, 'source')));
+
+    $payload = json_decode((string) $history[2]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $mime = (new MailMimeParser)->parse(base64_decode(strtr($payload['raw'], '-_', '+/'), true), false);
+    expect($conversation->complete)->toBeTrue()
+        ->and($conversation->messages[0]->body->content)->toBe('Old context')
+        ->and($mime->getTextContent())->toBe('Only the chosen reply')
+        ->and($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($history)->toHaveCount(3);
+});
+
+it('rejects complete Gmail source content captured by another grant in the same mailbox', function (): void {
+    $sendHistory = $readHistory = [];
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'send-token'],
+        'other' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'read-token'],
+    ]);
+    $sender = gmailContextMailbox([], $sendHistory, $tokens);
+    $reader = gmailContextMailbox([
+        new Response(200, [], json_encode(['id' => 'thread', 'messages' => [gmailContextSource()]], JSON_THROW_ON_ERROR)),
+    ], $readHistory, $tokens, new GrantContext('connection', 'other', '1', 'gmail', 'sender@example.com'));
+    $conversation = $reader->conversation('thread', new SyncScope, new SyncBudget);
+
+    expect(fn () => $sender->submit(gmailContextMessage(new ReplyForwardContext(ReplyForwardOperation::Reply, $conversation, 'source'))))->toThrow(UnsupportedCapabilityException::class)
+        ->and($conversation->complete)->toBeTrue()
+        ->and($sendHistory)->toBe([])
+        ->and($readHistory)->toHaveCount(1);
+});
+
+it('observes the original correlation when Gmail returns its actual encoded MIME header', function (): void {
+    $history = [];
+    $wireCorrelation = null;
+    $mailbox = gmailContextMailbox([
+        static function (RequestInterface $request) use (&$wireCorrelation): Response {
+            $payload = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            $mime = (new MailMimeParser)->parse(base64_decode(strtr($payload['raw'], '-_', '+/'), true), false);
+            $wireCorrelation = $mime->getHeader('X-Mailbox-Correlation-Id')->getRawValue();
+
+            return new Response(200, [], '{"id":"sent","threadId":"thread"}');
+        },
+        static function () use (&$wireCorrelation): Response {
+            return new Response(200, [], json_encode(['id' => 'sent', 'threadId' => 'thread', 'labelIds' => ['SENT'], 'payload' => [
+                'headers' => [['name' => 'X-Mailbox-Correlation-Id', 'value' => $wireCorrelation]],
+            ]], JSON_THROW_ON_ERROR));
+        },
+    ], $history);
+    $original = $mailbox->submit(gmailContextMessage(changes: ['correlationId' => 'opération-équipe-42']));
+
+    $evidence = $mailbox->inspectSubmission($original);
+
+    expect($wireCorrelation)->toMatch('/=\?utf-8\?/i')
+        ->and($evidence->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved)
+        ->and($evidence->correlationId)->toBe('opération-équipe-42')
+        ->and($original->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and(array_map(static fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['POST', 'GET']);
+});
+
 /** @return array<string, mixed> */
 function gmailContextSource(): array
 {
@@ -282,7 +563,7 @@ function gmailContextMessage(?ReplyForwardContext $context = null, array $change
  * @param  list<mixed>  $responses
  * @param  array<int, mixed>  $history
  */
-function gmailContextMailbox(array $responses, array &$history, ?TestGrantTokenProvider $tokens = null): MailboxResource
+function gmailContextMailbox(array $responses, array &$history, ?TestGrantTokenProvider $tokens = null, ?GrantContext $context = null): MailboxResource
 {
     $handler = HandlerStack::create(new MockHandler($responses));
     $handler->push(Middleware::mapRequest(static fn (RequestInterface $request): RequestInterface => $request->withBody(Utils::streamFor((string) $request->getBody()))));
@@ -291,5 +572,5 @@ function gmailContextMailbox(array $responses, array &$history, ?TestGrantTokenP
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'private-token'],
     ]);
 
-    return Mailbox::forGrant(new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com'), $tokens, new Client(['handler' => $handler]));
+    return Mailbox::forGrant($context ?? new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com'), $tokens, new Client(['handler' => $handler]));
 }

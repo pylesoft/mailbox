@@ -33,7 +33,7 @@ final readonly class GmailSubmissionContext
         $source = null;
         $subjectObserved = false;
         foreach ($read->messages as $candidate) {
-            if ($candidate->conversationId === $read->conversationId && ! $candidate->isDraft && $candidate->body !== null) {
+            if ($candidate->conversationId === $read->conversationId && ! $candidate->isDraft) {
                 $subjectObserved = $subjectObserved || $candidate->subject === $message->subject;
                 if ($candidate->id === $context->sourceMessageId) {
                     $source = $candidate;
@@ -43,11 +43,19 @@ final readonly class GmailSubmissionContext
         if ($source === null) {
             throw new UnsupportedCapabilityException('The selected Gmail source is unavailable in the complete conversation.');
         }
+        $hasContent = $source->body !== null;
+        foreach ($read->files as $file) {
+            if ($file['messageId'] === $source->id && trim($file['attachment']->id) !== '') {
+                $hasContent = true;
+                break;
+            }
+        }
+        if (! $hasContent) {
+            throw new UnsupportedCapabilityException('The selected Gmail source has unavailable body and file metadata.');
+        }
+        $this->assertHeaderTypes($message->headers);
         if ($context->operation === ReplyForwardOperation::Forward) {
             foreach (array_keys($message->headers) as $name) {
-                if (! is_string($name)) {
-                    throw new InvalidArgumentException('Prepared headers require supported field names and text values.');
-                }
                 if (in_array(strtolower($name), ['in-reply-to', 'references'], true)) {
                     throw new UnsupportedCapabilityException('Gmail forwards cannot carry reply-only headers.');
                 }
@@ -76,9 +84,6 @@ final readonly class GmailSubmissionContext
         foreach ($required as $name => $values) {
             $found = false;
             foreach ($headers as $chosenName => $value) {
-                if (! is_string($chosenName) || ! is_string($value)) {
-                    throw new InvalidArgumentException('Prepared headers require supported field names and text values.');
-                }
                 if (strcasecmp($chosenName, $name) === 0) {
                     if (MessageIdentifiers::parse($value, $this->budget) !== $values) {
                         throw new UnsupportedCapabilityException('The chosen reply headers do not match the selected Gmail source.');
@@ -93,6 +98,16 @@ final readonly class GmailSubmissionContext
 
         return new PreparedMessage($message->sender, $message->to, $message->subject, $message->correlationId,
             $message->textBody, $message->htmlBody, $message->cc, $message->bcc, $headers, $message->files, $message->context);
+    }
+
+    /** @param array<array-key, mixed> $headers */
+    private function assertHeaderTypes(array $headers): void
+    {
+        foreach ($headers as $name => $value) {
+            if (! is_string($name) || ! is_string($value)) {
+                throw new InvalidArgumentException('Prepared headers require supported field names and text values.');
+            }
+        }
     }
 
     private function header(MessageDto $message, string $name): ?string
