@@ -75,7 +75,7 @@ final readonly class RefreshingGrantTokenProvider implements GrantTokenProvider
         $this->assertActive($context);
         $provider = $context->driver === 'google-workspace' ? 'gmail' : $context->driver;
         if ($grant === null || $grant->identity->provider !== $provider || trim($grant->revision) === '') {
-            throw new GrantAccessDeniedException('A verified grant for the selected provider is required.');
+            throw new GrantAccessDeniedException('A verified grant for the selected provider is required. Reconnect through authorized enrollment.');
         }
 
         return $grant;

@@ -21,7 +21,9 @@ use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
+use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\ProviderWriteResponse;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 trait PerformsApiRequests
@@ -247,6 +249,89 @@ trait PerformsApiRequests
     public function post(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $payload = [], ?string $mailbox = null): array
     {
         return $this->request('POST', $endpoint, ['json' => $payload], $mailbox);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function requestOnce(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, int $maxResponseBytes = 65_536): ProviderWriteResponse
+    {
+        if ($maxResponseBytes < 1) {
+            throw new \InvalidArgumentException('The one-attempt response byte budget must be positive.');
+        }
+        $target = $this->resolveTarget($endpoint, $mailbox);
+        $mailboxKey = $this->mailboxKey($mailbox);
+        $attempted = false;
+        try {
+            $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, &$attempted): ResponseInterface {
+                $requestOptions = $this->buildRequestOptions($options, $mailboxKey);
+                foreach (array_keys($requestOptions['headers']) as $name) {
+                    if (is_string($name) && strcasecmp($name, 'Accept-Encoding') === 0) {
+                        unset($requestOptions['headers'][$name]);
+                    }
+                }
+                $requestOptions['headers']['Accept-Encoding'] = 'identity';
+                $attempted = true;
+
+                return $this->client->request($method, $target, array_merge($requestOptions, [
+                    'allow_redirects' => false, 'debug' => false, 'http_errors' => false, 'stream' => true, 'decode_content' => false,
+                ]));
+            });
+        } catch (\Throwable $e) {
+            if (! $attempted) {
+                if ($e instanceof GrantAccessDeniedException || $e instanceof GrantRefreshException || $e instanceof RateLimitException) {
+                    throw $e;
+                }
+                throw new ApiRequestException($this->providerLabel().' submission preflight failed.');
+            }
+            $response = $e instanceof RequestException ? $e->getResponse() : null;
+            if ($response === null) {
+                return new ProviderWriteResponse(null);
+            }
+        }
+
+        $headers = [];
+        foreach (['date', 'retry-after', 'request-id', 'x-request-id', 'client-request-id', 'x-ms-request-id', 'x-guploader-uploadid'] as $name) {
+            $values = $response->getHeader($name);
+            $pattern = in_array($name, ['date', 'retry-after'], true)
+                ? '/\A[0-9A-Za-z ,:-]{1,128}\z/'
+                : '/\A[A-Za-z0-9][A-Za-z0-9._:+\/=-]{0,1023}\z/';
+            $safe = array_filter($values, static fn (string $value): bool => preg_match($pattern, $value) === 1 && ! str_contains($value, '://'));
+            if ($values !== [] && $values === $safe) {
+                $headers[$name] = array_values($values);
+            }
+        }
+        $stream = $response->getBody();
+        $body = '';
+        try {
+            if (! in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
+                return new ProviderWriteResponse($response->getStatusCode(), $headers);
+            }
+            while (true) {
+                $chunk = $stream->read(min(8192, $maxResponseBytes - strlen($body) + 1));
+                if ($chunk === '' && $stream->eof()) {
+                    break;
+                }
+                if ($chunk === '' || strlen($body) + strlen($chunk) > $maxResponseBytes) {
+                    return new ProviderWriteResponse($response->getStatusCode(), $headers);
+                }
+                $body .= $chunk;
+            }
+        } catch (\Throwable) {
+            return new ProviderWriteResponse($response->getStatusCode(), $headers);
+        } finally {
+            try {
+                $stream->close();
+            } catch (\Throwable) {
+                // Cleanup cannot erase an already observed provider acknowledgement.
+            }
+        }
+
+        $contentLength = $response->getHeaderLine('Content-Length');
+        if ($response->hasHeader('Content-Length') && in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)
+            && (! ctype_digit($contentLength) || ltrim($contentLength, '0') !== ltrim((string) strlen($body), '0'))) {
+            return new ProviderWriteResponse($response->getStatusCode(), $headers);
+        }
+
+        return new ProviderWriteResponse($response->getStatusCode(), $headers, $body);
     }
 
     /** @param array<string, mixed> $payload

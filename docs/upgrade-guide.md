@@ -4,13 +4,44 @@ Mailbox follows [semantic versioning](https://semver.org). Review the relevant u
 
 ## Unreleased Provider SDK
 
+### Legacy OAuth Records and Reconnect
+
+Keep existing connections, mailbox/message references, configuration and OAuth rows when upgrading. The additive selected-grant migration does not reconstruct ownership, bind old credentials, merge rows or delete history.
+
+| Existing shape | Upgrade handling |
+| --- | --- |
+| Configured Gmail service account, including `google-workspace`, or Microsoft application credentials | Continue using the configured driver and existing model/resource APIs. These modes do not discover delegated OAuth rows. |
+| `gmail-user` or `ms-graph-user` token linked to a connection | Preserve it as historical data. The old connection link is not verified ownership: earlier callbacks could overwrite it through a global subject/email lookup. |
+| Unowned, duplicate-subject, email-only, expired or revoked legacy token | Preserve it and request reconnect. A matching email, subject, tenant or `user_reference` cannot recover the missing host authorization, OAuth client or verified identity evidence. |
+| Explicitly selected `gmail` or `ms-graph` grant with verified identity, current generation and revision | Continue through `EloquentGrantStore`, the host's guards and the explicit runtime. Reconnect/disconnect invalidates the generation; ordinary refresh keeps it. |
+
+Legacy `GmailUserOAuthService` and `MsGraphUserOAuthService` remain callable with their existing signatures, but enrollment now fails with `OAuthEnrollmentException` before creating state, exchanging a code or writing credentials. This is an intentional security exception to compatibility. Their browser redirect routes return a setup error; an old callback returns its safe error shape and a reconnect instruction. Safe historical `stateContext()` returns and callback-result classes remain available. The old cache `get`/later `forget` sequence is no longer an enrollment path, and raw provider error bodies are no longer exposed through it.
+
+To reconnect:
+
+1. Keep `MAILBOX_OAUTH_ENABLED=false` and provide host-owned initiation/callback endpoints. Use [Gmail enrollment](authentication/user-oauth.md#enrolling-gmail-with-host-owned-storage) or [Microsoft enrollment](authentication/user-oauth.md#enrolling-and-refreshing-microsoft-with-host-owned-storage).
+2. Authorize the current actor, selected host connection and intended mailbox. Atomically select a new grant ID and a fresh lifecycle generation on that connection through your host's lifecycle handling. Retain earlier rows and generations; never transfer a row from another connection or recycle a generation.
+3. Construct the exact `GrantContext` and use an `OAuthEnrollmentGuard`, an atomic `OAuthStateStore` and `EloquentGrantStore` (or your host's `GrantStore`). Recover the trusted context from host state in the callback, rather than query parameters or `user_reference`.
+4. Complete a new provider exchange. The service verifies state, provider identity, OAuth client and, for Microsoft, tenant/issuer and Graph object identity before the conditional commit. An omitted refresh token cannot borrow from a legacy row or another connection. Failed checks leave credentials unavailable to the new runtime.
+5. Read with `Mailbox::forGrant()` and a guarded token provider. A missing verified selection reports that reconnect is required; it never falls back to historical rows or configured broader authority.
+
+There is no automatic credential-promotion API. If your application independently retained complete verified ownership and identity proof, it may provide a guarded `GrantStore` using that proof. Populating selected columns or relabeling a legacy provider does not establish it. Where the proof was never stored, reconnect is the recovery path. Package fixtures do not establish live consent, mailbox permissions or deployed shared-lock behavior.
+
 ### Host-Owned Microsoft Authorization
 
-Microsoft work/school and personal accounts may now use explicit host-owned enrollment and renewable grants. Existing configured application-permission access and legacy browser-service signatures remain available. New delegated reads use `Mailbox::forGrant()` with `RefreshingGrantTokenProvider` and `MsGraphGrantRefresher`; they do not discover or reassign legacy OAuth records or fall back to application authority. See [Microsoft enrollment and refresh](authentication/user-oauth.md#enrolling-and-refreshing-microsoft-with-host-owned-storage).
+Microsoft work/school and personal accounts may now use explicit host-owned enrollment and renewable grants. Existing configured application-permission access remains available. Legacy browser-service signatures remain callable but require the reconnect upgrade above. New delegated reads use `Mailbox::forGrant()` with `RefreshingGrantTokenProvider` and `MsGraphGrantRefresher`; they do not discover or reassign legacy OAuth records or fall back to application authority. See [Microsoft enrollment and refresh](authentication/user-oauth.md#enrolling-and-refreshing-microsoft-with-host-owned-storage).
 
 Configure the app registration and an explicit tenant GUID, `common`, `organizations` or `consumers`. The new flow requires `openid`, `profile`, `offline_access` and `User.Read` scopes plus the intended mail scopes; the default Microsoft OAuth scopes now include `User.Read`. Host state adapters must preserve the trailing optional `OAuthState::authority` field. Grant adapters must preserve the verified identity, `metadata['object_id']`, credential revision and private nonce fingerprint.
 
 Delegated shared access requires the signed-in user's mailbox permissions and a successful read of that target. It supports delta-only discovery; required shared live read/send/watch has a separate application-grant setup contract. Enrollment, scopes and `/me` success do not establish mailbox permission or live readiness. Live-provider and shared-lock deployment acceptance remain separate gates.
+
+### Optional Selected-Grant Persistence
+
+`EloquentGrantStore` may now back the selected-grant services using existing package connections and OAuth token models. Apply the additive migration, explicitly select a grant and generation, and retain your host guards, atomic OAuth state adapter and shared refresh lock. Existing OAuth rows are preserved and remain unselected; no subject/email lookup, ownership backfill or automatic binding is performed. Configured drivers and existing resource resolution remain available. Hosts using their own models may keep `mailbox.persistence.enabled=false` and provide their own `GrantStore`. See [optional Eloquent storage](configuration.md#storing-selected-grants-with-eloquent).
+
+The adapter rejects stale revisions, reused revisions, revoked grants, changed ownership/generation and changed verified identity, including Microsoft's `object_id`. Ordinary refresh keeps the generation; reconnect/reactivation requires a fresh generation. Retain grant rows and their encrypted revision history to preserve reuse protection, and plan for its lifetime growth.
+
+`MailboxOAuthToken` now hides access tokens, refresh tokens, nonce fingerprints and revision history from JSON and debug output, including legacy callback-result JSON. This is an intentional security change. Trusted code may still read model attributes directly; applications must not depend on credential values in serialized model or callback results.
 
 ### Received Addresses and Headers
 

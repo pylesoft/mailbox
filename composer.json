@@ -39,7 +39,9 @@
     "illuminate/http": "^12.0||^13.0",
     "guzzlehttp/guzzle": "^7.0",
     "psr/http-message": "^2.0",
-    "zbateson/mail-mime-parser": "^4.0.8"
+    "zbateson/mail-mime-parser": "^4.0.8",
+    "symfony/mime": "^7.4.22 || ^8.1.10",
+    "egulias/email-validator": "^4.0.4"
   },
   "require-dev": {
     "orchestra/testbench": "^10.0||^11.0",
