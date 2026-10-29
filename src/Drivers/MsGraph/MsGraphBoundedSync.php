@@ -70,6 +70,9 @@ final readonly class MsGraphBoundedSync
 
                 continue;
             }
+            if ($active === null) {
+                throw new InvalidSyncStateException('Graph progress has no unfinished folder to read.');
+            }
             $folder = $state['folders'][$active];
             $base = $this->folderEndpoint($folder['folderId']);
             $endpoint = $folder['nextLink'] ?? $base;
@@ -107,10 +110,9 @@ final readonly class MsGraphBoundedSync
                 return $this->result($identity, $state, $changes, 'provider_item_limit');
             }
             $changeIndex = array_search($folder['folderId'], array_column($changes, 'folderId'), true);
-            if ($changeIndex === false) {
-                $changeIndex = count($changes);
-                $changes[] = ['folderId' => $folder['folderId'], 'upserts' => [], 'removals' => []];
-            }
+            $change = $changeIndex === false
+                ? ['folderId' => $folder['folderId'], 'upserts' => [], 'removals' => []]
+                : $changes[$changeIndex];
             foreach ($values as $value) {
                 if (! is_array($value) || ! is_string($value['id'] ?? null) || trim($value['id']) === '') {
                     throw new ApiRequestException('Graph returned a delta entry without a valid message ID.');
@@ -119,19 +121,27 @@ final readonly class MsGraphBoundedSync
                     if (! is_array($value['@removed'])) {
                         throw new ApiRequestException('Graph returned malformed folder-removal evidence.');
                     }
-                    $changes[$changeIndex]['removals'][] = $value['id'];
+                    $change['removals'][] = $value['id'];
                 } else {
-                    $changes[$changeIndex]['upserts'][] = $value['id'];
+                    $change['upserts'][] = $value['id'];
                 }
             }
-            $changes[$changeIndex]['upserts'] = array_values(array_unique($changes[$changeIndex]['upserts']));
-            $changes[$changeIndex]['removals'] = array_values(array_unique($changes[$changeIndex]['removals']));
-            $items += count($values);
-            $state['folders'][$active]['seenTokens'][] = hash('sha256', $endpoint);
-            $state['folders'][$active][$hasNext ? 'nextLink' : 'deltaLink'] = $link;
-            if (! $hasNext) {
-                $state['folders'][$active]['nextLink'] = null;
+            $change['upserts'] = array_values(array_unique($change['upserts']));
+            $change['removals'] = array_values(array_unique($change['removals']));
+            if ($changeIndex === false) {
+                $changes[] = $change;
+            } else {
+                array_splice($changes, $changeIndex, 1, [$change]);
             }
+            $items += count($values);
+            $folder['seenTokens'][] = hash('sha256', $endpoint);
+            if ($hasNext) {
+                $folder['nextLink'] = $link;
+            } else {
+                $folder['deltaLink'] = $link;
+                $folder['nextLink'] = null;
+            }
+            $state['folders'][$active] = $folder;
         }
     }
 
@@ -231,8 +241,9 @@ final readonly class MsGraphBoundedSync
         if ($next === null) {
             array_shift($state['enumeration']);
         } else {
-            $state['enumeration'][0]['nextLink'] = $next;
-            $state['enumeration'][0]['seenTokens'][] = hash('sha256', $endpoint);
+            $progress['nextLink'] = $next;
+            $progress['seenTokens'][] = hash('sha256', $endpoint);
+            $state['enumeration'][0] = $progress;
         }
 
         return null;
