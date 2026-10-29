@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
+use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
@@ -13,6 +14,11 @@ use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncCheckpoint;
+use Pyle\Mailbox\DTOs\SyncContinuation;
+use Pyle\Mailbox\DTOs\SyncIdentity;
+use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\ConnectionStatus;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\Importance;
@@ -30,6 +36,7 @@ arch('DTOs are final readonly classes')
         AttachmentDto::class,
         AttachmentFileDto::class,
         BodyDto::class,
+        ChangePage::class,
         ConnectionTestResult::class,
         DeltaResultDto::class,
         EmailAddressDto::class,
@@ -37,6 +44,11 @@ arch('DTOs are final readonly classes')
         GrantContext::class,
         HealthCheckResult::class,
         MessageDto::class,
+        SyncBudget::class,
+        SyncCheckpoint::class,
+        SyncContinuation::class,
+        SyncIdentity::class,
+        SyncScope::class,
     ])
     ->toBeFinal()
     ->toBeReadonly();
