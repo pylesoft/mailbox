@@ -12,6 +12,7 @@ final readonly class StoredGrant
     /**
      * @param  list<string>  $scopes
      * @param  array<string, mixed>  $metadata  Non-secret provider account metadata, never raw tokens or responses.
+     * @param  ?string  $nonceHash  SHA-256 of the nonce verified when this renewable authorization was issued.
      */
     public function __construct(
         public GrantIdentity $identity,
@@ -22,6 +23,7 @@ final readonly class StoredGrant
         public string $revision,
         public ?string $email = null,
         public array $metadata = [],
+        #[SensitiveParameter] private ?string $nonceHash = null,
     ) {}
 
     public function accessToken(): string
@@ -32,6 +34,11 @@ final readonly class StoredGrant
     public function refreshToken(): ?string
     {
         return $this->refreshToken;
+    }
+
+    public function nonceHash(): ?string
+    {
+        return $this->nonceHash;
     }
 
     /** @return array<string, mixed> */

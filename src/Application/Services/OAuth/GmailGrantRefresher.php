@@ -68,7 +68,7 @@ final class GmailGrantRefresher implements GrantRefresher
 
         return new StoredGrant($grant->identity, $accessToken, $refreshToken,
             now()->addSeconds($data['expires_in'])->toDateTimeImmutable(), $scopes,
-            bin2hex(random_bytes(16)), $grant->email, $grant->metadata);
+            bin2hex(random_bytes(16)), $grant->email, $grant->metadata, $grant->nonceHash());
     }
 
     private function token(mixed $value): ?string
@@ -86,7 +86,9 @@ final class GmailGrantRefresher implements GrantRefresher
             || ! in_array($claims['iss'] ?? null, ['https://accounts.google.com', 'accounts.google.com'], true)
             || ($claims['aud'] ?? null) !== $grant->identity->clientId
             || (isset($claims['azp']) && $claims['azp'] !== $grant->identity->clientId)
-            || ($claims['sub'] ?? null) !== $grant->identity->subject || array_key_exists('nonce', $claims)
+            || ($claims['sub'] ?? null) !== $grant->identity->subject
+            || (array_key_exists('nonce', $claims) && (! is_string($claims['nonce']) || $grant->nonceHash() === null
+                || ! hash_equals($grant->nonceHash(), hash('sha256', $claims['nonce']))))
             || ! is_int($claims['exp'] ?? null) || $claims['exp'] <= now()->getTimestamp()
             || ! is_int($claims['iat'] ?? null) || $claims['iat'] > now()->getTimestamp() + 60) {
             throw new GrantAccessDeniedException('Google refresh identity does not match the selected grant. Reconnect authorization.');

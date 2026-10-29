@@ -22,6 +22,7 @@ use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Services\OAuth\GmailGrantOAuthService;
 use Pyle\Mailbox\Services\OAuth\GmailGrantRefresher;
 use Pyle\Mailbox\Support\CacheGrantRefreshLock;
 use Pyle\Mailbox\Support\RefreshingGrantTokenProvider;
@@ -356,3 +357,45 @@ it('keeps separate host grants for the same Google identity and target independe
         ->and($this->host->load($other)?->refreshToken())->toBe('other-refresh');
     Http::assertSentCount(2);
 });
+
+it('verifies the original nonce from enrollment during refresh without exposing it', function (string $mode): void {
+    config()->set('mailbox.oauth.gmail.redirect_uri', 'https://host.example/oauth/google');
+    config()->set('mailbox.oauth.gmail.scopes', ['openid', 'gmail.readonly']);
+    $oauth = new GmailGrantOAuthService($this->host, $this->host, $this->host);
+    parse_str((string) parse_url($oauth->authorizationUrl($this->context, 'host'), PHP_URL_QUERY), $query);
+    $encode = static fn (array $part): string => rtrim(strtr(base64_encode(json_encode($part, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+    $claims = ['iss' => 'https://accounts.google.com', 'aud' => 'selected-client', 'sub' => 'subject',
+        'iat' => now()->getTimestamp(), 'exp' => now()->addHour()->getTimestamp(), 'nonce' => $query['nonce']];
+    $jwt = static fn (array $payload): string => $encode(['alg' => 'RS256']).'.'.$encode($payload).'.direct-endpoint-signature';
+    $responses = Http::fakeSequence()->push([
+        'access_token' => 'enrolled-access', 'refresh_token' => 'enrolled-refresh', 'expires_in' => 60, 'token_type' => 'Bearer', 'id_token' => $jwt($claims),
+    ]);
+    $oauth->handleCallback($this->context, 'host', $query['state'], 'one-use-code');
+    $enrolled = $this->host->load($this->context);
+    $nonceHash = hash('sha256', $query['nonce']);
+    expect($enrolled->nonceHash())->toBe($nonceHash)
+        ->and(json_encode($enrolled))->not->toContain($query['nonce'], $nonceHash)
+        ->and(print_r($enrolled, true))->not->toContain($query['nonce'], $nonceHash);
+    if ($mode === 'missing-baseline') {
+        $this->host->grants['grant'] = new StoredGrant($enrolled->identity, $enrolled->accessToken(), $enrolled->refreshToken(),
+            $enrolled->expiresAt, $enrolled->scopes, $enrolled->revision);
+    } elseif ($mode === 'mismatch') {
+        $claims['nonce'] = 'different-nonce';
+    } elseif ($mode === 'omitted') {
+        unset($claims['nonce']);
+    }
+    $responses->push(['access_token' => 'refreshed-access', 'refresh_token' => 'rotated-refresh',
+        'expires_in' => 3600, 'token_type' => 'Bearer', 'id_token' => $jwt($claims)]);
+    $this->travel(61)->seconds();
+    $tokens = new RefreshingGrantTokenProvider($this->host, $this->host, new TestRefreshLocks, new GmailGrantRefresher);
+
+    if (in_array($mode, ['mismatch', 'missing-baseline'], true)) {
+        expect(fn () => $tokens->accessToken($this->context))->toThrow(GrantAccessDeniedException::class)
+            ->and($this->host->load($this->context)?->refreshToken())->toBe('enrolled-refresh');
+    } else {
+        expect($tokens->accessToken($this->context))->toBe('refreshed-access')
+            ->and($this->host->load($this->context)?->refreshToken())->toBe('rotated-refresh')
+            ->and($this->host->load($this->context)?->nonceHash())->toBe($nonceHash);
+    }
+    Http::assertSentCount(2);
+})->with(['matching', 'mismatch', 'omitted', 'missing-baseline']);
