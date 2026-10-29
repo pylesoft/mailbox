@@ -78,4 +78,3 @@ it('keeps legacy recovery values out of setup exception traces with argument cap
     }
     Http::assertNothingSent();
 })->with([GmailUserOAuthService::class, MsGraphUserOAuthService::class]);
-

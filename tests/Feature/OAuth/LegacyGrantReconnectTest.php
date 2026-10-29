@@ -227,7 +227,7 @@ it('refuses reconnect credentials if persistent selection changes during provide
 })->with(['gmail', 'ms-graph']);
 
 /**
- * @param array<string, mixed> $claims
+ * @param  array<string, mixed>  $claims
  * @return array<string, mixed>
  */
 function legacyReconnectTokens(string $driver, string $nonce, string $accessToken, array $claims = []): array
