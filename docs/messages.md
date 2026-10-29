@@ -1090,6 +1090,8 @@ Upload PUTs use the original private preauthenticated `https://outlook.office.co
 
 The 10 MiB per-file and 20 MiB aggregate examples are configurable host targets. Fixture results do not establish live support: Microsoft documents a known large-file issue for shared and delegated mailboxes. That combination, tenant limits and provider normalization remain separate live acceptance gates.
 
+The opt-in `graph-upload-wire` tests use an independent local TLS server, the original trusted Outlook HTTPS target and disk-backed sources. On the verified PHP 8.4.25, 64-bit build, cold 10 MiB and 20 MiB cases stayed within the 8 MiB payload allocation allowance above their source-bound cold control. A separate warm 20 MiB case used 263,800 bytes of direct incremental peak memory. These measurements cover the tested SDK/cURL path; source callbacks, injected middleware and different runtime/platform initialization retain their own allocation requirements. Run each wire case serially with an owned `MAILBOX_GRAPH_UPLOAD_CONTROL_PATH`; ordinary parallel runs skip them explicitly.
+
 ### Inspecting Graph Submission Evidence
 
 Graph also exposes optional `SupportsDraftSubmissionInspection`:
