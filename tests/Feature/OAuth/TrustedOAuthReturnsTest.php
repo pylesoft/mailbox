@@ -2,10 +2,11 @@
 
 declare(strict_types=1);
 
-use GuzzleHttp\Promise\PromiseInterface;
-use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Pyle\Mailbox\MailboxServiceProvider;
+use Pyle\Mailbox\Services\OAuth\GmailUserOAuthService;
+use Pyle\Mailbox\Services\OAuth\MsGraphUserOAuthService;
 
 beforeEach(function (): void {
     config()->set([
@@ -24,25 +25,10 @@ beforeEach(function (): void {
     (new MailboxServiceProvider(app()))->boot();
 
     Http::preventStrayRequests();
-    $tokenResponse = fn (Request $request): PromiseInterface => $request['code'] === 'invalid-code'
-        ? Http::response(['error' => 'invalid_grant'], 400)
-        : Http::response(['access_token' => 'access-token-1']);
-    Http::fake([
-        'https://oauth2.googleapis.com/token' => $tokenResponse,
-        'https://www.googleapis.com/oauth2/v3/userinfo' => Http::response([
-            'sub' => 'google-user-1',
-            'email' => 'user@example.com',
-        ]),
-        'https://login.microsoftonline.com/tenant-test/oauth2/v2.0/token' => $tokenResponse,
-        'https://graph.microsoft.com/v1.0/me*' => Http::response([
-            'id' => 'microsoft-user-1',
-            'mail' => 'user@example.com',
-        ]),
-    ]);
 });
 
 dataset('return providers', ['gmail', 'ms-graph']);
-dataset('return outcomes', ['success', 'cancelled', 'exchange failure', 'missing code']);
+dataset('return outcomes', ['legacy callback', 'cancelled', 'missing code']);
 dataset('return destinations', [
     'local path' => ['/settings/mail', 'http://localhost/settings/mail'],
     'local query' => ['/settings/mail?tab=oauth', 'http://localhost/settings/mail?tab=oauth'],
@@ -62,21 +48,17 @@ dataset('return destinations', [
     'delete byte in path' => ["/settings/\x7fmail", 'http://localhost/oauth/complete'],
 ]);
 
-it('returns OAuth attempts only to permitted application destinations', function (string $provider, string $outcome, string $returnTo, string $expectedUrl): void {
-    $authorization = $this->get('/mailbox/oauth/'.$provider.'/redirect?'.http_build_query([
-        'return_to' => $returnTo,
-        'user_reference' => 'web-user-1',
-    ]));
-    $authorization->assertRedirect();
-    parse_str((string) parse_url((string) $authorization->headers->get('Location'), PHP_URL_QUERY), $authorizationQuery);
-
-    $callbackQuery = ['state' => $authorizationQuery['state']];
-
+it('returns historical OAuth errors only to permitted application destinations', function (string $provider, string $outcome, string $returnTo, string $expectedUrl): void {
+    $service = app($provider === 'gmail' ? GmailUserOAuthService::class : MsGraphUserOAuthService::class);
+    Cache::put($service->stateKey('historical-state'), [
+        'return_to' => $returnTo, 'user_reference' => 'web-user-1',
+    ], now()->addMinutes(5));
+    $callbackQuery = ['state' => 'historical-state'];
     if ($outcome === 'cancelled') {
         $callbackQuery['error'] = 'access_denied';
         $callbackQuery['error_description'] = 'User cancelled';
-    } elseif ($outcome !== 'missing code') {
-        $callbackQuery['code'] = $outcome === 'exchange failure' ? 'invalid-code' : 'oauth-code-1';
+    } elseif ($outcome === 'legacy callback') {
+        $callbackQuery['code'] = 'private-code';
     }
 
     $response = $this->get('/mailbox/oauth/'.$provider.'/callback?'.http_build_query($callbackQuery));
@@ -85,57 +67,48 @@ it('returns OAuth attempts only to permitted application destinations', function
     parse_str((string) parse_url($location, PHP_URL_QUERY), $result);
 
     expect($location)->toStartWith($expectedUrl.(str_contains($expectedUrl, '?') ? '&' : '?'));
-    expect($result['mailbox_oauth'])->toBe($outcome === 'success' ? 'success' : 'error');
+    expect($result['mailbox_oauth'])->toBe('error');
     expect($result['user_reference'])->toBe('web-user-1');
-
-    if ($outcome === 'success') {
-        expect($result['mailbox_oauth_token_id'])->toBeString()->not->toBe('');
-    } else {
-        expect($result['mailbox_oauth_error'])->toBe(match ($outcome) {
-            'cancelled' => 'access_denied',
-            'exchange failure' => 'oauth_callback_failed',
-            'missing code' => 'missing_code_or_state',
-        });
+    expect($result['mailbox_oauth_error'])->toBe(match ($outcome) {
+        'cancelled' => 'access_denied',
+        'legacy callback' => 'oauth_callback_failed',
+        'missing code' => 'missing_code_or_state',
+    });
+    if ($outcome === 'legacy callback') {
+        expect($result['mailbox_oauth_error_description'])->toContain('Reconnect');
+        expect($location)->not->toContain('private-code');
     }
+    Http::assertNothingSent();
 })->with('return providers')->with('return outcomes')->with('return destinations');
 
-it('revalidates stored returns and falls back to existing JSON results when no destination remains trusted', function (string $provider, string $outcome): void {
+it('revalidates stored returns and keeps JSON errors when no destination remains trusted', function (string $provider, string $outcome): void {
     config()->set('mailbox.oauth.default_return_url', '//attacker.example/collect');
-    $authorization = $this->get('/mailbox/oauth/'.$provider.'/redirect?'.http_build_query([
-        'return_to' => 'https://app.example.com/settings/mail',
-        'user_reference' => 'web-user-1',
-    ]));
-    $authorization->assertRedirect();
-    parse_str((string) parse_url((string) $authorization->headers->get('Location'), PHP_URL_QUERY), $authorizationQuery);
-
+    $service = app($provider === 'gmail' ? GmailUserOAuthService::class : MsGraphUserOAuthService::class);
+    Cache::put($service->stateKey('historical-state'), [
+        'return_to' => 'https://app.example.com/settings/mail', 'user_reference' => 'web-user-1',
+    ], now()->addMinutes(5));
     config()->set('mailbox.oauth.allowed_return_hosts', []);
-    $callbackQuery = ['state' => $authorizationQuery['state']];
-
+    $callbackQuery = ['state' => 'historical-state'];
     if ($outcome === 'cancelled') {
         $callbackQuery['error'] = 'access_denied';
         $callbackQuery['error_description'] = 'User cancelled';
-    } elseif ($outcome !== 'missing code') {
-        $callbackQuery['code'] = $outcome === 'exchange failure' ? 'invalid-code' : 'oauth-code-1';
+    } elseif ($outcome === 'legacy callback') {
+        $callbackQuery['code'] = 'private-code';
     }
 
     $response = $this->get('/mailbox/oauth/'.$provider.'/callback?'.http_build_query($callbackQuery));
-    $response->assertHeaderMissing('Location');
 
-    if ($outcome === 'success') {
-        $response->assertOk()->assertJson([
-            'success' => true,
-            'provider' => $provider === 'gmail' ? 'gmail-user' : 'ms-graph-user',
-            'email' => 'user@example.com',
-            'external_user_id' => $provider === 'gmail' ? 'google-user-1' : 'microsoft-user-1',
-        ])->assertJsonStructure(['token_id', 'expires_at']);
-    } else {
-        $response->assertStatus($outcome === 'missing code' ? 422 : 400)->assertJson([
-            'success' => false,
-            'error' => match ($outcome) {
-                'cancelled' => 'access_denied',
-                'exchange failure' => 'oauth_callback_failed',
-                'missing code' => 'missing_code_or_state',
-            },
-        ])->assertJsonStructure(['error_description']);
+    $response->assertHeaderMissing('Location')->assertStatus($outcome === 'missing code' ? 422 : 400)->assertJson([
+        'success' => false,
+        'error' => match ($outcome) {
+            'cancelled' => 'access_denied',
+            'legacy callback' => 'oauth_callback_failed',
+            'missing code' => 'missing_code_or_state',
+        },
+    ])->assertJsonStructure(['error_description']);
+    if ($outcome === 'legacy callback') {
+        expect($response->json('error_description'))->toContain('Reconnect');
+        expect($response->getContent())->not->toContain('private-code');
     }
+    Http::assertNothingSent();
 })->with('return providers')->with('return outcomes');

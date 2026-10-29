@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
-use Pyle\Mailbox\Enums\ConnectionStatus;
 use Pyle\Mailbox\MailboxServiceProvider;
 use Pyle\Mailbox\Models\MailboxConnection;
 use Pyle\Mailbox\Models\MailboxOAuthToken;
@@ -23,96 +22,49 @@ beforeEach(function (): void {
     }
 });
 
-it('redirect endpoint builds microsoft authorize url and stores state payload', function (): void {
-    $response = $this->get('/mailbox/oauth/ms-graph/redirect?mailbox_connection_id=42&return_to=%2Fdashboard&user_reference=user-77');
+it('legacy redirect returns setup guidance without creating state or accepting query ownership', function (): void {
+    Http::preventStrayRequests();
+    $connection = MailboxConnection::query()->create(['name' => 'Retained', 'driver' => 'ms-graph']);
+    $before = $connection->fresh()?->getAttributes();
 
-    $response->assertRedirect();
+    $response = $this->get('/mailbox/oauth/ms-graph/redirect?'.http_build_query([
+        'mailbox_connection_id' => $connection->id, 'return_to' => '//evil.example', 'user_reference' => 'claimed-owner',
+    ]));
 
-    $location = $response->headers->get('Location');
-    expect(is_string($location))->toBeTrue();
-
-    $parts = parse_url((string) $location);
-    parse_str($parts['query'] ?? '', $query);
-
-    expect($parts['host'] ?? null)->toBe('login.microsoftonline.com');
-    expect($parts['path'] ?? null)->toContain('/oauth2/v2.0/authorize');
-    expect($query['client_id'] ?? null)->toBe('client-test');
-    expect($query['scope'] ?? null)->toContain('offline_access');
-    expect($query['state'] ?? null)->toBeString()->not->toBe('');
-
-    $service = app(MsGraphUserOAuthService::class);
-    $payload = Cache::get($service->stateKey((string) $query['state']));
-
-    expect($payload)->toBeArray();
-    expect($payload['connection_id'] ?? null)->toBe(42);
-    expect($payload['return_to'] ?? null)->toBe('/dashboard');
-    expect($payload['user_reference'] ?? null)->toBe('user-77');
+    $response->assertStatus(400)->assertHeaderMissing('Location')->assertJson([
+        'success' => false, 'error' => 'oauth_setup_required',
+    ]);
+    expect($response->json('error_description'))->toContain('Reconnect');
+    expect(Cache::getStore()->all())->toBe([])
+        ->and($connection->fresh()?->getAttributes())->toBe($before)
+        ->and(MailboxOAuthToken::query()->count())->toBe(0);
+    Http::assertNothingSent();
 });
 
-it('callback exchanges code and stores oauth token in database', function (): void {
-    $connection = MailboxConnection::query()->create([
-        'name' => 'Conn',
-        'driver' => 'ms-graph',
-        'status' => ConnectionStatus::CONNECTED,
-    ]);
-
+it('legacy callback returns reconnect guidance through safe context without an exchange', function (): void {
     $service = app(MsGraphUserOAuthService::class);
-    $state = 'state-abc';
-
-    Cache::put($service->stateKey($state), [
-        'connection_id' => $connection->id,
-        'return_to' => '/oauth/result',
-        'user_reference' => 'web-user-1',
+    Cache::put($service->stateKey('old-state'), [
+        'connection_id' => 42, 'return_to' => '/oauth/result', 'user_reference' => 'web-user-1',
     ], now()->addMinutes(5));
+    Http::preventStrayRequests();
+    Http::fake(['*' => Http::response(['error' => 'private-provider-error', 'access_token' => 'private-access'], 400)]);
 
-    $idTokenPayload = [
-        'oid' => 'graph-user-1',
-        'preferred_username' => 'user@example.com',
-        'tid' => 'tenant-test',
-    ];
-    $encodedPayload = rtrim(strtr(base64_encode((string) json_encode($idTokenPayload, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
-    $idToken = 'header.'.$encodedPayload.'.signature';
-
-    Http::fake([
-        'https://login.microsoftonline.com/*/oauth2/v2.0/token' => Http::response([
-            'access_token' => 'access-token-1',
-            'refresh_token' => 'refresh-token-1',
-            'token_type' => 'Bearer',
-            'scope' => 'openid profile offline_access Mail.ReadWrite',
-            'expires_in' => 3600,
-            'id_token' => $idToken,
-        ], 200),
-        'https://graph.microsoft.com/v1.0/me*' => Http::response([
-            'id' => 'graph-user-1',
-            'mail' => 'user@example.com',
-            'displayName' => 'Mailbox User',
-        ], 200),
-    ]);
-
-    $response = $this->get('/mailbox/oauth/ms-graph/callback?state='.$state.'&code=oauth-code-1');
+    $response = $this->get('/mailbox/oauth/ms-graph/callback?state=old-state&code=private-code');
 
     $response->assertRedirect();
-
     $location = (string) $response->headers->get('Location');
+    parse_str((string) parse_url($location, PHP_URL_QUERY), $query);
     expect($location)->toContain('/oauth/result?');
-    expect($location)->toContain('mailbox_oauth=success');
-    expect($location)->toContain('user_reference=web-user-1');
-
-    $token = MailboxOAuthToken::query()->first();
-
-    expect($token)->not->toBeNull();
-    expect($token?->provider)->toBe('ms-graph-user');
-    expect($token?->mailbox_connection_id)->toBe($connection->id);
-    expect($token?->external_user_id)->toBe('graph-user-1');
-    expect($token?->email)->toBe('user@example.com');
-    expect($token?->access_token)->toBe('access-token-1');
-    expect($token?->refresh_token)->toBe('refresh-token-1');
-    expect($token?->scopes)->toContain('Mail.ReadWrite');
-    expect($token?->meta)->toBeArray();
-
-    expect(Cache::get($service->stateKey($state)))->toBeNull();
+    expect($query)->toMatchArray([
+        'mailbox_oauth' => 'error', 'mailbox_oauth_error' => 'oauth_callback_failed', 'user_reference' => 'web-user-1',
+    ]);
+    expect($query['mailbox_oauth_error_description'])->toContain('Reconnect');
+    foreach (['private-code', 'private-provider-error', 'private-access'] as $secret) {
+        expect($location)->not->toContain($secret);
+    }
+    expect(MailboxOAuthToken::query()->count())->toBe(0);
+    Http::assertNothingSent();
 });
-
 it('callback redirects with oauth error query when provider sends error', function (): void {
     $service = app(MsGraphUserOAuthService::class);
     $state = 'state-error';
