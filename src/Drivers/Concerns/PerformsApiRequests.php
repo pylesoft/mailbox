@@ -20,7 +20,9 @@ use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
+use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\ProviderWriteResponse;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 trait PerformsApiRequests
@@ -190,6 +192,68 @@ trait PerformsApiRequests
     public function post(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $payload = [], ?string $mailbox = null): array
     {
         return $this->request('POST', $endpoint, ['json' => $payload], $mailbox);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function requestOnce(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null): ProviderWriteResponse
+    {
+        $target = $this->resolveTarget($endpoint, $mailbox);
+        $mailboxKey = $this->mailboxKey($mailbox);
+        $attempted = false;
+        try {
+            $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, &$attempted): ResponseInterface {
+                $requestOptions = $this->buildRequestOptions($options, $mailboxKey);
+                $attempted = true;
+
+                return $this->client->request($method, $target, array_merge($requestOptions, [
+                    'allow_redirects' => false, 'debug' => false, 'http_errors' => false, 'stream' => true,
+                ]));
+            });
+        } catch (\Throwable $e) {
+            if (! $attempted) {
+                if ($e instanceof GrantAccessDeniedException || $e instanceof GrantRefreshException || $e instanceof RateLimitException) {
+                    throw $e;
+                }
+                throw new ApiRequestException($this->providerLabel().' submission preflight failed.');
+            }
+            $response = $e instanceof RequestException ? $e->getResponse() : null;
+            if ($response === null) {
+                return new ProviderWriteResponse(null);
+            }
+        }
+
+        $headers = [];
+        foreach (['date', 'retry-after', 'request-id', 'x-request-id', 'client-request-id', 'x-ms-request-id', 'x-guploader-uploadid'] as $name) {
+            $values = $response->getHeader($name);
+            $pattern = in_array($name, ['date', 'retry-after'], true)
+                ? '/\A[0-9A-Za-z ,:-]{1,128}\z/'
+                : '/\A[A-Za-z0-9][A-Za-z0-9._:+\/=-]{0,1023}\z/';
+            $safe = array_filter($values, static fn (string $value): bool => preg_match($pattern, $value) === 1 && ! str_contains($value, '://'));
+            if ($values !== [] && $values === $safe) {
+                $headers[$name] = array_values($values);
+            }
+        }
+        $stream = $response->getBody();
+        $body = '';
+        try {
+            while (! $stream->eof()) {
+                $chunk = $stream->read(min(8192, 65_537 - strlen($body)));
+                if ($chunk === '' || strlen($body) + strlen($chunk) > 65_536) {
+                    return new ProviderWriteResponse($response->getStatusCode(), $headers);
+                }
+                $body .= $chunk;
+            }
+        } catch (\Throwable) {
+            return new ProviderWriteResponse($response->getStatusCode(), $headers);
+        } finally {
+            try {
+                $stream->close();
+            } catch (\Throwable) {
+                // Cleanup cannot erase an already observed provider acknowledgement.
+            }
+        }
+
+        return new ProviderWriteResponse($response->getStatusCode(), $headers, $body);
     }
 
     /** @param array<string, mixed> $payload

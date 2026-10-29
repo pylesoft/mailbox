@@ -10,15 +10,18 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
+use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource, SupportsInitialSync
+class GmailMailboxResource implements MailboxResource, SupportsInitialSync, SupportsMessageSubmission
 {
     public function __construct(
         private readonly GmailClient $client,
@@ -26,6 +29,11 @@ class GmailMailboxResource implements MailboxResource, SupportsInitialSync
         private readonly string $emailAddress,
         private readonly ?GrantContext $grantContext = null,
     ) {}
+
+    public function submit(PreparedMessage $message, int $maxRequestBytes = 1_048_576): SubmissionResult
+    {
+        return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes);
+    }
 
     public function initialSync(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation = null): ChangePage
     {
