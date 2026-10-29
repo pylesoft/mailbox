@@ -120,6 +120,7 @@ it('rejects malformed, truncated or unsupported Gmail headers explicitly', funct
     'unfinished angle address' => ['To', 'Jane <jane@example.com'],
     'unfinished group' => ['To', 'Team: jane@example.com'],
     'not an email address' => ['To', 'not-an-address'],
+    'unquoted bare name cannot become part of an address' => ['To', 'Jane jane@example.com'],
     'missing local part' => ['To', '<@example.com>'],
     'empty sender' => ['From', ''],
     'multiple senders cannot fit the singular DTO' => ['From', 'jane@example.com, john@example.com'],

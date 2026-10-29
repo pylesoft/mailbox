@@ -7,7 +7,9 @@ namespace Pyle\Mailbox\Support;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use ZBateson\MailMimeParser\Header\AddressHeader;
+use ZBateson\MailMimeParser\Header\IHeaderPart;
 use ZBateson\MailMimeParser\Header\Part\AddressPart;
+use ZBateson\MailMimeParser\Header\Part\CommentPart;
 use ZBateson\MailMimeParser\Header\SubjectHeader;
 use ZBateson\MbWrapper\MbWrapper;
 
@@ -44,6 +46,7 @@ final class ReceivedHeaders
         }
 
         foreach ($header->getAddresses() as $address) {
+            self::validateAddressSpacing($address);
             if ($address->hasAnyErrors(true) || preg_match('/^(?:"(?:[^"\\\\]|\\\\.)+"|[^\s@"<>(),;:\[\]]+)@(?:[^\s@"<>(),;:\[\]]+|\[[^\[\]\s]+\])$/u', $address->getEmail()) !== 1) {
                 throw new MailboxException('Malformed received email address.');
             }
@@ -53,6 +56,29 @@ final class ReceivedHeaders
             static fn (AddressPart $address): EmailAddressDto => new EmailAddressDto($address->getName(), $address->getEmail()),
             $header->getAddresses(),
         );
+    }
+
+    private static function validateAddressSpacing(AddressPart $address): void
+    {
+        $parts = array_values(array_filter($address->getChildParts(), static fn (IHeaderPart $part): bool => ! ($part instanceof CommentPart)));
+        foreach ($parts as $part) {
+            if ($part instanceof AddressPart) {
+                self::validateAddressSpacing($part);
+
+                return;
+            }
+        }
+        $values = array_map(static fn (IHeaderPart $part): string => $part->getValue() ?? throw new MailboxException('Malformed received address part.'), $parts);
+        for ($index = 1; $index < count($values) - 1; $index++) {
+            if (trim($values[$index]) !== '') {
+                continue;
+            }
+            $before = rtrim($values[$index - 1]);
+            $after = ltrim($values[$index + 1]);
+            if (! in_array(substr($before, -1), ['@', '.'], true) && ! in_array(substr($after, 0, 1), ['@', '.'], true)) {
+                throw new MailboxException('Malformed received address whitespace.');
+            }
+        }
     }
 
     private static function validateEncoding(string $value): void
