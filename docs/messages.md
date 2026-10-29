@@ -783,7 +783,9 @@ The capability is available on Gmail mailbox resources, including configured Goo
 
 Provide at least one address in `to`, `cc` or `bcc`. Bcc-only messages are supported. Each submission uses only that message's explicit lists; it never retains recipients from an earlier message. Gmail routes mail using the serialized To/Cc/Bcc headers, so the SDK retains the explicit Bcc header for Gmail even though Symfony's usual envelope-based serialization removes it.
 
-Names, subjects and text headers support UTF-8. Text and HTML bodies must also contain valid UTF-8. The SDK rejects header controls, injection, invalid addresses and unsupported field names before any send. Structural headers and structured fields, including From, Sender, To/Cc/Bcc, Reply-To, Subject, Date, Message-ID, Return-Path, MIME-Version, Content-*, Resent-* and DKIM-Signature, cannot be supplied as text-header overrides. The encoder creates the MIME structure, Date and Message-ID itself.
+Names, subjects and text headers support UTF-8. Text and HTML bodies must also contain valid UTF-8. The SDK rejects header controls, injection, invalid addresses and unsupported field names before any send. Structural headers and structured fields, including From, Sender, To/Cc/Bcc, Reply-To, Subject, Date, Return-Path, MIME-Version, Content-*, Resent-* and DKIM-Signature, cannot be supplied as text-header overrides. The encoder creates the MIME structure and Date.
+
+You may supply one `Message-ID` in `headers`, such as `['Message-ID' => '<operation-42@example.com>']`. It uses typed MIME serialization and must contain one complete ASCII angle-bracketed identifier. Duplicate header names, including case variants, are rejected. `In-Reply-To` and `References` use the same identifier validation; each identifier header is limited to 64 KiB. The encoder creates a Message-ID when you omit it.
 
 `correlationId` is required, contains no control characters and is limited to 512 bytes. It is returned with submission evidence and encoded in `X-Mailbox-Correlation-Id`; choose an opaque value that is safe for recipients to see. Applications cannot override this header separately.
 
@@ -802,6 +804,55 @@ Names, subjects and text headers support UTF-8. Text and HTML bodies must also c
 The SDK retains safe request identity, Date and Retry-After response headers. Authorization, cookies, redirect/upload URLs, arbitrary response bodies and raw transport exceptions are excluded from public submission evidence. If no response was observed, `status` is `null`. A response body beyond 64 KiB cannot establish acceptance, but its observed status and safe headers remain available.
 
 Your application owns durable operation state and recovery. Persist the chosen message and correlation before sending, then retain the returned evidence. The SDK does not maintain an outbox, deduplicate separate explicit calls, mirror private editor drafts, inspect sent copies automatically or claim recipient delivery. Injected HTTP clients must not add their own retry middleware for submission.
+
+### Replying and Forwarding
+
+Pass an explicit `ReplyForwardContext` when submitting a reply or forward. Use a complete [conversation read](#reading-a-complete-conversation) from the same selected connection, grant, generation and mailbox. Your application chooses the source message, subject, recipients, body and files:
+
+```php
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\ReplyForwardContext;
+use Pyle\Mailbox\Enums\ReplyForwardOperation;
+
+$reply = new PreparedMessage(
+    sender: $chosenSender,
+    to: $chosenRecipients,
+    subject: $chosenSubject,
+    correlationId: 'operation-42',
+    textBody: $chosenText,
+    context: new ReplyForwardContext(
+        ReplyForwardOperation::Reply,
+        $completeConversation,
+        $chosenSourceMessageId,
+    ),
+);
+
+$result = $mailbox->submit($reply);
+```
+
+For replies, the SDK supplies the selected Gmail `threadId`, the source Message-ID as `In-Reply-To`, and the source References followed by that Message-ID. When References are absent, a source In-Reply-To containing one identifier is retained before the source Message-ID. Chosen reply headers must agree with that context. The chosen subject must match an observed subject in the complete thread; it may retain the original thread subject when a later source has a reply prefix. The SDK preserves that subject and does not add or remove prefixes. These requirements follow [Gmail's threading rules](https://developers.google.com/workspace/gmail/api/guides/threads) and the [reply header rules](https://www.rfc-editor.org/rfc/rfc5322.html#section-3.6.4).
+
+For a forward, use `new ReplyForwardContext(ReplyForwardOperation::Forward, $completeConversation, $chosenSourceMessageId)`. The SDK validates the source context, then sends only the chosen message. It does not add the source thread ID or reply headers. Reply-only In-Reply-To and References headers are rejected for forwards. Historical recipients, Bcc, quoted content and files are never selected or copied automatically; pass any wanted content and immutable files explicitly.
+
+Incomplete reads, missing source content, unavailable reply identifiers, conflicting headers and context from another grant fail before send. Contextual submission requires an explicitly selected grant; configured sends without context remain available.
+
+### Inspecting a Sent Copy
+
+Gmail's optional `SupportsGmailSubmissionInspection` capability observes a sent copy separately from the original send result:
+
+```php
+use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailSubmissionInspection;
+
+if ($mailbox instanceof SupportsGmailSubmissionInspection) {
+    $evidence = $mailbox->inspectSubmission($result);
+}
+```
+
+Inspection requires the original receipt's selected-grant context to match the current resource exactly, including its generation. Unbound legacy receipts and receipts from another connection, grant or mailbox are rejected before provider I/O. Known provider message IDs are read once from the selected mailbox with `format=metadata`; `SentCopyObserved` requires the same message ID, a matching known thread ID, a valid observed thread, a SENT label and exactly one matching correlation header. This is a scoped sent-copy observation, not delivery proof or a full content audit.
+
+Missing, delayed, mismatched, malformed, oversized or interrupted evidence returns `Inconclusive`. When the original response has no provider message ID, the artifact ID remains `null` and inspection makes no HTTP request. Gmail does not document a search operator for `X-Mailbox-Correlation-Id`, so the SDK does not invent a search from that header. Send-only authorization is insufficient for metadata reads; the selected grant also needs an applicable [Gmail read scope](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get).
+
+Retain both the original `SubmissionResult` and the later `SubmissionEvidence`. Inspection does not change original acceptance, status, safe response headers or correlation. It performs no send, retries no send and never treats a missing copy as permission to resend.
 
 ### Prepared Files
 
@@ -887,7 +938,7 @@ Verified on 64-bit PHP 8.4.25 with Guzzle 7.16.1 and Symfony Mime 8.1.10, in fre
 
 These are local protocol and PHP-buffer measurements. They do not establish live Gmail acceptance, delivery, total native/RSS memory, other PHP/runtime behavior or the host's storage capacity. The [ticket 18 receipt](plans/mailbox-provider-sdk/tickets/18-freeze-file-streams-for-gmail-submission.md) retains the original cold-heap failure, measured source fingerprint and separate verification gates.
 
-Arbitrary raw MIME input and signed/encrypted MIME reconstruction remain unsupported. Reply/forward preparation is a separate capability; the SDK does not infer it from a body or silently transform arbitrary MIME.
+Arbitrary raw MIME input and signed/encrypted MIME reconstruction remain unsupported. Reply/forward intent must be supplied through structured context; the SDK does not infer it from a body or silently transform arbitrary MIME.
 
 ## Preparing and Sending a Graph Draft
 

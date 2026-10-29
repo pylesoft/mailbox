@@ -10,12 +10,13 @@ use Symfony\Component\Mime\Exception\ExceptionInterface;
 
 final class MessageIdentifiers
 {
-    /** @return non-empty-list<string> */
-    public static function parse(string $value): array
+    /** @return list<string> */
+    public static function parse(string $value, ?ResponseBudget $budget = null): array
     {
         if (strlen($value) > 65_536) {
             throw new InvalidArgumentException('Message identifier headers exceed their supported byte limit.');
         }
+        $budget?->assertMemoryAvailable(strlen($value) * 8 + 262_144);
         $unfolded = preg_replace('/\r\n(?=[ \t])/', '', $value);
         if ($unfolded === null
             || preg_match('/\A[ \t]*(?:<[^<>\x00-\x20\x7f-\xff]+>[ \t]*)+\z/', $unfolded) !== 1) {

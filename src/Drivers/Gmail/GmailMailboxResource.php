@@ -18,6 +18,7 @@ use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Contracts\SupportsMessageSubmission;
 use Pyle\Mailbox\Contracts\SupportsSubmissionLimits;
 use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailWatch;
+use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailSubmissionInspection;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConversationRead;
@@ -27,6 +28,7 @@ use Pyle\Mailbox\DTOs\GmailWatchRegistration;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
+use Pyle\Mailbox\DTOs\SubmissionEvidence;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
@@ -35,7 +37,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource, SupportsConversationRead, SupportsGmailWatch, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission, SupportsSubmissionLimits
+class GmailMailboxResource implements MailboxResource, SupportsConversationRead, SupportsGmailSubmissionInspection, SupportsGmailWatch, SupportsIncrementalSync, SupportsInitialSync, SupportsMessageSubmission, SupportsSubmissionLimits
 {
     public function __construct(
         private readonly GmailClient $client,
@@ -94,6 +96,15 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
     public function submit(PreparedMessage $message, int $maxRequestBytes = 1_048_576): SubmissionResult
     {
         return $this->client->submitMessage($message, $this->emailAddress, $maxRequestBytes, $this->submissionLimits, $this->grantContext);
+    }
+
+    public function inspectSubmission(SubmissionResult $submission): SubmissionEvidence
+    {
+        if ($this->grantContext === null) {
+            throw new UnsupportedCapabilityException('Gmail submission inspection requires an explicit grant context.');
+        }
+
+        return $this->client->inspectSubmission($submission, $this->grantContext);
     }
 
     public function withSubmissionLimits(SubmissionLimits $limits): SupportsMessageSubmission

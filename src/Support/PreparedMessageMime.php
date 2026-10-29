@@ -40,10 +40,14 @@ final class PreparedMessageMime
         return $mime;
     }
 
-    public static function gmailPayload(PreparedMessage $message, int $maxRequestBytes, ?SubmissionLimits $limits = null, ?string $threadId = null): StreamInterface
+    public static function gmailPayload(PreparedMessage $message, int $maxRequestBytes, ?SubmissionLimits $limits = null, ?string $threadId = null, ?ResponseBudget $budget = null): StreamInterface
     {
         $limits ??= new SubmissionLimits;
-        $budget = new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes);
+        $budget ??= new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes);
+        if ($budget->maxBytes !== $maxRequestBytes || $budget->maxMemoryBytes !== $limits->maxMemoryBytes
+            || ($threadId !== null && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $threadId) !== 1)) {
+            throw new InvalidArgumentException('The Gmail payload requires matching wire and memory budgets and a valid optional thread ID.');
+        }
         $payload = null;
         try {
             self::preflight($message, $maxRequestBytes, $limits, $budget);
