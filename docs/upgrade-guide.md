@@ -38,6 +38,12 @@ Gmail single-message, query and legacy delta reads now hydrate externalized text
 
 Externalized unnamed text is no longer advertised as an attachment. Named text files and inline files retain their metadata, and inline file parts may use their Gmail part ID when no external attachment ID exists. The mandatory resource contracts and DTO constructor fields are unchanged.
 
+## Unreleased: Bounded Gmail History
+
+Explicit-grant Gmail resources also expose `SupportsIncrementalSync::incrementalSync(SyncScope, SyncBudget, SyncCheckpoint, ?SyncContinuation = null): ChangePage`. Reuse the initial-sync DTOs and retain evidence before advancing a continuation or completed checkpoint. The existing eager delta methods and custom-driver contracts remain available.
+
+History returns reconciliation candidates without created-versus-updated guesses. Requests read unfiltered changes to preserve label-exit evidence; hosts must recheck the selected scope and import policy before updating projections. Label removal does not establish message deletion. A history 404 requests an initial reset with the committed checkpoint's original folder and cutoff, without erasing retained local history. See [bounded Gmail history](delta-sync.md#bounded-gmail-history) for replay, expanded-record budgets and recovery.
+
 ## Checking Your Current Version
 
 You can check which version of Mailbox you have installed at any time:
