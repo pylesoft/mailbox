@@ -17,10 +17,13 @@ use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Support\GrantAuthorization;
 
 class GraphClient
 {
-    use PerformsApiRequests;
+    use PerformsApiRequests {
+        resolveTarget as private resolveApiTarget;
+    }
 
     /** @param array<string, mixed> $config */
     public function __construct(
@@ -28,6 +31,7 @@ class GraphClient
         private readonly TokenManager $tokenManager,
         private readonly RateLimiter $rateLimiter,
         ?Client $client = null,
+        private readonly ?GrantAuthorization $grantAuthorization = null,
     ) {
         $this->bootApiClient(
             $this->config,
@@ -46,6 +50,14 @@ class GraphClient
         return 'Graph';
     }
 
+    private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
+    {
+        $target = $this->resolveApiTarget($endpoint, $mailbox);
+        $this->assertMailboxTarget($target, $mailbox);
+
+        return $target;
+    }
+
     /**
      * @param  array<string, mixed>  $options
      * @return array<string, mixed>
@@ -53,17 +65,17 @@ class GraphClient
     protected function buildRequestOptions(array $options, string $mailboxKey): array
     {
         return array_merge($options, [
-            'headers' => array_merge($this->defaultHeaders(), $options['headers'] ?? []),
+            'headers' => array_merge($this->defaultHeaders($mailboxKey), $options['headers'] ?? []),
         ]);
     }
 
     /**
      * @return array<string, string>
      */
-    private function defaultHeaders(): array
+    private function defaultHeaders(string $mailboxKey): array
     {
         $headers = [
-            'Authorization' => 'Bearer '.$this->tokenManager->getToken(),
+            'Authorization' => 'Bearer '.($this->grantAuthorization?->accessToken($mailboxKey) ?? $this->tokenManager->getToken()),
             'Accept' => 'application/json',
         ];
 
@@ -116,7 +128,7 @@ class GraphClient
         int $durationMs,
         bool &$reauthAttempted,
     ): bool {
-        if ($reauthAttempted) {
+        if ($reauthAttempted || $this->grantAuthorization !== null) {
             return false;
         }
 

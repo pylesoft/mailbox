@@ -18,10 +18,13 @@ use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Support\GrantAuthorization;
 
 class GmailClient
 {
-    use PerformsApiRequests;
+    use PerformsApiRequests {
+        resolveTarget as private resolveApiTarget;
+    }
 
     /** @param array<string, mixed> $config */
     public function __construct(
@@ -29,6 +32,7 @@ class GmailClient
         private readonly GmailTokenManager $tokenManager,
         private readonly RateLimiter $rateLimiter,
         ?Client $client = null,
+        private readonly ?GrantAuthorization $grantAuthorization = null,
     ) {
         $this->bootApiClient(
             $this->config,
@@ -45,6 +49,14 @@ class GmailClient
     protected function providerLabel(): string
     {
         return 'Gmail';
+    }
+
+    private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
+    {
+        $target = $this->resolveApiTarget($endpoint, $mailbox);
+        $this->assertMailboxTarget($target, $mailbox, allowMe: true);
+
+        return $target;
     }
 
     /**
@@ -64,7 +76,7 @@ class GmailClient
     private function defaultHeaders(string $mailboxKey): array
     {
         return [
-            'Authorization' => 'Bearer '.$this->tokenManager->getToken($mailboxKey),
+            'Authorization' => 'Bearer '.($this->grantAuthorization?->accessToken($mailboxKey) ?? $this->tokenManager->getToken($mailboxKey)),
             'Accept' => 'application/json',
         ];
     }
@@ -113,7 +125,7 @@ class GmailClient
         int $durationMs,
         bool &$reauthAttempted,
     ): bool {
-        if ($reauthAttempted) {
+        if ($reauthAttempted || $this->grantAuthorization !== null) {
             return false;
         }
 

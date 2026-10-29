@@ -10,6 +10,7 @@ use Pyle\Mailbox\DTOs\ConnectionTestResult;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\FolderDto;
+use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\ConnectionStatus;
@@ -33,6 +34,7 @@ arch('DTOs are final readonly classes')
         DeltaResultDto::class,
         EmailAddressDto::class,
         FolderDto::class,
+        GrantContext::class,
         HealthCheckResult::class,
         MessageDto::class,
     ])

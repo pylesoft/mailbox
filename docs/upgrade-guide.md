@@ -18,6 +18,14 @@ Inbound parsing requires `zbateson/mail-mime-parser:^4.0.8` in production. Its t
 
 Mailbox excludes `php-di/php-di` versions below `6.3.0`, a transitive parser dependency. PHP-DI 6.1 still requires the abandoned SuperClosure package; 6.2 removes that dependency but retains deprecated `ReflectionParameter::getClass()` calls. [PHP-DI 6.3](https://github.com/PHP-DI/PHP-DI/blob/6.3.0/src/Definition/Source/ReflectionBasedAutowiring.php) uses `getType()` instead. This narrow exclusion retains compatible 6.x and 7.x versions without adding another direct dependency.
 
+### Authenticated Destinations and Graph Continuations
+
+Graph continuation queries now reach the provider unchanged. Persist returned delta links as private state and resume them only for their original mailbox and folder. Placeholder tokens, foreign URLs and links targeting another resource are rejected. Malformed or cyclic pages and message-query page limits now fail explicitly instead of returning partial success.
+
+Authenticated Graph and Gmail clients reject destinations outside their configured provider origin and base path, enforce a supplied mailbox context, and refuse redirects. A Gmail `users/me` request uses the selected mailbox's authorization. These are security exceptions to compatibility: raw clients can no longer forward credentials to arbitrary download hosts or follow redirects. Use the provider's explicit preauthenticated upload flow when supported.
+
+Transport errors and logs no longer retain raw provider bodies, bearer headers or continuation queries. Native client and delta-result debug dumps redact secrets. The existing checkpoint property and array/JSON values remain unchanged for private persistence.
+
 ## Checking Your Current Version
 
 You can check which version of Mailbox you have installed at any time:

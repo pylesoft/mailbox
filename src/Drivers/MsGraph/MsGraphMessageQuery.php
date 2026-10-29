@@ -11,6 +11,7 @@ use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRulePushdown
 {
@@ -194,6 +195,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
         $endpoint = $this->queryAllFolders
             ? sprintf('users/%s/messages', rawurlencode($this->mailbox))
             : sprintf('users/%s/mailFolders/%s/messages', rawurlencode($this->mailbox), rawurlencode($this->folderId));
+        $scope = $endpoint;
 
         $collected = collect();
         $seenPageSignatures = [];
@@ -203,19 +205,22 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
         do {
             $pageSignature = $endpoint.'|'.http_build_query($query);
             if (isset($seenPageSignatures[$pageSignature])) {
-                break;
+                throw new ApiRequestException('The provider returned a cyclic continuation.');
             }
 
             if ($pageCount >= $this->maxPages) {
-                break;
+                throw new ApiRequestException('The message query page limit was reached before completion.');
             }
 
             $seenPageSignatures[$pageSignature] = true;
             $pageCount++;
 
             $response = $this->client->get($endpoint, $query, $this->mailbox);
+            if (! isset($response['value']) || ! is_array($response['value'])) {
+                throw new ApiRequestException('The provider returned a missing or malformed collection.');
+            }
 
-            $messages = collect((array) ($response['value'] ?? []))
+            $messages = collect($response['value'])
                 ->map(fn (mixed $item): MessageDto => MessageDto::fromMsGraph(is_array($item) ? $item : []));
 
             if ($applyClientFiltersPerPage) {
@@ -245,7 +250,9 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
                 break;
             }
 
-            $endpoint = (string) ($response['@odata.nextLink'] ?? '');
+            $endpoint = array_key_exists('@odata.nextLink', $response)
+                ? $this->client->continuationEndpoint($response['@odata.nextLink'], $scope, $this->mailbox)
+                : '';
             $query = [];
         } while ($endpoint !== '');
 
