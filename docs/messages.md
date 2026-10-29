@@ -359,6 +359,68 @@ Exceeding a limit throws `ResponseLimitExceededException`. No partial `MessageDt
 
 Gmail body data is decoded from base64url and its declared charset is converted to UTF-8. Missing charset declarations use UTF-8. MIME transfer-encoding headers are not decoded a second time: Gmail supplies parsed part bytes. Multipart alternatives prefer HTML, and multipart fragments with the same format are joined in order. Mixed sibling HTML and plain-text fragments cannot fit the single-format `BodyDto` contract and throw explicitly. Named parts and files with Content-ID metadata remain attachments, including text files. Sanitization, rendering and application file rules remain the host's responsibility.
 
+## Reading a Complete Conversation
+
+Use the optional `SupportsConversationRead` capability when you already have a provider conversation ID. The host chooses which conversations to read, including its activity and import-cutoff policy.
+
+```php
+use Pyle\Mailbox\Contracts\SupportsConversationRead;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncScope;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+
+$mailbox = Mailbox::forGrant($context, $tokens);
+
+if (! $mailbox instanceof SupportsConversationRead) {
+    throw new UnsupportedCapabilityException('This mailbox does not support conversation reads.');
+}
+
+$scope = new SyncScope(importSince: new DateTimeImmutable('2026-10-01T00:00:00Z'));
+$budget = new SyncBudget(maxPages: 5, maxRequests: 10);
+$limits = new BodyReadLimits;
+$read = $mailbox->conversation($conversationId, $scope, $budget, limits: $limits);
+
+foreach ($read->messages as $message) {
+    // Retain this complete MessageDto in your host's projection.
+}
+
+foreach ($read->files as $file) {
+    $messageId = $file['messageId'];
+    $metadata = $file['attachment']; // AttachmentDto; no file bytes are downloaded.
+}
+```
+
+This capability requires an explicit grant context. Existing custom drivers keep their basic resource contracts and may omit the capability.
+
+Gmail reads the selected thread in the selected mailbox, including messages older than `importSince` and messages with different labels. A folder or cutoff in `SyncScope` describes the host's selection context; it does not trim the selected Gmail thread. Gmail's whole-thread endpoint has no page-size parameter, so a request count alone cannot bound its payload. Externalized text is hydrated through the same MIME reader as individual-message reads. Named and inline files remain file metadata.
+
+Graph filters messages by `conversationId` in the requested mailbox or one requested folder. It follows every message page and attachment-metadata page within that scope, including inline files when `hasAttachments` is false. A folder scope covers that folder's message collection, not its child folders. A mailbox scope covers the provider's mailbox message collection; it does not claim access to another mailbox, archive store or inaccessible shared folders. Graph also retains older messages in the selected conversation rather than applying the selection cutoff again.
+
+`ConversationRead::identity` declares the provider, selected grant/generation, mailbox and requested scope. `messages` contains complete message DTOs from this call; `files` associates complete file metadata with its message ID. The host still owns HTML sanitization, file authorization, retention and presentation. A completed conversation read does not create a synchronization checkpoint or establish that a synchronization round has completed.
+
+### Retaining Unfinished Work
+
+Each invocation has fresh work budgets. `SyncBudget` limits message items, provider collection/thread pages, all HTTP requests and aggregate response bytes. Graph attachment-metadata pages count as pages; individual body hydration requests count as requests. `BodyReadLimits` applies the tighter response-byte limit and bounds combined decoded/assembled body bytes, hydration and MIME parts or Graph file-metadata entries. All secondary requests share these budgets. Conversation reads do not retry provider requests or release the host's queue job.
+
+An oversized thread, unavailable scope, malformed content, interruption or exhausted budget returns `complete: false`, a `reason`, and an unfinished `continuation`. Returned messages and their file metadata are complete; an unfinished message stays pending. Retain the returned work and continuation together in private host storage before advancing. To continue in a later host operation:
+
+```php
+if (! $read->complete) {
+    $next = $mailbox->conversation(
+        $conversationId,
+        $scope,
+        $budget,
+        continuation: $read->continuation,
+        limits: $limits,
+    );
+}
+```
+
+Combine completed messages from every call. A continuation binds the provider, connection, grant, generation, mailbox, folder, cutoff, conversation ID, phase and supported format version. A changed selected grant fails explicitly; it never falls back to configured authorization. Ordinary result JSON and debug output redact private continuation positions. Retain the actual continuation fields or trusted PHP serialization for private recovery, not the redacted public JSON, and never accept recovery state from an untrusted client.
+
+Reasons include `item_limit`, `page_limit`, `request_limit`, `response_limit`, `content_limit`, Graph `hydration_limit` / `part_limit`, `scope_unavailable`, `provider_interrupted`, and `content_incomplete`. An unpaged Gmail payload may need a larger byte budget before any message IDs can be retained. A single message's complete content or metadata may also need larger limits; the SDK does not silently omit it or impose a hidden cap. These reads observe mutable provider state rather than an atomic snapshot; later synchronization reconciles arrivals, moves and other changes.
+
 ## MessageDto Reference
 
 Every message returned by Mailbox is a `MessageDto` -- a readonly data transfer object that implements `Arrayable` and `JsonSerializable`. Here is every property:
