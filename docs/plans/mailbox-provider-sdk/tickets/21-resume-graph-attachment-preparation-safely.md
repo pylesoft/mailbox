@@ -35,3 +35,7 @@ Prepare Graph attachments using size-appropriate operations and resumable bounde
 
 Package HTTP fixtures establish protocol behavior only. Shared/delegated 10 MiB support remains unproven until the Microsoft live-validation gate passes.
 
+## Comments
+
+- 2026-10-29: Claimed by the ticket 21 implementer on `feat/mailbox-sdk-21`, based on integration `36bd463`. Authorized scope is local Graph attachment preparation, public SDK/real HTTP-fake tests, and verification. No provider setup, live sends, publication, or consumer changes. The shared check slot remains with ticket 23; prepare the first TDD tracer without running checks until the root grants the slot.
+
