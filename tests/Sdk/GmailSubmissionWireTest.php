@@ -8,11 +8,17 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Utils;
 use Psr\Http\Message\RequestInterface;
+use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\ReplyForwardContext;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
+use Pyle\Mailbox\DTOs\SyncIdentity;
+use Pyle\Mailbox\DTOs\SyncScope;
+use Pyle\Mailbox\Enums\ReplyForwardOperation;
 use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
@@ -30,7 +36,12 @@ it('sends a cold 20 MiB aggregate through real TLS cURL within the payload alloc
     submissionWireCase(2, 10_485_760);
 })->group('submission-wire')->skip(fn (): bool => ! getenv('MAILBOX_SUBMISSION_CONTROL_PATH'), 'Run serially after the isolated cold control.');
 
-function submissionWireCase(int $fileCount, int $fileBytes, bool $control = false): void
+it('sends a warm 20 MiB attachment-bearing reply through real TLS within its incremental memory budget', function (): void {
+    submissionWireCase(1, 8192, control: true);
+    submissionWireCase(2, 10_485_760, reply: true, warm: true);
+})->group('submission-wire')->skip(fn (): bool => ! getenv('MAILBOX_SUBMISSION_CONTROL_PATH'), 'Run serially with its own owned warm-control receipt path.');
+
+function submissionWireCase(int $fileCount, int $fileBytes, bool $control = false, bool $reply = false, bool $warm = false): void
 {
     $controlPath = getenv('MAILBOX_SUBMISSION_CONTROL_PATH');
     $sourcePaths = [dirname(__DIR__, 2).'/composer.lock'];
@@ -90,9 +101,22 @@ function submissionWireCase(int $fileCount, int $fileBytes, bool $control = fals
         $http = new Client(['handler' => $handler, 'verify' => $directory.'/certificate.pem', 'timeout' => 30, 'proxy' => '',
             'curl' => [CURLOPT_CONNECT_TO => ['gmail.googleapis.com:443:127.0.0.1:'.$port]]]);
         $tokens = new TestGrantTokenProvider(['grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'dummy-local-token']]);
-        $mailbox = Mailbox::forGrant(new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com'), $tokens, $http)
+        $grant = new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com');
+        $mailbox = Mailbox::forGrant($grant, $tokens, $http)
             ->withSubmissionLimits(new SubmissionLimits(maxFileBytes: 10_485_760, maxTotalFileBytes: 20_971_520, maxMemoryBytes: 8_388_608));
-        $message = new PreparedMessage(new EmailAddressDto('Sender', 'sender@example.com'), [new EmailAddressDto('To', 'to@example.com')], 'Bounded files', 'wire-operation', textBody: 'Chosen text', files: $files);
+        $context = null;
+        if ($reply) {
+            $source = MessageDto::fromGmail(['id' => 'wire-source', 'threadId' => 'wire-thread', 'payload' => [
+                'mimeType' => 'text/plain', 'headers' => [
+                    ['name' => 'Subject', 'value' => 'Bounded files'],
+                    ['name' => 'Message-ID', 'value' => '<wire-source@example.com>'],
+                    ['name' => 'References', 'value' => '<wire-ancestor@example.com>'],
+                ], 'body' => ['data' => 'Ym9keQ', 'size' => 4],
+            ]]);
+            $conversation = new ConversationRead(new SyncIdentity('gmail', $grant, new SyncScope), 'wire-thread', [$source], complete: true);
+            $context = new ReplyForwardContext(ReplyForwardOperation::Reply, $conversation, 'wire-source');
+        }
+        $message = new PreparedMessage(new EmailAddressDto('Sender', 'sender@example.com'), [new EmailAddressDto('To', 'to@example.com')], 'Bounded files', 'wire-operation', textBody: 'Chosen text', files: $files, context: $context);
         memory_reset_peak_usage();
         $baseline = memory_get_usage();
 
@@ -102,7 +126,9 @@ function submissionWireCase(int $fileCount, int $fileBytes, bool $control = fals
         expect($result->outcome)->toBe(SubmissionOutcome::Accepted)
             ->and($uri)->toBe('https://gmail.googleapis.com/gmail/v1/users/sender%40example.com/messages/send')
             ->and($body->getSize())->toBeNull();
-        if ($coldControl !== null) {
+        if ($warm) {
+            expect($peak)->toBeLessThan(8_388_608);
+        } elseif ($coldControl !== null) {
             expect(max(0, $peak - $coldControl['peakGrowth']))->toBeLessThan(8_388_608);
         }
         $server->wait();
@@ -114,7 +140,13 @@ function submissionWireCase(int $fileCount, int $fileBytes, bool $control = fals
         if ($fileCount === 2) {
             expect($receipt['wireBytes'])->toBeGreaterThan(36_700_160);
         }
-        $measurement = ['runtime' => $runtime, 'sourceBytes' => $fileCount * $fileBytes, 'mimeBytes' => $receipt['mimeBytes'], 'wireBytes' => $receipt['wireBytes'], 'baseline' => $baseline, 'peakGrowth' => $peak, 'payloadGrowthAboveControl' => $coldControl === null ? null : max(0, $peak - $coldControl['peakGrowth'])];
+        if ($reply) {
+            expect($receipt['threadId'])->toBe('wire-thread')
+                ->and($receipt['inReplyTo'])->toBe(['wire-source@example.com'])
+                ->and($receipt['references'])->toBe(['wire-ancestor@example.com', 'wire-source@example.com'])
+                ->and($result->threadId)->toBe('wire-thread');
+        }
+        $measurement = ['runtime' => $runtime, 'sourceBytes' => $fileCount * $fileBytes, 'mimeBytes' => $receipt['mimeBytes'], 'wireBytes' => $receipt['wireBytes'], 'baseline' => $baseline, 'peakGrowth' => $peak, 'warm' => $warm, 'reply' => $reply, 'payloadGrowthAboveControl' => $coldControl === null || $warm ? null : max(0, $peak - $coldControl['peakGrowth'])];
         if ($control) {
             file_put_contents($controlPath, json_encode($measurement, JSON_THROW_ON_ERROR));
         }

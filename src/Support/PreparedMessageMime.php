@@ -40,10 +40,14 @@ final class PreparedMessageMime
         return $mime;
     }
 
-    public static function gmailPayload(PreparedMessage $message, int $maxRequestBytes, ?SubmissionLimits $limits = null): StreamInterface
+    public static function gmailPayload(PreparedMessage $message, int $maxRequestBytes, ?SubmissionLimits $limits = null, ?string $threadId = null, ?ResponseBudget $budget = null): StreamInterface
     {
         $limits ??= new SubmissionLimits;
-        $budget = new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes);
+        $budget ??= new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes);
+        if ($budget->maxBytes !== $maxRequestBytes || $budget->maxMemoryBytes !== $limits->maxMemoryBytes
+            || ($threadId !== null && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $threadId) !== 1)) {
+            throw new InvalidArgumentException('The Gmail payload requires matching wire and memory budgets and a valid optional thread ID.');
+        }
         $payload = null;
         try {
             self::preflight($message, $maxRequestBytes, $limits, $budget);
@@ -57,7 +61,11 @@ final class PreparedMessageMime
                 $tail = substr($chunk, $length);
                 self::write($payload, strtr(base64_encode(substr($chunk, 0, $length)), '+/', '-_'), $budget);
             }
-            self::write($payload, rtrim(strtr(base64_encode($tail), '+/', '-_'), '=').'"}', $budget);
+            self::write($payload, rtrim(strtr(base64_encode($tail), '+/', '-_'), '=').'"', $budget);
+            if ($threadId !== null) {
+                self::write($payload, ',"threadId":'.json_encode($threadId, JSON_THROW_ON_ERROR), $budget);
+            }
+            self::write($payload, '}', $budget);
             rewind($payload);
 
             return new SubmissionBody(Utils::streamFor($payload), $budget);
@@ -165,7 +173,11 @@ final class PreparedMessageMime
                 throw new InvalidArgumentException('The prepared message requires text or HTML content.');
             }
             foreach ($message->headers as $name => $value) {
-                $email->getHeaders()->addTextHeader($name, $value);
+                if (in_array(strtolower($name), ['message-id', 'in-reply-to', 'references'], true)) {
+                    $email->getHeaders()->addIdHeader($name, MessageIdentifiers::parse($value));
+                } else {
+                    $email->getHeaders()->addTextHeader($name, $value);
+                }
             }
             $email->getHeaders()->addTextHeader('X-Mailbox-Correlation-Id', $message->correlationId);
             $inlineParts = $attachments = [];
@@ -330,11 +342,17 @@ final class PreparedMessageMime
                 throw new InvalidArgumentException('Prepared headers require supported field names and text values.');
             }
             $normalized = strtolower($name);
-            if (in_array($normalized, ['from', 'sender', 'to', 'cc', 'bcc', 'reply-to', 'subject', 'date', 'message-id', 'return-path', 'mime-version', 'dkim-signature', 'x-mailbox-correlation-id'], true)
+            if (in_array($normalized, ['from', 'sender', 'to', 'cc', 'bcc', 'reply-to', 'subject', 'date', 'return-path', 'mime-version', 'dkim-signature', 'x-mailbox-correlation-id'], true)
                 || str_starts_with($normalized, 'content-') || str_starts_with($normalized, 'resent-') || in_array($normalized, $names, true)) {
                 throw new InvalidArgumentException('Prepared headers cannot override structured message fields or MIME structure.');
             }
             self::headerText($value);
+            if (in_array($normalized, ['message-id', 'in-reply-to', 'references'], true)) {
+                $ids = MessageIdentifiers::parse($value);
+                if ($normalized === 'message-id' && count($ids) !== 1) {
+                    throw new InvalidArgumentException('A chosen Message-ID requires exactly one identifier.');
+                }
+            }
             $names[] = $normalized;
         }
     }

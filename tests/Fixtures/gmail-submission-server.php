@@ -65,8 +65,16 @@ foreach ($parsed->getAllAttachmentParts() as $part) {
     $content->close();
     $files[] = ['name' => $part->getFilename(), 'type' => $part->getContentType(), 'bytes' => $bytes, 'sha256' => hash_final($hash)];
 }
-file_put_contents($receipt, json_encode(['wireBytes' => $length, 'mimeBytes' => strlen($mime), 'files' => $files], JSON_THROW_ON_ERROR));
-$response = '{"id":"local-wire-accepted"}';
+file_put_contents($receipt, json_encode(['wireBytes' => $length, 'mimeBytes' => strlen($mime), 'files' => $files,
+    'threadId' => $payload['threadId'] ?? null,
+    'inReplyTo' => $parsed->getHeader('In-Reply-To')?->getIds(),
+    'references' => $parsed->getHeader('References')?->getIds(),
+], JSON_THROW_ON_ERROR));
+$acknowledgement = ['id' => 'local-wire-accepted'];
+if (isset($payload['threadId'])) {
+    $acknowledgement['threadId'] = $payload['threadId'];
+}
+$response = json_encode($acknowledgement, JSON_THROW_ON_ERROR);
 fwrite($connection, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".strlen($response)."\r\nConnection: close\r\n\r\n".$response);
 fclose($connection);
 fclose($server);

@@ -783,7 +783,9 @@ The capability is available on Gmail mailbox resources, including configured Goo
 
 Provide at least one address in `to`, `cc` or `bcc`. Bcc-only messages are supported. Each submission uses only that message's explicit lists; it never retains recipients from an earlier message. Gmail routes mail using the serialized To/Cc/Bcc headers, so the SDK retains the explicit Bcc header for Gmail even though Symfony's usual envelope-based serialization removes it.
 
-Names, subjects and text headers support UTF-8. Text and HTML bodies must also contain valid UTF-8. The SDK rejects header controls, injection, invalid addresses and unsupported field names before any send. Structural headers and structured fields, including From, Sender, To/Cc/Bcc, Reply-To, Subject, Date, Message-ID, Return-Path, MIME-Version, Content-*, Resent-* and DKIM-Signature, cannot be supplied as text-header overrides. The encoder creates the MIME structure, Date and Message-ID itself.
+Names, subjects and text headers support UTF-8. Text and HTML bodies must also contain valid UTF-8. The SDK rejects header controls, injection, invalid addresses and unsupported field names before any send. Structural headers and structured fields, including From, Sender, To/Cc/Bcc, Reply-To, Subject, Date, Return-Path, MIME-Version, Content-*, Resent-* and DKIM-Signature, cannot be supplied as text-header overrides. The encoder creates the MIME structure and Date.
+
+You may supply one `Message-ID` in `headers`, such as `['Message-ID' => '<operation-42@example.com>']`. It uses typed MIME serialization and must contain one complete ASCII angle-bracketed identifier. Duplicate header names, including case variants, are rejected. `In-Reply-To` and `References` use the same identifier validation; each identifier header is limited to 64 KiB. The encoder creates a Message-ID when you omit it.
 
 `correlationId` is required, contains no control characters and is limited to 512 bytes. It is returned with submission evidence and encoded in `X-Mailbox-Correlation-Id`; choose an opaque value that is safe for recipients to see. Applications cannot override this header separately.
 
@@ -793,7 +795,7 @@ Names, subjects and text headers support UTF-8. Text and HTML bodies must also c
 
 | Outcome | Meaning | Host responsibility |
 | --- | --- | --- |
-| `SubmissionOutcome::Accepted` | Gmail returned HTTP 200 with a valid message identity and, when supplied, a valid thread identity. | Retain the provider IDs and original correlation. Acceptance is not delivery proof. |
+| `SubmissionOutcome::Accepted` | Gmail returned HTTP 200 with a valid message identity and, when supplied, a valid thread identity. Contextual acknowledgements must also match the chosen reply or forward operation. | Retain the provider IDs and original correlation. Acceptance is not delivery proof. |
 | `SubmissionOutcome::Rejected` | A known rejection response, such as HTTP 400, 401, 403 or 429, was observed. | Retain the response evidence and decide how to correct or schedule the operation. |
 | `SubmissionOutcome::Uncertain` | A timeout, 5xx, redirect, oversized/interrupted response or malformed acknowledgement prevents a reliable acceptance decision. | Retain the original operation and investigate it. Uncertainty does not authorize another send. |
 
@@ -802,6 +804,57 @@ Names, subjects and text headers support UTF-8. Text and HTML bodies must also c
 The SDK retains safe request identity, Date and Retry-After response headers. Authorization, cookies, redirect/upload URLs, arbitrary response bodies and raw transport exceptions are excluded from public submission evidence. If no response was observed, `status` is `null`. A response body beyond 64 KiB cannot establish acceptance, but its observed status and safe headers remain available.
 
 Your application owns durable operation state and recovery. Persist the chosen message and correlation before sending, then retain the returned evidence. The SDK does not maintain an outbox, deduplicate separate explicit calls, mirror private editor drafts, inspect sent copies automatically or claim recipient delivery. Injected HTTP clients must not add their own retry middleware for submission.
+
+### Replying and Forwarding
+
+Pass an explicit `ReplyForwardContext` when submitting a reply or forward. Use a complete [conversation read](#reading-a-complete-conversation) from the same selected connection, grant, generation and mailbox. Your application chooses the source message, subject, recipients, body and files:
+
+```php
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\ReplyForwardContext;
+use Pyle\Mailbox\Enums\ReplyForwardOperation;
+
+$reply = new PreparedMessage(
+    sender: $chosenSender,
+    to: $chosenRecipients,
+    subject: $chosenSubject,
+    correlationId: 'operation-42',
+    textBody: $chosenText,
+    context: new ReplyForwardContext(
+        ReplyForwardOperation::Reply,
+        $completeConversation,
+        $chosenSourceMessageId,
+    ),
+);
+
+$result = $mailbox->submit($reply);
+```
+
+For replies, the SDK supplies the selected Gmail `threadId`, the source Message-ID as `In-Reply-To`, and the source References followed by that Message-ID. When References are absent, a source In-Reply-To containing one identifier is retained before the source Message-ID. Chosen reply headers must agree with that context. The chosen subject must match an observed subject in the complete thread; it may retain the original thread subject when a later source has a reply prefix. The SDK preserves that subject and does not add or remove prefixes. These requirements follow [Gmail's threading rules](https://developers.google.com/workspace/gmail/api/guides/threads) and the [reply header rules](https://www.rfc-editor.org/rfc/rfc5322.html#section-3.6.4).
+
+For a forward, use `new ReplyForwardContext(ReplyForwardOperation::Forward, $completeConversation, $chosenSourceMessageId)`. The SDK validates the source context, then sends only the chosen message. It does not add the source thread ID or reply headers. Reply-only In-Reply-To and References headers are rejected for forwards. Historical recipients, Bcc, quoted content and files are never selected or copied automatically; pass any wanted content and immutable files explicitly.
+
+Incomplete reads, missing source content, unavailable reply identifiers, conflicting headers and context from another grant fail before send. Contextual submission requires an explicitly selected grant; configured sends without context remain available.
+
+A complete source may have a body or validated attachment metadata; an attachment-only source does not select its files for the new message. A reply acknowledgement must retain the requested thread. A forward acknowledgement must identify a different thread. Missing or mismatched thread evidence leaves the result `Uncertain` while preserving the actual provider IDs, status and safe headers.
+
+### Inspecting a Sent Copy
+
+Gmail's optional `SupportsGmailSubmissionInspection` capability observes a sent copy separately from the original send result:
+
+```php
+use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailSubmissionInspection;
+
+if ($mailbox instanceof SupportsGmailSubmissionInspection) {
+    $evidence = $mailbox->inspectSubmission($result);
+}
+```
+
+Inspection requires the original receipt's selected-grant context to match the current resource exactly, including its generation. Unbound legacy receipts and receipts from another connection, grant or mailbox are rejected before provider I/O. Known provider message IDs are read once from the selected mailbox with `format=metadata`; `SentCopyObserved` requires the same message ID, a matching known thread ID, a valid observed thread, a SENT label and exactly one matching correlation header. This is a scoped sent-copy observation, not delivery proof or a full content audit.
+
+Missing, delayed, mismatched, malformed, oversized or interrupted evidence returns `Inconclusive`. When the original response has no provider message ID, the artifact ID remains `null` and inspection makes no HTTP request. Gmail does not document a search operator for `X-Mailbox-Correlation-Id`, so the SDK does not invent a search from that header. Send-only authorization is insufficient for metadata reads; the selected grant also needs an applicable [Gmail read scope](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get).
+
+Retain both the original `SubmissionResult` and the later `SubmissionEvidence`. Inspection does not change original acceptance, status, safe response headers or correlation. It performs no send, retries no send and never treats a missing copy as permission to resend.
 
 ### Prepared Files
 
@@ -872,22 +925,29 @@ $env:MAILBOX_SUBMISSION_CONTROL_PATH = $mailboxControlPath
 php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='small file' --compact
 php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='cold 10 MiB' --compact
 php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='cold 20 MiB' --compact
+$mailboxWarmControlPath = Join-Path $env:TEMP ('mailbox-warm-control-' + [guid]::NewGuid() + '.json')
+$env:MAILBOX_SUBMISSION_CONTROL_PATH = $mailboxWarmControlPath
+php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='warm 20 MiB' --compact
 Remove-Item Env:\MAILBOX_SUBMISSION_CONTROL_PATH
 ```
 
-Each invocation starts one owned local TLS server with a client-local CA and routes the original trusted Gmail HTTPS destination to it through cURL. No provider account, global DNS or trust store is changed. The server independently inspects received JSON/MIME and exact file hashes. The tests report absolute PHP heap growth, bind the cold receipt to the same PHP/runtime and package source, and require each large case's excess above that cold control to remain within the unchanged 8 MiB allocation budget. This separates demonstrated first-use framework/transport costs from payload-size growth; it does not claim an 8 MiB total cold heap. The receipt contains fixture measurements only and may be removed after verification.
+Each cold invocation starts one owned local TLS server with a client-local CA and routes the original trusted Gmail HTTPS destination to it through cURL. The warm reply case runs a tiny fixture and then a 20 MiB reply in one test process, using two sequential owned servers. No provider account, global DNS or trust store is changed. The server independently inspects received JSON/MIME, reply identifiers, the requested thread ID and exact file hashes.
+
+The tests report absolute PHP heap growth and bind the control receipt to the same PHP/runtime and package source. Cold large cases must stay within the unchanged 8 MiB allocation budget above their cold control. The complementary warm reply case checks its actual incremental peak directly against that same budget. This separates demonstrated first-use framework/transport costs from payload-size growth; it does not claim an 8 MiB total cold heap or require production warm-up. The receipts contain fixture measurements only and may be removed after verification.
 
 Verified on 64-bit PHP 8.4.25 with Guzzle 7.16.1 and Symfony Mime 8.1.10, in fresh serial processes:
 
 | Decoded files | Actual MIME bytes | Actual JSON bytes | Absolute cold heap growth | Growth above cold control |
 | --- | ---: | ---: | ---: | ---: |
-| 8 KiB control | 11,813 | 15,761 | 9,261,504 | — |
-| 10 MiB | 14,349,539 | 19,132,729 | 9,259,056 | 0 |
-| 20 MiB aggregate | 28,698,660 | 38,264,890 | 9,259,024 | 0 |
+| 8 KiB control | 11,813 | 15,761 | 9,276,040 | — |
+| 10 MiB | 14,349,539 | 19,132,729 | 9,267,264 | 0 |
+| 20 MiB aggregate | 28,698,660 | 38,264,890 | 9,266,376 | 0 |
+
+The warm 20 MiB reply used 28,698,767 MIME bytes, 38,265,058 JSON bytes and 161,488 bytes of actual incremental PHP heap. Its received thread ID, typed In-Reply-To/References and both chosen files were checked independently by the server. The [ticket 17 receipt](plans/mailbox-provider-sdk/tickets/17-reply-forward-and-inspect-gmail-submission-evidence.md) records the measured source and separate gates.
 
 These are local protocol and PHP-buffer measurements. They do not establish live Gmail acceptance, delivery, total native/RSS memory, other PHP/runtime behavior or the host's storage capacity. The [ticket 18 receipt](plans/mailbox-provider-sdk/tickets/18-freeze-file-streams-for-gmail-submission.md) retains the original cold-heap failure, measured source fingerprint and separate verification gates.
 
-Arbitrary raw MIME input and signed/encrypted MIME reconstruction remain unsupported. Reply/forward preparation is a separate capability; the SDK does not infer it from a body or silently transform arbitrary MIME.
+Arbitrary raw MIME input and signed/encrypted MIME reconstruction remain unsupported. Reply/forward intent must be supplied through structured context; the SDK does not infer it from a body or silently transform arbitrary MIME.
 
 ## Preparing and Sending a Graph Draft
 
