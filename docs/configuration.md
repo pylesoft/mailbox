@@ -26,6 +26,40 @@ MAILBOX_PERSISTENCE_ENABLED=false
 
 This sets `mailbox.persistence.enabled` to `false`. Core provider reads through [explicit grants](authentication/user-oauth.md#reading-with-an-explicit-grant) then work without package tables. The default remains `true` for existing Eloquent integrations. Package model helpers, persistence commands and the existing database-backed OAuth routes still require package tables; keep those routes disabled for SDK-only usage.
 
+### Storing Selected Grants With Eloquent
+
+If you use the package's `MailboxConnection` models, you may keep `mailbox.persistence.enabled` enabled and use `Pyle\Mailbox\Support\EloquentGrantStore` as your `GrantStore`. Apply the package's additive migrations through your application's normal migration process. The adapter uses Laravel's default database connection and encryption key; no adapter binding or model query runs during package boot.
+
+After your application authorizes enrollment, select a grant and a fresh lifecycle generation on that connection:
+
+```php
+use Illuminate\Support\Str;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\Support\EloquentGrantStore;
+
+$connection->update([
+    'selected_grant_id' => (string) Str::uuid(),
+    'lifecycle_generation' => (string) Str::uuid(),
+]);
+
+$context = new GrantContext(
+    (string) $connection->getKey(),
+    $connection->selected_grant_id,
+    $connection->lifecycle_generation,
+    $connection->driver,
+    $authorizedMailbox,
+);
+$grants = new EloquentGrantStore;
+```
+
+Pass this store to the [selected-grant enrollment and refresh services](authentication/user-oauth.md#enrolling-gmail-with-host-owned-storage). Your host still supplies its authorization guards, target-mailbox permissions, atomic OAuth state store and shared refresh lock. The adapter does not select credentials by email or provider subject, infer legacy ownership, or replace the existing browser controllers. Connections to the same external account retain separate records, and changing the permitted mailbox target does not create another grant.
+
+The connection ID must be the canonical string form of the package's integer primary key: `1` is accepted; `01` is a distinct SDK identity and is rejected by this adapter. Applications with opaque connection IDs or their own models should implement `GrantStore` directly. Grant IDs, generations and verified identity fields are compared as exact strings even when the database uses a case-insensitive collation.
+
+On reconnect or disconnect, your application must atomically advance the connection's generation and update or clear its selected grant. Never recycle a generation. Disabled or soft-deleted connections and revoked grants cannot provide credentials. Ordinary refresh retains the generation and advances the revision; the adapter checks ownership, generation and the expected identity/revision inside a transaction and in the credential write. The current generation's verified identity, including Microsoft's `object_id`, cannot change through replacement. Email and display metadata may change. This protects against stale commits even after the shared refresh-lock lease expires. It does not replace the [shared lock required before a provider refresh exchange](authentication/user-oauth.md#refreshing-host-owned-gmail-grants).
+
+Tokens, nonce fingerprints and revision history are encrypted and excluded from model JSON/debug output. This intentionally removes token values from legacy callback/model JSON too; trusted code can still read model attributes directly. Existing OAuth rows remain unselected until an explicit upgrade or reconnect; the migration does not bind, merge or delete them. Keep revoked and superseded grant rows: deleting them also deletes the evidence needed to reject reused revisions. The hidden `LONGTEXT` history retains a SHA-256 fingerprint for each accepted revision and grows for the lifetime of the grant. It is read only for replacement, not ordinary grant loads. Plan capacity for that retained history; use a host-owned `GrantStore` if your volume requires a different durable revision ledger.
+
 ## Minimal `.env` Examples
 
 Most applications only need one provider. Here is the bare minimum for each.
