@@ -22,7 +22,7 @@ final readonly class GmailWatch
 {
     public function __construct(private GmailClient $client, private GrantContext $context, private GrantAccessGuard $guard) {}
 
-    /** @param list<string> $labelIds */
+    /** @param array<array-key, mixed> $labelIds */
     public function register(GmailWatchConfiguration $configuration, array $labelIds): GmailWatchRegistration
     {
         if (! array_is_list($labelIds)) {
@@ -100,9 +100,12 @@ final readonly class GmailWatch
             if ($stream->isSeekable()) {
                 $stream->rewind();
             }
-            while (! $stream->eof()) {
+            while (true) {
                 $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
-                if ($chunk === '' && ! $stream->eof()) {
+                if ($chunk === '') {
+                    if ($stream->eof()) {
+                        break;
+                    }
                     throw new \RuntimeException;
                 }
                 $budget->consume(strlen($chunk));

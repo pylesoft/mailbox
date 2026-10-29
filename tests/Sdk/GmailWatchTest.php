@@ -17,6 +17,8 @@ use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailWatch;
 use Pyle\Mailbox\DTOs\GmailWatchConfiguration;
 use Pyle\Mailbox\DTOs\GmailWatchRegistration;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\InvalidChangeNotificationException;
@@ -380,6 +382,36 @@ it('does not expose its retained host authorization provider in debug dumps', fu
 
     expect(print_r($mailbox, true))->not->toContain('selected-token');
 });
+
+it('retains conversation reads and watch lifecycle checks on the same explicitly selected resource', function (): void {
+    $history = [];
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => 'selected-token'],
+    ]);
+    $mailbox = watchResource([
+        new Response(200, [], '{"historyId":"100","expiration":"1893456000123"}'),
+        new Response(200, [], '{"id":"thread","messages":[{"id":"message","threadId":"thread","payload":{"mimeType":"text/plain","body":{"data":"QQ","size":1}}}]}'),
+    ], $history, $tokens);
+
+    $registration = $mailbox->watch(watchRegistration()->configuration);
+    $conversation = $mailbox->conversation('thread', new SyncScope, new SyncBudget);
+    $hint = $mailbox->notification(watchRequest(), $registration, watchVerifier());
+
+    expect($conversation->complete)->toBeTrue()
+        ->and($conversation->messages[0]->body->content)->toBe('A')
+        ->and($hint->context->matches($conversation->identity->context))->toBeTrue();
+    $tokens->grants['grant']['generation'] = '2';
+    expect(fn () => $mailbox->conversation('thread', new SyncScope, new SyncBudget))->toThrow(GrantAccessDeniedException::class);
+    expect(fn () => $mailbox->notification(watchRequest(), $registration, watchVerifier()))->toThrow(GrantAccessDeniedException::class);
+    expect($history)->toHaveCount(2);
+});
+
+it('rejects malformed watch labels before contacting Gmail', function (array $labels): void {
+    $history = [];
+
+    expect(fn () => watchResource([], $history)->watch(watchRegistration()->configuration, $labels))->toThrow(InvalidArgumentException::class);
+    expect($history)->toBe([]);
+})->with([[['named' => 'INBOX']], [[123]], [["INBOX\n"]]]);
 
 /** @param array<string, mixed> $overrides */
 function watchVerifier(array $overrides = [], ?Closure $duringVerification = null): GmailPushVerifier
