@@ -19,6 +19,7 @@ use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 trait PerformsApiRequests
 {
@@ -49,6 +50,46 @@ trait PerformsApiRequests
     public function get(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
     {
         return $this->request('GET', $endpoint, $query === [] ? [] : ['query' => $query], $mailbox);
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>
+     */
+    public function getBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
+    {
+        $options = $query === [] ? [] : ['query' => $query];
+        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true], $mailbox, retry: false);
+        $stream = $response->getBody();
+        $body = '';
+
+        try {
+            while (true) {
+                $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
+                if ($chunk === '') {
+                    if ($stream->eof()) {
+                        break;
+                    }
+                    throw new ApiRequestException('The provider response stream stopped making progress.');
+                }
+                $budget->consume(strlen($chunk));
+                $body .= $chunk;
+            }
+        } finally {
+            $stream->close();
+        }
+
+        try {
+            $decoded = json_decode($body, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            throw new ApiRequestException('The provider returned invalid JSON for a bounded read.');
+        }
+
+        if (! is_array($decoded) || ! str_starts_with(ltrim($body), '{')) {
+            throw new ApiRequestException('The provider returned an invalid object for a bounded read.');
+        }
+
+        return $decoded;
     }
 
     public function continuationEndpoint(#[\SensitiveParameter] mixed $link, #[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
@@ -139,13 +180,13 @@ trait PerformsApiRequests
     }
 
     /** @param array<string, mixed> $options */
-    private function requestRaw(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null): ResponseInterface
+    private function requestRaw(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, bool $retry = true): ResponseInterface
     {
         $target = $this->resolveTarget($endpoint, $mailbox);
         $endpoint = $this->redactedEndpoint($endpoint);
         $mailboxKey = $this->mailboxKey($mailbox);
 
-        return $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $endpoint, $target, $options, $mailbox, $mailboxKey): ResponseInterface {
+        return $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $endpoint, $target, $options, $mailbox, $mailboxKey, $retry): ResponseInterface {
             $attempt = 0;
             $reauthAttempted = false;
 
@@ -157,7 +198,7 @@ trait PerformsApiRequests
                     return $this->sendRequest($method, $target, $options, $mailboxKey, $attempt, $startedAt);
                 } catch (ConnectException $e) {
                     $e = new ConnectException($this->providerLabel().' connection failed.', new Request($method, $endpoint));
-                    if ($this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
+                    if ($retry && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
                         continue;
                     }
 
@@ -172,11 +213,11 @@ trait PerformsApiRequests
                     );
                     $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
 
-                    if ($e->getResponse() === null && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
+                    if ($retry && $e->getResponse() === null && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
                         continue;
                     }
 
-                    if ($this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
+                    if ($retry && $this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
                         continue;
                     }
 

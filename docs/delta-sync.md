@@ -1,8 +1,72 @@
 # Delta Sync
 
-Most mail integrations need to stay current with a mailbox over time. Polling for every message on every request is wasteful and slow. Delta sync solves this by asking the provider "what changed since I last checked?" and receiving only the new, modified, and deleted messages. Mailbox provides a single, unified API for delta sync that works identically across Microsoft Graph and Gmail, even though the underlying mechanisms are fundamentally different.
+Most mail integrations need to stay current with a mailbox over time. Delta sync asks the provider what changed since the previous synchronization. The legacy folder API returns eager collections. The optional bounded API below lets a host retain work and resume a Gmail initial scan without treating partial work as complete.
 
-This page explains how delta sync works, walks through the sync lifecycle from first run to steady state, and shows you how to build a production-ready sync pipeline with queue jobs and event listeners.
+This page explains both interfaces. Each provider retains its own synchronization semantics; the package does not own the host's jobs, retention policy or durable progress storage.
+
+## Bounded Gmail Initial Synchronization
+
+Use `SupportsInitialSync` on a resource obtained through `Mailbox::forGrant()`. Existing custom drivers and resource contracts do not need new methods. Configured Gmail resources retain their eager methods; bounded synchronization requires an explicit grant context.
+
+```php
+use Pyle\Mailbox\Contracts\SupportsInitialSync;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncScope;
+use Pyle\Mailbox\Facades\Mailbox;
+
+$mailbox = Mailbox::forGrant($context, $tokens);
+
+if (! $mailbox instanceof SupportsInitialSync) {
+    throw new LogicException('This mailbox does not support bounded initial synchronization.');
+}
+
+$scope = new SyncScope(
+    folderId: 'INBOX',
+    importSince: new DateTimeImmutable('2026-01-01T00:00:00Z'),
+);
+
+$page = $mailbox->initialSync(
+    $scope,
+    new SyncBudget(maxPages: 2, maxItems: 100, maxRequests: 3, maxResponseBytes: 1048576),
+    $storedContinuation,
+);
+```
+
+The host supplies `$context`, `$tokens` and a previously retained `$storedContinuation`, or `null` for a new scan. A scope selects one provider folder ID, or `null` for the whole mailbox. Gmail includes spam and trash when reading a whole mailbox. Its cutoff uses the provider's `after:<Unix seconds>` search. The shared scope requires whole-second precision and rejects fractional seconds instead of silently changing the cutoff. The SDK does not delete local history or choose a retention window.
+
+`ChangePage::upserts` and `removals` contain provider message IDs as reconciliation evidence. They do not contain complete message bodies. Use the existing message resources for content acquisition. An initial listing emits upsert evidence; it does not infer removals from messages absent from the selected scope.
+
+Every page has exactly one progress outcome:
+
+| Outcome | Meaning |
+| --- | --- |
+| `continuation` | Work is unfinished. Resume with this `SyncContinuation` after retaining the page. |
+| `checkpoint` | The initial listing round finished. Retain all page evidence before promoting this `SyncCheckpoint`. |
+| `resetRequired` | The provider operation requires a reset of the original scope. This shared outcome is available for change capabilities; the initial Gmail listing does not infer a reset from a limit. |
+
+The SDK reads the Gmail profile history ID **before** its first message listing. Every resumed page keeps that original baseline. The completed initial checkpoint contains this pre-scan ID, so later history reconciliation can observe arrivals and changes that occurred during the scan. It does not claim that the mailbox was unchanged while listing. Incremental Gmail history and Graph bounded delta capabilities are separate implementation slices.
+
+### Retaining and resuming pages
+
+Persist the returned evidence and its progress outcome in one host transaction, or use an equivalent durable ordering. Retain every ID as work to reconcile before promoting a continuation. Promote a completed checkpoint only after retaining the final page too. The package neither writes a cursor nor schedules content jobs.
+
+If a process stops before committing a page, retry from the last committed continuation. The same IDs may return again; process them idempotently. Do not promote a checkpoint because an item count was reached, a page was empty, or duplicate evidence was observed. A continuation and a checkpoint are different types and cannot be substituted for one another.
+
+State binds the provider, connection, selected grant, lifecycle generation, target mailbox, folder, cutoff and format version. Reuse against another identity or scope throws `InvalidSyncStateException` before provider I/O. Treat state as trusted, private host data: keep the DTO fields unchanged, and do not deserialize untrusted PHP objects. Debug output redacts provider positions; public properties remain available for private persistence.
+
+### Limits and interrupted work
+
+Budgets apply to each call. `maxPages` limits listing requests, `maxItems` limits returned evidence, and `maxRequests` includes the initial profile request. Gmail requests at most 500 IDs per provider page. If a response returns more IDs than requested, the SDK retains the previous position and reports `provider_item_limit`; it never trims a response and advances past discarded IDs.
+
+`maxResponseBytes` limits the aggregate bytes read from actual response streams, including the profile and every listing in that call. The transport reads at most the remaining budget plus one detection byte, closes each stream, and checks the limit before JSON decoding. A `Content-Length` header cannot bypass the check. This is a response-byte bound, not a promise about exact PHP heap usage during decoding.
+
+An unfinished page reports `item_limit`, `page_limit`, `request_limit`, `response_limit`, `provider_item_limit`, `provider_progress_missing` or `provider_progress_repeated`. Resume only after retaining its evidence. Raise an insufficient budget or resolve a stalled provider response as appropriate. A repeated or unusable token retains the position before that response and never becomes a checkpoint.
+
+Gmail documents an absent `nextPageToken` as its terminal signal. A present null, blank or non-string token is unusable and remains unfinished. Empty pages and duplicate IDs do not determine completion, and `resultSizeEstimate` is not an exact count. The SDK cannot distinguish a provider incorrectly omitting a token from a legitimate terminal page.
+
+Malformed responses, missing baselines, access denial and transport failures throw without returning a checkpoint. Retry from the last durably retained position. Bounded GETs make one HTTP attempt so hidden retries cannot exceed the request budget. Existing eager GET retry behavior is unchanged.
+
+The same transport primitive is available as `getBounded($endpoint, $responseBudget, $query, $mailbox)` on the provider clients. Share a `Support\ResponseBudget` instance across related reads to enforce an aggregate byte bound. It throws `ResponseLimitExceededException` when the actual stream exceeds that bound.
 
 ## How Delta Sync Works
 
@@ -10,7 +74,7 @@ Under the hood, each provider tracks changes differently. Mailbox abstracts thes
 
 **Microsoft Graph** has native delta query support. When you call `delta()`, Graph returns a set of changed messages along with a `deltaLink` -- an opaque URL that encodes your position in the change stream. On subsequent calls, Mailbox passes that `deltaLink` directly to Graph, which returns only the changes since that point. If the token expires (HTTP 410), Graph tells Mailbox that a full re-sync is required.
 
-**Gmail** does not have a delta query API. Instead, it uses a `historyId` -- an incrementing integer that marks a point in the mailbox's history timeline. On the first sync, Mailbox fetches all messages in the folder and captures the current `historyId` from the user's profile. On subsequent calls, it queries the Gmail History API with the stored `historyId` to discover which messages were added, deleted, or had labels changed. If the `historyId` is too old (HTTP 404), Mailbox signals that a full re-sync is needed.
+**Gmail** uses a `historyId` that marks a position in mailbox history. On the first eager sync, Mailbox captures this baseline before fetching messages. Capped or cyclic eager listings throw instead of returning a partial collection with a completed checkpoint. On subsequent calls, the Gmail History API reports changes after the stored ID. If the ID is too old (HTTP 404), Mailbox signals that a full re-sync is needed.
 
 In both cases, the result is the same: a `DeltaResultDto` containing three collections and a token to use next time.
 

@@ -34,3 +34,7 @@ Introduce bounded change pages through a complete Gmail initial-import path. A h
 
 This slice establishes the shared paging contract. Incremental history and provider-specific Graph delta behavior remain separate slices; unfinished content must remain explicit when encountered.
 
+## Comments
+
+- 2026-10-29: Claimed by `mailbox_ticket_12` on `feat/mailbox-sdk-12`, based on integration `d9e2b882929615f925a38427051485f9603a03e4`, with no upstream. Implementation is limited to the first shared bounded-progress contract and Gmail initial synchronization. Q13's approved SDK/real-Guzzle HTTP-fake seam applies; the SDK test base forbids database access. No provider, consumer, publication or production operations are authorized.
+

@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Pyle\Mailbox\Drivers\Gmail\GmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessageFilterer;
 use Pyle\Mailbox\Drivers\Gmail\GmailMessagePageCollector;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 it('hydrates gmail pages, applies filters, deduplicates ids, and stops on repeated page tokens', function (): void {
     $client = new class extends GmailClient
@@ -85,7 +86,7 @@ it('hydrates gmail pages, applies filters, deduplicates ids, and stops on repeat
     expect($result->pluck('id')->all())->toBe(['m-2', 'm-3']);
 });
 
-it('stops when the configured max page count is reached', function (): void {
+it('rejects completion when the configured max page count is reached', function (): void {
     $client = new class extends GmailClient
     {
         public int $listCalls = 0;
@@ -118,11 +119,10 @@ it('stops when the configured max page count is reached', function (): void {
         }
     };
 
-    $result = (new GmailMessagePageCollector($client, 'invoices@example.com'))->collect(
+    expect(fn () => (new GmailMessagePageCollector($client, 'invoices@example.com'))->collect(
         query: ['maxResults' => 5],
         maxPages: 1,
-    );
+    ))->toThrow(ApiRequestException::class, 'page limit');
 
     expect($client->listCalls)->toBe(1);
-    expect($result->pluck('id')->all())->toBe(['m-1']);
 });
