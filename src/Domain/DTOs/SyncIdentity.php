@@ -20,7 +20,7 @@ final readonly class SyncIdentity
         if ($this->formatVersion !== 1
             || $this->formatVersion !== $expected->formatVersion
             || $this->provider !== $expected->provider
-            || get_object_vars($this->context) !== get_object_vars($expected->context)
+            || ! $this->context->matches($expected->context)
             || $this->scope->folderId !== $expected->scope->folderId
             || $this->scope->importSince?->format('U.u') !== $expected->scope->importSince?->format('U.u')) {
             throw new InvalidSyncStateException('Synchronization state does not match the selected provider, grant, generation, mailbox, scope, cutoff or supported format.');
