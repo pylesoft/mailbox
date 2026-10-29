@@ -13,6 +13,10 @@ use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Exception\ExceptionInterface;
 use Symfony\Component\Mime\Part\DataPart;
+use Symfony\Component\Mime\Part\Multipart\AlternativePart;
+use Symfony\Component\Mime\Part\Multipart\MixedPart;
+use Symfony\Component\Mime\Part\Multipart\RelatedPart;
+use Symfony\Component\Mime\Part\TextPart;
 
 final class PreparedMessageMime
 {
@@ -33,6 +37,13 @@ final class PreparedMessageMime
         }
         foreach ($message->files as $file) {
             $inputBytes += $file->byteLength + strlen($file->name) + strlen($file->mediaType);
+            if ($file->contentId !== null) {
+                try {
+                    new Address($file->contentId);
+                } catch (ExceptionInterface) {
+                    throw new UnsupportedCapabilityException('Gmail MIME requires a Content-ID in addr-spec form.');
+                }
+            }
         }
         if ($inputBytes > $maxBytes) {
             throw new UnsupportedCapabilityException('The prepared content exceeds the submission byte budget.');
@@ -52,17 +63,17 @@ final class PreparedMessageMime
             ->cc(...array_map(self::address(...), $message->cc))
             ->bcc(...array_map(self::address(...), $message->bcc))
             ->subject($message->subject);
-        if ($message->textBody !== null) {
-            $email->text($message->textBody, 'utf-8');
-        }
+        $body = $message->textBody === null ? null : new TextPart($message->textBody, 'utf-8');
         if ($message->htmlBody !== null) {
-            $email->html($message->htmlBody, 'utf-8');
+            $html = new TextPart($message->htmlBody, 'utf-8', 'html');
+            $body = $body === null ? $html : new AlternativePart($body, $html);
         }
         foreach ($message->headers as $name => $value) {
             $email->getHeaders()->addTextHeader($name, $value);
         }
         $email->getHeaders()->addTextHeader('X-Mailbox-Correlation-Id', $message->correlationId);
         $snapshots = [];
+        $inlineParts = $attachments = [];
         try {
             foreach ($message->files as $file) {
                 $snapshot = $file->openVerified()->detach();
@@ -74,8 +85,19 @@ final class PreparedMessageMime
                 if ($file->contentId !== null) {
                     $part->setContentId($file->contentId);
                 }
-                $email->addPart($part);
+                if ($file->inline && $file->contentId !== null) {
+                    $inlineParts[] = $part;
+                } else {
+                    $attachments[] = $part;
+                }
             }
+            if ($inlineParts !== []) {
+                $body = new RelatedPart($body, ...$inlineParts);
+            }
+            if ($attachments !== []) {
+                $body = new MixedPart($body, ...$attachments);
+            }
+            $email->setBody($body);
             $email->ensureValidity();
             $headers = $email->getPreparedHeaders();
             // Gmail routes recipients from MIME headers; Symfony removes Bcc for envelope-based transports.
@@ -131,9 +153,17 @@ final class PreparedMessageMime
         if (! array_is_list($message->files)) {
             throw new InvalidArgumentException('Prepared files must be a list.');
         }
+        $identities = $contentIds = [];
         foreach ($message->files as $file) {
             if (! $file instanceof PreparedFile) {
                 throw new UnsupportedCapabilityException('Prepared files require structured immutable file sources.');
+            }
+            if (isset($identities[$file->identity]) || ($file->contentId !== null && isset($contentIds[$file->contentId]))) {
+                throw new InvalidArgumentException('Prepared file identities and supplied Content-IDs must be unique.');
+            }
+            $identities[$file->identity] = true;
+            if ($file->contentId !== null) {
+                $contentIds[$file->contentId] = true;
             }
         }
     }

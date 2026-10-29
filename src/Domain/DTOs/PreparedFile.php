@@ -33,8 +33,7 @@ final readonly class PreparedFile
             || preg_match('/\A[0-9a-fA-F]{64}\z/', $sha256) !== 1) {
             throw new InvalidArgumentException('Prepared files require a byte length, media type and expected SHA-256 fingerprint.');
         }
-        if ($contentId !== null && (strlen($contentId) > 254
-            || preg_match('/\A[A-Za-z0-9.!#$%&\x27*+\/=?^_`{|}~-]+@[A-Za-z0-9.-]+\z/', $contentId) !== 1)) {
+        if ($contentId !== null && preg_match('/\A[A-Za-z0-9.!#$%&\x27*+\/=?^_`{|}~@-]+\z/', $contentId) !== 1) {
             throw new InvalidArgumentException('Prepared file Content-IDs must be safe identifiers.');
         }
     }
