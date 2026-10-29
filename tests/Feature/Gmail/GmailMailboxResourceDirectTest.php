@@ -10,9 +10,10 @@ use Pyle\Mailbox\Drivers\Gmail\GmailMailboxResource;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('resolves gmail labels and builds folder resources directly', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -68,7 +69,7 @@ it('resolves gmail labels and builds folder resources directly', function (): vo
 });
 
 it('throws when a gmail folder move is attempted', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 

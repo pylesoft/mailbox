@@ -304,11 +304,7 @@ class GmailDeltaSync
                 }
 
                 try {
-                    $payload = $this->client->get(
-                        sprintf('users/%s/messages/%s', rawurlencode($mailbox), rawurlencode($messageId)),
-                        ['format' => 'full'],
-                        $mailbox,
-                    );
+                    $payload = (new GmailMessageReader($this->client, $mailbox))->get($messageId);
                 } catch (ApiRequestException|ResourceNotFoundException $e) {
                     if ($e instanceof ResourceNotFoundException || $e->status === 404) {
                         return null;

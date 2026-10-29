@@ -1,6 +1,6 @@
 # Delta Sync
 
-Most mail integrations need to stay current with a mailbox over time. Delta sync asks the provider what changed since the previous synchronization. The legacy folder API returns eager collections. The optional bounded API below lets a host retain work and resume a Gmail initial scan without treating partial work as complete.
+Most mail integrations need to stay current with a mailbox over time. Delta sync asks the provider what changed since the previous synchronization. The legacy folder API returns eager collections. The optional bounded APIs below let a host retain work and resume Gmail initial scans and history rounds without treating partial work as complete.
 
 This page explains both interfaces. Each provider retains its own synchronization semantics; the package does not own the host's jobs, retention policy or durable progress storage.
 
@@ -44,7 +44,7 @@ Every page has exactly one progress outcome:
 | `checkpoint` | The initial listing round finished. Retain all page evidence before promoting this `SyncCheckpoint`. |
 | `resetRequired` | The provider operation requires a reset of the original scope. This shared outcome is available for change capabilities; the initial Gmail listing does not infer a reset from a limit. |
 
-The SDK reads the Gmail profile history ID **before** its first message listing. Every resumed page keeps that original baseline. The completed initial checkpoint contains this pre-scan ID, so later history reconciliation can observe arrivals and changes that occurred during the scan. It does not claim that the mailbox was unchanged while listing. Incremental Gmail history and Graph bounded delta capabilities are separate implementation slices.
+The SDK reads the Gmail profile history ID **before** its first message listing. Every resumed page keeps that original baseline. The completed initial checkpoint contains this pre-scan ID, so later history reconciliation can observe arrivals and changes that occurred during the scan. It does not claim that the mailbox was unchanged while listing. Use the bounded Gmail history capability below to reconcile from that checkpoint. Graph bounded delta remains a separate implementation slice.
 
 ### Retaining and resuming pages
 
@@ -67,6 +67,59 @@ Gmail documents an absent `nextPageToken` as its terminal signal. A present null
 Malformed responses, missing baselines, access denial and transport failures throw without returning a checkpoint. Retry from the last durably retained position. Bounded GETs make one HTTP attempt so hidden retries cannot exceed the request budget. Existing eager GET retry behavior is unchanged.
 
 The same transport primitive is available as `getBounded($endpoint, $responseBudget, $query, $mailbox)` on the provider clients. Share a `Support\ResponseBudget` instance across related reads to enforce an aggregate byte bound. It throws `ResponseLimitExceededException` when the actual stream exceeds that bound.
+
+## Bounded Gmail History
+
+After retaining a completed initial checkpoint, use `SupportsIncrementalSync` on the same explicit-grant Gmail resource. The capability also works without notifications or a live-mode registration; the host chooses when to reconcile.
+
+```php
+use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
+use Pyle\Mailbox\DTOs\SyncBudget;
+
+if (! $mailbox instanceof SupportsIncrementalSync) {
+    throw new LogicException('This mailbox does not support bounded history.');
+}
+
+$scope = $committedCheckpoint->identity->scope;
+$budget = new SyncBudget(maxPages: 2, maxItems: 100, maxRequests: 2);
+
+$page = $mailbox->incrementalSync(
+    $scope,
+    $budget,
+    $committedCheckpoint,
+    $storedHistoryContinuation,
+);
+```
+
+The host supplies the last committed `SyncCheckpoint` and its retained history continuation, or `null` to start a new round. Keep passing that same checkpoint while resuming the round. A continuation from another checkpoint, phase, grant, lifecycle generation, mailbox, folder or cutoff is rejected before provider I/O. Each actual request also checks that the host still authorizes the captured grant generation.
+
+Retain page evidence before promoting its continuation. Only a terminal history response with a valid mailbox `historyId` produces a completed checkpoint. Intermediate response IDs, empty pages and duplicate records do not complete a round. If work stops before a page is retained, replay from the last retained position. The history endpoint's absent `nextPageToken` is terminal; a present invalid or repeated token leaves the round unfinished.
+
+History requests read unfiltered mailbox changes so a message leaving a selected label is still a reconciliation candidate. Gmail history has no import-cutoff query. Recheck message content and the selected folder/import policy before updating the host's projection; do not discard activity on a retained older conversation merely because its first message predates the import cutoff. The original scope and cutoff remain bound to every continuation and checkpoint.
+
+`messagesAdded`, `labelsAdded` and `labelsRemoved` produce upsert candidates. A removed label is a reason to reconcile scope membership, not evidence that the message was deleted. Only Gmail's `messagesDeleted` produces deletion evidence in `removals`. Generic changed-message IDs are included when the specific arrays do not already describe them. Duplicate evidence is merged, with later observations in a call replacing earlier evidence for the same ID. Neither array instructs the host to erase retained conversation history.
+
+The existing `SyncBudget` applies to each history call. `maxPages` and `maxRequests` each bound history requests; `maxItems` bounds returned message-ID evidence, and `maxResponseBytes` bounds aggregate actual response bytes. Gmail's `maxResults` limits **history records**, each of which can contain many IDs. If a record or page expands beyond the remaining item budget, the SDK returns `provider_item_limit` and retains the position before that page. It never returns a trimmed page with an advanced position. Increase the budget to retain that page, or investigate a stalled provider response.
+
+### Recovering expired history
+
+An HTTP 404 from the history endpoint returns `resetRequired: true` with reason `history_expired`. This is the provider's documented response for an invalid or expired history position. Other HTTP failures and malformed responses remain explicit failures. A locally malformed or mismatched checkpoint throws `InvalidSyncStateException` and is not silently replaced.
+
+Retain any evidence returned before the reset, then start an initial scan using the **exact scope from the committed checkpoint**:
+
+```php
+if ($page->resetRequired) {
+    $recovery = $mailbox->initialSync(
+        $committedCheckpoint->identity->scope,
+        $budget,
+        $storedRecoveryContinuation,
+    );
+}
+```
+
+Use `null` for `$storedRecoveryContinuation` on the first recovery call. Retain and resume initial-scan continuations separately from history continuations. The new initial scan captures its baseline before listing, so history reconciliation from its completed checkpoint can catch changes arriving during recovery. Promote that checkpoint only after retaining all recovery evidence, then begin a new history round. A reset does not clear local messages, widen the import policy or choose a new retention window.
+
+See the [Gmail history reference](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.history/list) for record pagination and expiry semantics.
 
 ## How Delta Sync Works
 
