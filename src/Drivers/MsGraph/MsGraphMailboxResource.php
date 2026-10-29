@@ -13,6 +13,7 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\SupportsConversationRead;
+use Pyle\Mailbox\Contracts\SupportsDraftAttachmentPreparation;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
@@ -29,6 +30,7 @@ use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionEvidence;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
 use Pyle\Mailbox\DTOs\SubmissionResult;
 use Pyle\Mailbox\DTOs\SyncBudget;
@@ -38,7 +40,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -119,9 +121,19 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         return $this->draftSubmission()->submit($preparation, $message);
     }
 
+    public function prepareAttachments(SubmissionPreparation $preparation, PreparedMessage $message, ?SubmissionLimits $limits = null, int $maxRequestBytes = 4_000_000): SubmissionPreparation
+    {
+        return $this->draftSubmission()->prepareAttachments($preparation, $message, $limits ?? new SubmissionLimits, $maxRequestBytes);
+    }
+
     public function inspectSubmission(SubmissionPreparation $preparation, PreparedMessage $message): SubmissionEvidence
     {
         return $this->draftSubmission()->inspect($preparation, $message);
+    }
+
+    public function inspectAttachments(SubmissionPreparation $preparation, PreparedMessage $message, ?SubmissionLimits $limits = null): SubmissionPreparation
+    {
+        return $this->draftSubmission()->inspectAttachments($preparation, $message, $limits ?? new SubmissionLimits);
     }
 
     private function draftSubmission(): MsGraphDraftSubmission

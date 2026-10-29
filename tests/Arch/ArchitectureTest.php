@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Illuminate\Database\Eloquent\Model;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
+use Pyle\Mailbox\DTOs\AttachmentPreparation;
 use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
@@ -14,6 +15,7 @@ use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\GraphUploadSession;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\PreparedFile;
@@ -48,6 +50,7 @@ arch('DTOs are final readonly classes')
     ->expect([
         AttachmentDto::class,
         AttachmentFileDto::class,
+        AttachmentPreparation::class,
         BodyDto::class,
         BodyReadLimits::class,
         ChangePage::class,
@@ -57,6 +60,7 @@ arch('DTOs are final readonly classes')
         EmailAddressDto::class,
         FolderDto::class,
         GrantContext::class,
+        GraphUploadSession::class,
         HealthCheckResult::class,
         MessageDto::class,
         PreparedMessage::class,
