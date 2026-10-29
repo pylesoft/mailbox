@@ -7,8 +7,10 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\FnStream;
 use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Contracts\Queue\Job;
 use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
@@ -138,6 +140,7 @@ it('stops before send when the observed Graph draft differs from the explicit in
     'inherited Bcc' => [['bccRecipients' => [['emailAddress' => ['name' => 'Unexpected', 'address' => 'unexpected@example.com']]]]],
     'inline file despite false hasAttachments' => [['attachments' => [['id' => 'inline-file']]]],
     'unlisted files' => [['attachments' => null]],
+    'malformed empty object file list' => [['attachments' => (object) []]],
     'incomplete file list' => [['attachments@odata.nextLink' => 'https://private-upload']],
     'missing correlation' => [['internetMessageHeaders' => []]],
     'wrong immutable identity' => [['id' => 'different-draft']],
@@ -283,6 +286,174 @@ it('rejects unsupported or unsafe Graph input before creating a provider draft',
     'no content' => [['textBody' => null], InvalidArgumentException::class],
     'no correlation' => [['correlationId' => ''], InvalidArgumentException::class],
 ]);
+
+it('keeps a truncated empty Graph acknowledgement uncertain', function (): void {
+    $history = [];
+    $mailbox = graphSubmissionMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        new Response(200, [], json_encode(graphSubmissionDraft(), JSON_THROW_ON_ERROR)),
+        new Response(202, ['Content-Length' => '12', 'request-id' => 'truncated-1']),
+    ], $history);
+    $message = graphSubmissionMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+
+    $result = $mailbox->submitPrepared($preparation, $message);
+
+    expect($result->outcome)->toBe(SubmissionOutcome::Uncertain)
+        ->and($result->status)->toBe(202)
+        ->and($result->headers)->toBe(['request-id' => ['truncated-1']])
+        ->and($history)->toHaveCount(3);
+});
+
+it('retains safe verification failure evidence without requesting send', function (): void {
+    $history = [];
+    $mailbox = graphSubmissionMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        new Response(503, ['request-id' => 'verification-503', 'Authorization' => 'Bearer private-token', 'Location' => 'https://private-upload'], 'private-response'),
+        new Response(202),
+    ], $history);
+    $message = graphSubmissionMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+
+    try {
+        $mailbox->submitPrepared($preparation, $message);
+        test()->fail('An unverifiable draft must stop before send.');
+    } catch (ApiRequestException $exception) {
+        expect($exception->status)->toBe(503)
+            ->and($exception->headers)->toBe(['request-id' => ['verification-503']])
+            ->and($exception->getPrevious())->toBeNull();
+        $public = $exception->getMessage().json_encode($exception->headers, JSON_THROW_ON_ERROR);
+        expect($public)->not->toContain('private-token')->not->toContain('private-upload')->not->toContain('private-response');
+    }
+    expect($history)->toHaveCount(2);
+});
+
+it('uses immutable identities for phased HTML submission while preserving disabled legacy preference', function (): void {
+    config()->set('mailbox.prefer_immutable_ids', false);
+    $history = [];
+    $message = graphSubmissionMessage([
+        'to' => [], 'cc' => [], 'textBody' => null, 'htmlBody' => '<p>Résumé</p>',
+        'headers' => ['X-Project' => 'Support'],
+    ]);
+    $draft = graphSubmissionDraft();
+    $draft['toRecipients'] = [];
+    $draft['ccRecipients'] = [];
+    $draft['body'] = ['contentType' => 'html', 'content' => '<p>Résumé</p>'];
+    $draft['internetMessageHeaders'][] = ['name' => 'x-project', 'value' => 'Support'];
+    $mailbox = graphSubmissionMailbox([
+        new Response(200, [], '{"id":"existing-id"}'),
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(202),
+    ], $history);
+
+    $mailbox->message('existing-id')->get();
+    $preparation = $mailbox->prepareSubmission($message);
+    $result = $mailbox->submitPrepared($preparation, $message);
+
+    expect($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and(config('mailbox.prefer_immutable_ids'))->toBeFalse()
+        ->and($history[0]['request']->getHeaderLine('Prefer'))->toBe('')
+        ->and($history[2]['request']->getHeaderLine('Prefer'))->toContain('outlook.body-content-type="html"');
+    foreach (array_slice($history, 1) as $entry) {
+        expect($entry['request']->getHeaderLine('Prefer'))->toContain('IdType="ImmutableId"');
+    }
+    $payload = json_decode((string) $history[1]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    expect($payload['body'])->toBe(['contentType' => 'HTML', 'content' => '<p>Résumé</p>'])
+        ->and($payload['toRecipients'])->toBe([])
+        ->and($payload['ccRecipients'])->toBe([])
+        ->and($payload['bccRecipients'][0]['emailAddress']['address'])->toBe('bcc@example.com');
+});
+
+it('enforces the actual Graph JSON byte budget and provider write ceiling before HTTP', function (array $changes, int $budget, string $exception): void {
+    $history = [];
+    $mailbox = graphSubmissionMailbox([], $history);
+
+    expect(fn () => $mailbox->prepareSubmission(graphSubmissionMessage($changes), $budget))->toThrow($exception)
+        ->and($history)->toBe([]);
+})->with([
+    'positive caller budget' => [[], 0, InvalidArgumentException::class],
+    'body exceeds caller budget' => [['textBody' => str_repeat('a', 1000)], 512, UnsupportedCapabilityException::class],
+    'JSON metadata exceeds caller budget' => [['textBody' => 'Body'], 128, UnsupportedCapabilityException::class],
+    'JSON escape expansion exceeds Graph limit' => [['textBody' => str_repeat('é', 700_000)], 4_000_000, UnsupportedCapabilityException::class],
+    'larger caller budget cannot exceed Graph limit' => [['textBody' => str_repeat('a', 4_000_000)], 8_000_000, UnsupportedCapabilityException::class],
+]);
+
+it('retains a bounded Graph draft body larger than the default write acknowledgement budget', function (): void {
+    $history = [];
+    $body = str_repeat('a', 70_000);
+    $draft = graphSubmissionDraft();
+    $draft['body']['content'] = $body;
+    $response = json_encode($draft, JSON_THROW_ON_ERROR);
+    $mailbox = graphSubmissionMailbox([
+        new Response(201, [], $response), new Response(200, [], $response), new Response(202),
+    ], $history);
+    $message = graphSubmissionMessage(['textBody' => $body]);
+
+    $preparation = $mailbox->prepareSubmission($message, 100_000);
+    $result = $mailbox->submitPrepared($preparation, $message);
+
+    expect($preparation->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($history)->toHaveCount(3);
+});
+
+it('bounds actual preparation and verification responses while retaining safe phase evidence', function (string $phase): void {
+    $history = [];
+    $oversized = new Response($phase === 'create' ? 201 : 200, ['request-id' => 'oversized-1'], '{"id":"immutable-draft=","padding":"'.str_repeat('a', 4_194_304).'"}');
+    $responses = $phase === 'create' ? [$oversized] : [new Response(201, [], '{"id":"immutable-draft="}'), $oversized];
+    $mailbox = graphSubmissionMailbox($responses, $history);
+    $message = graphSubmissionMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+    if ($phase === 'create') {
+        expect($preparation->outcome)->toBe(PreparationOutcome::Uncertain)
+            ->and($preparation->status)->toBe(201)
+            ->and($preparation->headers)->toBe(['request-id' => ['oversized-1']])
+            ->and($preparation->draftId)->toBeNull()
+            ->and($history)->toHaveCount(1);
+
+        return;
+    }
+    try {
+        $mailbox->submitPrepared($preparation, $message);
+        test()->fail('An oversized verification response must stop before send.');
+    } catch (ApiRequestException $exception) {
+        expect($exception->status)->toBe(200)
+            ->and($exception->headers)->toBe(['request-id' => ['oversized-1']]);
+    }
+    expect($history)->toHaveCount(2);
+})->with(['create', 'verification']);
+
+it('rejects encoded Graph receipts without reading or automatic decompression', function (): void {
+    $history = [];
+    $reads = 0;
+    $closed = false;
+    $source = Utils::streamFor(gzencode('{"id":"immutable-draft="}'));
+    $body = FnStream::decorate($source, [
+        'read' => static function (int $length) use ($source, &$reads): string {
+            $reads++;
+
+            return $source->read($length);
+        },
+        'close' => static function () use ($source, &$closed): void {
+            $closed = true;
+            $source->close();
+        },
+    ]);
+    $mailbox = graphSubmissionMailbox([new Response(201, ['Content-Encoding' => 'gzip', 'request-id' => 'encoded-1'], $body)], $history);
+
+    $preparation = $mailbox->prepareSubmission(graphSubmissionMessage());
+
+    expect($preparation->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($preparation->status)->toBe(201)
+        ->and($preparation->headers)->toBe(['request-id' => ['encoded-1']])
+        ->and($preparation->draftId)->toBeNull()
+        ->and($reads)->toBe(0)
+        ->and($closed)->toBeTrue()
+        ->and($history)->toHaveCount(1)
+        ->and($history[0]['request']->getHeaderLine('Accept-Encoding'))->toBe('identity')
+        ->and($history[0]['options']['decode_content'])->toBeFalse();
+});
 
 /** @param array<string, mixed> $changes */
 function graphSubmissionMessage(array $changes = []): PreparedMessage

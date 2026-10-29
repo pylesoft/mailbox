@@ -251,10 +251,16 @@ trait PerformsApiRequests
         try {
             $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, &$attempted): ResponseInterface {
                 $requestOptions = $this->buildRequestOptions($options, $mailboxKey);
+                foreach (array_keys($requestOptions['headers']) as $name) {
+                    if (is_string($name) && strcasecmp($name, 'Accept-Encoding') === 0) {
+                        unset($requestOptions['headers'][$name]);
+                    }
+                }
+                $requestOptions['headers']['Accept-Encoding'] = 'identity';
                 $attempted = true;
 
                 return $this->client->request($method, $target, array_merge($requestOptions, [
-                    'allow_redirects' => false, 'debug' => false, 'http_errors' => false, 'stream' => true,
+                    'allow_redirects' => false, 'debug' => false, 'http_errors' => false, 'stream' => true, 'decode_content' => false,
                 ]));
             });
         } catch (\Throwable $e) {
@@ -284,7 +290,10 @@ trait PerformsApiRequests
         $stream = $response->getBody();
         $body = '';
         try {
-            while (! $stream->eof()) {
+            if (! in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
+                return new ProviderWriteResponse($response->getStatusCode(), $headers);
+            }
+            while (true) {
                 $chunk = $stream->read(min(8192, $maxResponseBytes - strlen($body) + 1));
                 if ($chunk === '' && $stream->eof()) {
                     break;
@@ -302,6 +311,12 @@ trait PerformsApiRequests
             } catch (\Throwable) {
                 // Cleanup cannot erase an already observed provider acknowledgement.
             }
+        }
+
+        $contentLength = $response->getHeaderLine('Content-Length');
+        if ($response->hasHeader('Content-Length') && in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)
+            && (! ctype_digit($contentLength) || ltrim($contentLength, '0') !== ltrim((string) strlen($body), '0'))) {
+            return new ProviderWriteResponse($response->getStatusCode(), $headers);
         }
 
         return new ProviderWriteResponse($response->getStatusCode(), $headers, $body);

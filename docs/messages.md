@@ -787,6 +787,8 @@ An uncertain preparation never causes another draft creation or an automatic sen
 
 `submitPrepared` checks the context, generation and original intent before provider I/O. It then reads the immutable draft, verifies its content and explicit To/Cc/Bcc lists, and makes one send request. Missing, changed, incomplete or unverifiable draft state stops before send. Each phase checks the selected grant again; a disconnected or superseded grant never falls back to configured application credentials.
 
+Failed verification throws `ApiRequestException` with the observed `status` and filtered safe `headers`, including an available request ID. It retains no raw response body or secret-bearing cause, and no send has been requested.
+
 Verification ignores JSON object-key order, recipient-list order, email-domain casing, header-name/body-type casing, and CRLF versus LF body line endings. Recipient counts, local address parts, display names, subject, header values and body content remain unchanged. Additional provider-generated headers are allowed; each caller-selected header and correlation must appear exactly once. No HTML rewriting, whitespace trimming or changed recipient/content value is treated as harmless normalization.
 
 An empty HTTP 202 returns `SubmissionOutcome::Accepted` with status, safe headers and the original correlation. `messageId` and `threadId` remain `null`; retain the separate preparation handle for its draft identity. Acceptance does not prove delivery. Timeout, 5xx, redirects and malformed or interrupted acknowledgements remain uncertain, without replay, enclosing-job release or cleanup.
@@ -797,7 +799,9 @@ The host owns durable operation state, exclusive submission scheduling and any r
 
 This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers. Supplying both body formats, nonempty files, raw MIME, native reply/forward intent, or unsupported headers requires a separate capability; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above.
 
-`maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget and remain strictly below Graph's 4 MB write limit. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow preserves observed status and safe headers without establishing successful preparation, verification or send.
+`maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget and remain strictly below Graph's 4 MB write limit. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow, truncation or inconsistent unencoded Content-Length preserves observed status and safe headers without establishing successful preparation, verification or send.
+
+One-attempt receipts request identity encoding and disable automatic decompression. An encoded response is closed without reading its body; its status and safe headers remain available, but it cannot establish preparation or send acceptance. This keeps compressed bytes from expanding before the response budget can run.
 
 Every preparation, verification and send request explicitly uses `Prefer: IdType="ImmutableId"`. Existing reads still honor the configured `prefer_immutable_ids` value. The new phases do not change that configuration.
 

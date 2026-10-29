@@ -43,14 +43,15 @@ final readonly class MsGraphDraftSubmission
     public function submit(SubmissionPreparation $preparation, PreparedMessage $message): SubmissionResult
     {
         $payload = $this->payload($message, 4_000_000);
+        $draftId = $preparation->draftId;
         if (! $preparation->context->matches($this->context)
             || $preparation->outcome !== PreparationOutcome::Prepared
-            || ! self::validId($preparation->draftId)
+            || ! is_string($draftId) || ! self::validId($draftId)
             || $preparation->correlationId !== $message->correlationId
             || ! hash_equals($preparation->intentFingerprint(), hash('sha256', $payload))) {
             throw new InvalidArgumentException('Submission preparation does not match the selected grant, generation, mailbox or original message intent.');
         }
-        $endpoint = $this->endpoint().'/'.rawurlencode($preparation->draftId);
+        $endpoint = $this->endpoint().'/'.rawurlencode($draftId);
         $verification = $this->client->requestOnce('GET', $endpoint, [
             'query' => [
                 '$select' => 'id,isDraft,from,toRecipients,ccRecipients,bccRecipients,subject,body,internetMessageHeaders,hasAttachments',
@@ -58,9 +59,9 @@ final readonly class MsGraphDraftSubmission
             ],
             'headers' => ['Prefer' => 'IdType="ImmutableId", outlook.body-content-type="'.($message->htmlBody === null ? 'text' : 'html').'"'],
         ], $this->context->mailbox, maxResponseBytes: 4_194_304);
-        $draft = json_decode($verification->body() ?? '', true);
-        if ($verification->status !== 200 || ! is_array($draft) || ! $this->matchesDraft($draft, $message, $preparation->draftId)) {
-            throw new ApiRequestException('The Graph draft could not be verified against the prepared intent; no send was attempted.', status: $verification->status);
+        $draft = json_decode($verification->body() ?? '');
+        if ($verification->status !== 200 || ! $draft instanceof \stdClass || ! $this->matchesDraft(get_object_vars($draft), $message, $draftId)) {
+            throw new ApiRequestException('The Graph draft could not be verified against the prepared intent; no send was attempted.', status: $verification->status, headers: $verification->headers);
         }
         $response = $this->client->requestOnce('POST', $endpoint.'/send', [
             'headers' => ['Prefer' => 'IdType="ImmutableId"', 'Content-Length' => '0'],
@@ -130,19 +131,24 @@ final readonly class MsGraphDraftSubmission
             }
         }
         $body = $draft['body'] ?? null;
-        if (! is_array($body) || ! is_string($body['contentType'] ?? null)
-            || strtolower($body['contentType']) !== ($message->htmlBody === null ? 'text' : 'html')
-            || ! is_string($body['content'] ?? null)
-            || str_replace("\r\n", "\n", $body['content']) !== str_replace("\r\n", "\n", $message->htmlBody ?? $message->textBody ?? '')) {
+        if (! $body instanceof \stdClass || ! is_string($body->contentType ?? null)
+            || strtolower($body->contentType) !== ($message->htmlBody === null ? 'text' : 'html')
+            || ! is_string($body->content ?? null)
+            || str_replace("\r\n", "\n", $body->content) !== str_replace("\r\n", "\n", $message->htmlBody ?? $message->textBody ?? '')) {
             return false;
         }
         if (! is_array($draft['internetMessageHeaders'] ?? null) || ! array_is_list($draft['internetMessageHeaders'])) {
             return false;
         }
+        $headers = [];
+        foreach ($draft['internetMessageHeaders'] as $header) {
+            if (! $header instanceof \stdClass || ! is_string($header->name ?? null) || ! is_string($header->value ?? null)) {
+                return false;
+            }
+            $headers[strtolower($header->name)][] = $header->value;
+        }
         foreach ([...$message->headers, 'X-Mailbox-Correlation-Id' => $message->correlationId] as $name => $value) {
-            $matches = array_filter($draft['internetMessageHeaders'], static fn (mixed $header): bool => is_array($header)
-                && is_string($header['name'] ?? null) && strtolower($header['name']) === strtolower($name));
-            if (count($matches) !== 1 || (array_values($matches)[0]['value'] ?? null) !== $value) {
+            if (($headers[strtolower($name)] ?? null) !== [$value]) {
                 return false;
             }
         }
@@ -158,7 +164,9 @@ final readonly class MsGraphDraftSubmission
         }
         $addresses = [];
         foreach ($recipients as $recipient) {
+            $recipient = $recipient instanceof \stdClass ? get_object_vars($recipient) : $recipient;
             $email = is_array($recipient) ? ($recipient['emailAddress'] ?? null) : null;
+            $email = $email instanceof \stdClass ? get_object_vars($email) : $email;
             if (! is_array($email) || ! is_string($email['address'] ?? null) || ! is_string($email['name'] ?? '')) {
                 return null;
             }
