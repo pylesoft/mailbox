@@ -145,7 +145,7 @@ it('throws mailbox access denied for 403', function (): void {
 
     $graph = new GraphClient(['max_retries' => 1], $token, $rateLimiter, $client);
 
-    $graph->get('users/test/messages', mailbox: 'test@example.com');
+    $graph->get('users/test%40example.com/messages', mailbox: 'test@example.com');
 })->throws(MailboxAccessDeniedException::class);
 
 it('does not retry unsupported reference attachment raw content responses', function (): void {
@@ -191,7 +191,7 @@ it('does not retry unsupported reference attachment raw content responses', func
 
     $graph = new GraphClient(['max_retries' => 3], $token, $rateLimiter, $client);
 
-    expect(fn () => $graph->stream('users/test/messages/message/attachments/reference/$value', 'test@example.com'))
+    expect(fn () => $graph->stream('users/test%40example.com/messages/message/attachments/reference/$value', 'test@example.com'))
         ->toThrow(fn (ApiRequestException $exception): bool => $exception->status === 405);
     expect($history)->toHaveCount(1);
 });
@@ -344,7 +344,7 @@ it('releases queue jobs instead of sleeping when configured', function (): void 
 
     $graph = new GraphClient(['max_retries' => 2, 'queue_retry_strategy' => 'release'], $token, $rateLimiter, $client);
 
-    expect(fn () => $graph->get('users/test/messages', mailbox: 'test@example.com'))
+    expect(fn () => $graph->get('users/test%40example.com/messages', mailbox: 'test@example.com'))
         ->toThrow(RateLimitException::class);
 
     expect($state->releasedDelay)->toBe(3);

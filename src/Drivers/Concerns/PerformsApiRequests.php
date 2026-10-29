@@ -7,6 +7,10 @@ namespace Pyle\Mailbox\Drivers\Concerns;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Uri;
+use GuzzleHttp\Psr7\UriResolver;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Support\Facades\Log;
 use JsonException;
@@ -23,9 +27,12 @@ trait PerformsApiRequests
 
     private int $retryBackoffBase;
 
+    private string $apiBaseUri;
+
     /** @param array<string, mixed> $config */
     protected function bootApiClient(array $config, ?Client $client, string $baseUri): void
     {
+        $this->apiBaseUri = $baseUri;
         $this->client = $client ?? new Client([
             'base_uri' => $baseUri,
             'timeout' => (int) ($config['timeout'] ?? 30),
@@ -38,15 +45,44 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $query
      * @return array<string, mixed>
      */
-    public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+    public function get(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
     {
-        return $this->request('GET', $endpoint, ['query' => $query], $mailbox);
+        return $this->request('GET', $endpoint, $query === [] ? [] : ['query' => $query], $mailbox);
+    }
+
+    public function continuationEndpoint(#[\SensitiveParameter] mixed $link, #[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
+    {
+        if (! is_string($link) || $link === '' || preg_match('/[\x00-\x20\x7f\\\\]/', $link)) {
+            throw new ApiRequestException('The provider returned a missing or malformed continuation.');
+        }
+
+        $current = new Uri($this->resolveTarget($endpoint, $mailbox));
+        try {
+            $relative = new Uri($link);
+        } catch (\InvalidArgumentException) {
+            throw new ApiRequestException('The provider returned a malformed continuation.');
+        }
+
+        if ($relative->getQuery() !== (parse_url($link, PHP_URL_QUERY) ?? '')) {
+            throw new ApiRequestException('The provider returned a malformed continuation query.');
+        }
+
+        $candidate = $relative->getScheme() === '' && ! str_starts_with($link, '/') && ! str_starts_with($link, 'users/')
+            ? (string) UriResolver::resolve($current, $relative)
+            : $link;
+        $target = new Uri($this->resolveTarget($candidate, $mailbox));
+
+        if ($target->getPath() !== $current->getPath() || $target->getQuery() === '') {
+            throw new ApiRequestException('The provider continuation does not match the requested resource.');
+        }
+
+        return (string) $target;
     }
 
     /** @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
-    public function post(string $endpoint, array $payload = [], ?string $mailbox = null): array
+    public function post(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $payload = [], ?string $mailbox = null): array
     {
         return $this->request('POST', $endpoint, ['json' => $payload], $mailbox);
     }
@@ -54,17 +90,17 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
-    public function patch(string $endpoint, array $payload = [], ?string $mailbox = null): array
+    public function patch(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $payload = [], ?string $mailbox = null): array
     {
         return $this->request('PATCH', $endpoint, ['json' => $payload], $mailbox);
     }
 
-    public function delete(string $endpoint, ?string $mailbox = null): void
+    public function delete(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): void
     {
         $this->request('DELETE', $endpoint, [], $mailbox);
     }
 
-    public function stream(string $endpoint, ?string $mailbox = null): StreamInterface
+    public function stream(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): StreamInterface
     {
         $response = $this->requestRaw('GET', $endpoint, ['stream' => true], $mailbox);
 
@@ -74,7 +110,7 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $options
      * @return array<string, mixed>
      */
-    public function request(string $method, string $endpoint, array $options = [], ?string $mailbox = null): array
+    public function request(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null): array
     {
         $response = $this->requestRaw($method, $endpoint, $options, $mailbox);
 
@@ -90,22 +126,25 @@ trait PerformsApiRequests
 
         try {
             return json_decode($body, true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException $exception) {
+        } catch (JsonException) {
+            $endpoint = $this->redactedEndpoint($endpoint);
             throw new ProviderTransportException(
                 message: sprintf('%s returned an invalid JSON response for %s.', $this->providerLabel(), $endpoint),
                 endpoint: $endpoint,
                 mailbox: $this->mailboxKey($mailbox),
-                previous: $exception,
+                previous: new JsonException('The provider returned invalid JSON.'),
             );
         }
     }
 
     /** @param array<string, mixed> $options */
-    private function requestRaw(string $method, string $endpoint, array $options = [], ?string $mailbox = null): ResponseInterface
+    private function requestRaw(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null): ResponseInterface
     {
+        $target = $this->resolveTarget($endpoint, $mailbox);
+        $endpoint = $this->redactedEndpoint($endpoint);
         $mailboxKey = $this->mailboxKey($mailbox);
 
-        return $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $endpoint, $options, $mailbox, $mailboxKey): ResponseInterface {
+        return $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $endpoint, $target, $options, $mailbox, $mailboxKey): ResponseInterface {
             $attempt = 0;
             $reauthAttempted = false;
 
@@ -114,14 +153,22 @@ trait PerformsApiRequests
                 $startedAt = microtime(true);
 
                 try {
-                    return $this->sendRequest($method, $endpoint, $options, $mailboxKey, $attempt, $startedAt);
+                    return $this->sendRequest($method, $target, $options, $mailboxKey, $attempt, $startedAt);
                 } catch (ConnectException $e) {
+                    $e = new ConnectException($this->providerLabel().' connection failed.', new Request($method, $endpoint));
                     if ($this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
                         continue;
                     }
 
                     throw $this->wrapUnexpectedThrowable($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt);
                 } catch (RequestException $e) {
+                    $response = $e->getResponse();
+                    $status = $response?->getStatusCode();
+                    $e = new RequestException(
+                        $this->providerLabel().' request failed'.($status === null ? '.' : ' with HTTP '.$status.'.'),
+                        new Request($method, $endpoint),
+                        $response === null ? null : new Response($response->getStatusCode(), ['Retry-After' => (string) $this->retryAfterSeconds($e)]),
+                    );
                     $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
 
                     if ($e->getResponse() === null && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
@@ -134,7 +181,7 @@ trait PerformsApiRequests
 
                     $this->throwMappedException($e, $mailbox, $mailboxKey, $endpoint, $attempt);
                 } catch (\Throwable $e) {
-                    throw $this->wrapUnexpectedThrowable($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt);
+                    throw $this->wrapUnexpectedThrowable(new \RuntimeException($this->providerLabel().' request failed ('.$e::class.').'), $method, $endpoint, $mailbox, $mailboxKey, $attempt);
                 }
             }
         });
@@ -143,17 +190,21 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $options */
     private function sendRequest(
         string $method,
-        string $endpoint,
-        array $options,
+        #[\SensitiveParameter] string $endpoint,
+        #[\SensitiveParameter] array $options,
         string $mailboxKey,
         int $attempt,
         float $startedAt,
     ): ResponseInterface {
         $response = $this->client->request(
             $method,
-            $this->resolveTarget($endpoint),
-            $this->buildRequestOptions($options, $mailboxKey),
+            $endpoint,
+            array_merge($this->buildRequestOptions($options, $mailboxKey), ['allow_redirects' => false, 'debug' => false]),
         );
+
+        if ($response->getStatusCode() >= 300 && $response->getStatusCode() < 400) {
+            throw new ApiRequestException('Authenticated provider requests do not follow redirects.');
+        }
 
         $this->logDebug($this->providerLabel().' request completed', [
             'method' => $method,
@@ -248,11 +299,48 @@ trait PerformsApiRequests
         );
     }
 
-    private function resolveTarget(string $endpoint): string
+    private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
     {
-        return str_starts_with($endpoint, 'http://') || str_starts_with($endpoint, 'https://')
-            ? $endpoint
-            : ltrim($endpoint, '/');
+        if (preg_match('/[\x00-\x20\x7f\\\\]/', $endpoint) || str_starts_with($endpoint, '//')) {
+            throw new ApiRequestException('The authenticated request destination is invalid.');
+        }
+
+        $base = new Uri($this->apiBaseUri);
+        $basePath = $base->getPath();
+        $relative = str_starts_with($endpoint, '/') && ! str_starts_with($endpoint, $basePath)
+            ? ltrim($endpoint, '/')
+            : $endpoint;
+
+        try {
+            $uri = UriResolver::resolve($base, new Uri($relative));
+        } catch (\InvalidArgumentException) {
+            throw new ApiRequestException('The authenticated request destination is invalid.');
+        }
+
+        $decodedPath = rawurldecode($uri->getPath());
+        if (preg_match('/[\x00-\x20\x7f\\\\]/', $decodedPath)
+            || in_array('.', explode('/', $decodedPath), true) || in_array('..', explode('/', $decodedPath), true)) {
+            throw new ApiRequestException('The authenticated request destination is invalid.');
+        }
+
+        if ($uri->getScheme() !== $base->getScheme() || $uri->getHost() !== $base->getHost()
+            || $uri->getPort() !== $base->getPort() || $uri->getUserInfo() !== '' || $uri->getFragment() !== ''
+            || ! str_starts_with($uri->getPath(), $basePath)) {
+            throw new ApiRequestException('The authenticated request destination is not trusted.');
+        }
+
+        return (string) $uri;
+    }
+
+    private function assertMailboxTarget(#[\SensitiveParameter] string $target, ?string $mailbox, bool $allowMe = false): void
+    {
+        $basePath = (new Uri($this->apiBaseUri))->getPath();
+        $segments = explode('/', substr((new Uri($target))->getPath(), strlen($basePath)));
+
+        if ($mailbox !== null && ($segments[0] !== 'users' || ! isset($segments[1])
+            || (strcasecmp(rawurldecode($segments[1]), trim($mailbox)) !== 0 && ! ($allowMe && $segments[1] === 'me')))) {
+            throw new ApiRequestException('The authenticated request destination does not match the selected mailbox.');
+        }
     }
 
     protected function retryAfterSeconds(RequestException $e): int
@@ -298,6 +386,9 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $context */
     protected function logDebug(string $message, array $context = []): void
     {
+        if (isset($context['endpoint']) && is_string($context['endpoint'])) {
+            $context['endpoint'] = $this->redactedEndpoint($context['endpoint']);
+        }
         $channel = (string) config('mailbox.log_channel', 'stack');
 
         Log::channel($channel)->debug($message, $context);
@@ -306,9 +397,23 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $context */
     protected function logInfo(string $message, array $context = []): void
     {
+        if (isset($context['endpoint']) && is_string($context['endpoint'])) {
+            $context['endpoint'] = $this->redactedEndpoint($context['endpoint']);
+        }
         $channel = (string) config('mailbox.log_channel', 'stack');
 
         Log::channel($channel)->info($message, $context);
+    }
+
+    private function redactedEndpoint(#[\SensitiveParameter] string $endpoint): string
+    {
+        return explode('?', $endpoint, 2)[0];
+    }
+
+    /** @return array{provider: string} */
+    public function __debugInfo(): array
+    {
+        return ['provider' => $this->providerLabel()];
     }
 
     abstract protected function driverKey(): string;

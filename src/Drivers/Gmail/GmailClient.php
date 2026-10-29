@@ -23,7 +23,9 @@ use Pyle\Mailbox\Support\GrantAuthorization;
 
 class GmailClient
 {
-    use PerformsApiRequests;
+    use PerformsApiRequests {
+        resolveTarget as private resolveApiTarget;
+    }
 
     /** @param array<string, mixed> $config */
     public function __construct(
@@ -48,6 +50,14 @@ class GmailClient
     protected function providerLabel(): string
     {
         return 'Gmail';
+    }
+
+    private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
+    {
+        $target = $this->resolveApiTarget($endpoint, $mailbox);
+        $this->assertMailboxTarget($target, $mailbox, allowMe: true);
+
+        return $target;
     }
 
     /**
