@@ -240,8 +240,11 @@ trait PerformsApiRequests
     }
 
     /** @param array<string, mixed> $options */
-    public function requestOnce(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null): ProviderWriteResponse
+    public function requestOnce(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, int $maxResponseBytes = 65_536): ProviderWriteResponse
     {
+        if ($maxResponseBytes < 1) {
+            throw new \InvalidArgumentException('The one-attempt response byte budget must be positive.');
+        }
         $target = $this->resolveTarget($endpoint, $mailbox);
         $mailboxKey = $this->mailboxKey($mailbox);
         $attempted = false;
@@ -282,8 +285,11 @@ trait PerformsApiRequests
         $body = '';
         try {
             while (! $stream->eof()) {
-                $chunk = $stream->read(min(8192, 65_537 - strlen($body)));
-                if ($chunk === '' || strlen($body) + strlen($chunk) > 65_536) {
+                $chunk = $stream->read(min(8192, $maxResponseBytes - strlen($body) + 1));
+                if ($chunk === '' && $stream->eof()) {
+                    break;
+                }
+                if ($chunk === '' || strlen($body) + strlen($chunk) > $maxResponseBytes) {
                     return new ProviderWriteResponse($response->getStatusCode(), $headers);
                 }
                 $body .= $chunk;
