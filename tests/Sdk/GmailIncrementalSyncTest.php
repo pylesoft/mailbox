@@ -14,10 +14,10 @@ use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncIdentity;
 use Pyle\Mailbox\DTOs\SyncScope;
-use Pyle\Mailbox\Facades\Mailbox;
-use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
+use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
 it('reconciles specific Gmail history evidence without guessing created versus updated or deleting removed labels', function (): void {
@@ -57,7 +57,7 @@ it('reconciles specific Gmail history evidence without guessing created versus u
 });
 
 /** @param list<mixed> $responses
- * @param array<int, mixed> $history
+ * @param  array<int, mixed>  $history
  */
 function incrementalSyncResource(array $responses, array &$history, ?TestGrantTokenProvider $tokens = null): SupportsIncrementalSync
 {

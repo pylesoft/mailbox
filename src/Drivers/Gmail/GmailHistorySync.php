@@ -13,8 +13,8 @@ use Pyle\Mailbox\DTOs\SyncIdentity;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
-use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 final readonly class GmailHistorySync
@@ -113,7 +113,7 @@ final readonly class GmailHistorySync
     }
 
     /**
-     * @param array<string, mixed> $response
+     * @param  array<string, mixed>  $response
      * @return ?array{upserts: list<string>, removals: list<string>}
      */
     private function changes(array $response, string $position): ?array
@@ -156,7 +156,7 @@ final readonly class GmailHistorySync
     }
 
     /**
-     * @param array<string, mixed> $entry
+     * @param  array<string, mixed>  $entry
      * @return list<string>
      */
     private function ids(array $entry, string $type, bool $nested): array
@@ -178,9 +178,9 @@ final readonly class GmailHistorySync
     }
 
     /**
-     * @param array<string, mixed> $state
-     * @param list<string> $upserts
-     * @param list<string> $removals
+     * @param  array<string, mixed>  $state
+     * @param  list<string>  $upserts
+     * @param  list<string>  $removals
      */
     private function unfinished(SyncIdentity $identity, array $state, array $upserts, array $removals, string $reason): ChangePage
     {

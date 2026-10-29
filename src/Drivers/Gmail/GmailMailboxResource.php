@@ -9,8 +9,8 @@ use Pyle\Mailbox\Contracts\FolderResource;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
-use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
+use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\SyncBudget;
@@ -20,7 +20,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class GmailMailboxResource implements MailboxResource, SupportsInitialSync, SupportsIncrementalSync
+class GmailMailboxResource implements MailboxResource, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GmailClient $client,
