@@ -17,6 +17,7 @@ final readonly class SubmissionPreparation
         public ?int $status,
         public array $headers = [],
         #[\SensitiveParameter] private string $intentFingerprint = '',
+        public ?string $conversationId = null,
     ) {}
 
     public function intentFingerprint(): string
@@ -29,7 +30,7 @@ final readonly class SubmissionPreparation
     {
         return [
             'context' => $this->context, 'outcome' => $this->outcome, 'correlationId' => $this->correlationId,
-            'draftId' => $this->draftId, 'status' => $this->status, 'headers' => $this->headers,
+            'draftId' => $this->draftId, 'status' => $this->status, 'headers' => $this->headers, 'conversationId' => $this->conversationId,
         ];
     }
 }
