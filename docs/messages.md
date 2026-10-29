@@ -925,18 +925,25 @@ $env:MAILBOX_SUBMISSION_CONTROL_PATH = $mailboxControlPath
 php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='small file' --compact
 php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='cold 10 MiB' --compact
 php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='cold 20 MiB' --compact
+$mailboxWarmControlPath = Join-Path $env:TEMP ('mailbox-warm-control-' + [guid]::NewGuid() + '.json')
+$env:MAILBOX_SUBMISSION_CONTROL_PATH = $mailboxWarmControlPath
+php vendor/bin/pest tests/Sdk/GmailSubmissionWireTest.php --filter='warm 20 MiB' --compact
 Remove-Item Env:\MAILBOX_SUBMISSION_CONTROL_PATH
 ```
 
-Each invocation starts one owned local TLS server with a client-local CA and routes the original trusted Gmail HTTPS destination to it through cURL. No provider account, global DNS or trust store is changed. The server independently inspects received JSON/MIME and exact file hashes. The tests report absolute PHP heap growth, bind the cold receipt to the same PHP/runtime and package source, and require each large case's excess above that cold control to remain within the unchanged 8 MiB allocation budget. This separates demonstrated first-use framework/transport costs from payload-size growth; it does not claim an 8 MiB total cold heap. The receipt contains fixture measurements only and may be removed after verification.
+Each cold invocation starts one owned local TLS server with a client-local CA and routes the original trusted Gmail HTTPS destination to it through cURL. The warm reply case runs a tiny fixture and then a 20 MiB reply in one test process, using two sequential owned servers. No provider account, global DNS or trust store is changed. The server independently inspects received JSON/MIME, reply identifiers, the requested thread ID and exact file hashes.
+
+The tests report absolute PHP heap growth and bind the control receipt to the same PHP/runtime and package source. Cold large cases must stay within the unchanged 8 MiB allocation budget above their cold control. The complementary warm reply case checks its actual incremental peak directly against that same budget. This separates demonstrated first-use framework/transport costs from payload-size growth; it does not claim an 8 MiB total cold heap or require production warm-up. The receipts contain fixture measurements only and may be removed after verification.
 
 Verified on 64-bit PHP 8.4.25 with Guzzle 7.16.1 and Symfony Mime 8.1.10, in fresh serial processes:
 
 | Decoded files | Actual MIME bytes | Actual JSON bytes | Absolute cold heap growth | Growth above cold control |
 | --- | ---: | ---: | ---: | ---: |
-| 8 KiB control | 11,813 | 15,761 | 9,261,504 | — |
-| 10 MiB | 14,349,539 | 19,132,729 | 9,259,056 | 0 |
-| 20 MiB aggregate | 28,698,660 | 38,264,890 | 9,259,024 | 0 |
+| 8 KiB control | 11,813 | 15,761 | 9,276,040 | — |
+| 10 MiB | 14,349,539 | 19,132,729 | 9,267,264 | 0 |
+| 20 MiB aggregate | 28,698,660 | 38,264,890 | 9,266,376 | 0 |
+
+The warm 20 MiB reply used 28,698,767 MIME bytes, 38,265,058 JSON bytes and 161,488 bytes of actual incremental PHP heap. Its received thread ID, typed In-Reply-To/References and both chosen files were checked independently by the server. The [ticket 17 receipt](plans/mailbox-provider-sdk/tickets/17-reply-forward-and-inspect-gmail-submission-evidence.md) records the measured source and separate gates.
 
 These are local protocol and PHP-buffer measurements. They do not establish live Gmail acceptance, delivery, total native/RSS memory, other PHP/runtime behavior or the host's storage capacity. The [ticket 18 receipt](plans/mailbox-provider-sdk/tickets/18-freeze-file-streams-for-gmail-submission.md) retains the original cold-heap failure, measured source fingerprint and separate verification gates.
 
