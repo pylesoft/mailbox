@@ -34,3 +34,7 @@ Prepare native Graph reply and forward drafts from explicit context, normalize t
 
 The empty file-manifest case must be complete here. Uploading chosen small/large files is delivered by ticket 21 and combined native file cases are checked by the compatibility and live gates.
 
+## Comments
+
+- 2026-10-29: Claimed by `mailbox_ticket_20` on `feat/mailbox-sdk-20`, isolated from the clean integration tip `fe66693636b2151ae15c5057df4591d4b82338a3` without an upstream. The approved seam is the public SDK with real Graph transport/mapping and provider HTTP fakes, with SDK database access forbidden. Heavy checks wait for the shared check slot. Publication, live sends, provider setup and consumer changes are outside this claim.
+
