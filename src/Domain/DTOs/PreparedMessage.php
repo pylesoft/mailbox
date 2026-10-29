@@ -24,5 +24,6 @@ final readonly class PreparedMessage
         public array $bcc = [],
         public array $headers = [],
         public array $files = [],
+        public ?ReplyForwardContext $context = null,
     ) {}
 }
