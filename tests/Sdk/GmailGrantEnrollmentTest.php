@@ -202,6 +202,7 @@ it('preserves omission only for the exact selected identity and replaces rotatio
     } else {
         $oauth->handleCallback($context, 'host-a', $query['state'], 'second-code');
         expect($host->load($context)?->refreshToken())->toBe($change === 'rotation' ? 'rotated-refresh' : 'renewable-token')
+            ->and($host->load($context)?->nonceHash())->toBe($change === 'rotation' ? hash('sha256', $query['nonce']) : $previous->nonceHash())
             ->and($host->load($context)?->revision)->not->toBe($previous->revision)
             ->and($context->lifecycleGeneration)->toBe('1');
     }
