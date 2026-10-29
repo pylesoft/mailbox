@@ -14,7 +14,6 @@ use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
-use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
@@ -242,10 +241,6 @@ class GmailClient
         string $mailboxKey,
         int $attempt,
     ): ApiRequestException {
-        if ($e instanceof GrantAccessDeniedException) {
-            throw $e;
-        }
-
         $this->logInfo('Gmail request failed with unexpected throwable', [
             'method' => $method,
             'endpoint' => $endpoint,

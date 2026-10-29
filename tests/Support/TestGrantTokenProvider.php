@@ -10,6 +10,8 @@ use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 
 final class TestGrantTokenProvider implements GrantTokenProvider
 {
+    public int $tokenReads = 0;
+
     /** @param array<string, array{connection: string, generation: string, mailboxes: list<string>, token: string}> $grants */
     public function __construct(public array $grants) {}
 
@@ -24,6 +26,8 @@ final class TestGrantTokenProvider implements GrantTokenProvider
 
     public function accessToken(GrantContext $context): string
     {
+        $this->tokenReads++;
+
         return $this->grants[$context->grantId]['token'];
     }
 }

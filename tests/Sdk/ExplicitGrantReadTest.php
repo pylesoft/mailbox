@@ -8,13 +8,20 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Pyle\Mailbox\Contracts\GrantTokenProvider;
+use Pyle\Mailbox\Drivers\Gmail\GmailClient;
+use Pyle\Mailbox\Drivers\Gmail\GmailTokenManager;
+use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMailboxResource;
+use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
+use Pyle\Mailbox\Drivers\MsGraph\TokenManager;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\MailboxServiceProvider;
+use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Tests\Support\LegacyCustomDriver;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
@@ -212,6 +219,24 @@ it('does not fall back to configured authority after the selected grant is rejec
         ->and($history)->toHaveCount(1)
         ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer rejected-token');
 })->with(['gmail', 'ms-graph']);
+
+it('keeps the optional client authorization seam bound to its selected target', function (string $driver, string $mismatch): void {
+    $history = [];
+    $http = grantReadHttp($driver, [], $history);
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => 'selected-token'],
+    ]);
+    $authorization = new GrantAuthorization(new GrantContext('connection', 'grant', '1', $driver, 'same@example.com'), $tokens);
+    $client = $driver === 'gmail'
+        ? new GmailClient([], new GmailTokenManager([]), new RateLimiter([]), $http, $authorization)
+        : new GraphClient([], new TokenManager([]), new RateLimiter([]), $http, $authorization);
+    $endpoint = $mismatch === 'origin' ? 'https://untrusted.example/users/same%40example.com/messages/one' : 'users/other%40example.com/messages/one';
+    $mailbox = $mismatch === 'argument' ? 'other@example.com' : 'same@example.com';
+
+    expect(fn () => $client->get($endpoint, mailbox: $mailbox))->toThrow($mismatch === 'argument' ? GrantAccessDeniedException::class : ApiRequestException::class)
+        ->and($history)->toBe([])
+        ->and($tokens->tokenReads)->toBe(0);
+})->with(['gmail', 'ms-graph'])->with(['path', 'origin', 'argument']);
 
 /** @param list<Response|callable> $responses */
 function grantReadHttp(string $driver, array $responses, array &$history): Client
