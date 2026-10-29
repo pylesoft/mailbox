@@ -1,6 +1,14 @@
 # Upgrade Guide
 
-Mailbox follows [semantic versioning](https://semver.org), so breaking changes only appear in major releases. This page will document every breaking change, deprecation, and required migration step as new versions are released. For now, the package has no breaking changes to document -- but the structure is here and ready for when that day comes.
+Mailbox follows [semantic versioning](https://semver.org). This page records upgrade requirements and security corrections.
+
+## Unreleased: Authenticated Destinations and Graph Continuations
+
+Graph continuation queries now reach the provider unchanged. Persist returned delta links as private state and resume them only for their original mailbox and folder. Placeholder tokens, foreign URLs and links targeting another resource are rejected. Malformed or cyclic pages and message-query page limits now fail explicitly instead of returning partial success.
+
+Authenticated Graph and Gmail clients reject destinations outside their configured provider origin and base path, enforce a supplied mailbox context, and refuse redirects. A Gmail `users/me` request uses the selected mailbox's authorization. These are security exceptions to compatibility: raw clients can no longer forward credentials to arbitrary download hosts or follow redirects. Use the provider's explicit preauthenticated upload flow when supported.
+
+Transport errors and logs no longer retain raw provider bodies, bearer headers or continuation queries. Native client and delta-result debug dumps redact secrets. The existing checkpoint property and array/JSON values remain unchanged for private persistence.
 
 ## Checking Your Current Version
 

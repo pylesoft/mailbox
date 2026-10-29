@@ -32,3 +32,7 @@ Repair continuation requests through the existing public read path before expand
 
 Keep this repair in the shared transport seam. The bounded synchronization tickets will add the complete checkpoint format and scope contract.
 
+## Comments
+
+- 2026-10-29: Claimed locally by the ticket 01 implementation agent on `feat/mailbox-sdk-01`, starting from approved integration commit `b899dab`. Verification uses public provider reads with real Guzzle transport, MockHandler and request history. Resolution remains open until the acceptance criteria and affected checks pass.
+

@@ -229,6 +229,14 @@ Mailbox dispatches events at key moments in the authentication lifecycle:
 
 Listen for these events to build proactive alerting. See [Events](../events.md) for details.
 
+## Authenticated Request Destinations
+
+Authenticated requests stay on the configured Graph API origin and API-version path. When you supply a mailbox context, the URL must target `users/{mailbox}` for that mailbox. Ordinary relative resource paths and trusted absolute Graph URLs remain supported. Foreign origins, schemes, ports, user information, fragments and unsafe paths are rejected before token acquisition or HTTP transmission.
+
+Authenticated Graph and Gmail requests do not follow redirects, including redirects to the same origin. This prevents a redirect from moving credentials to another resource. Preauthenticated upload URLs require a separate provider upload flow; do not pass them to the authenticated raw client.
+
+Gmail applies the same origin restriction using its configured `api_base_uri`. Its explicit `users/{mailbox}` target must match the selected mailbox; `users/me` uses that mailbox's authorization. These checks restrict request destinations and do not grant access to a mailbox.
+
 ## Troubleshooting
 
 ### `invalid_client`
