@@ -1,6 +1,6 @@
 # Attachments
 
-Most mail integrations eventually need to download files -- invoices, contracts, receipts, or embedded images. Mailbox provides a complete attachment pipeline: list metadata without downloading, download one or all attachments to a Laravel filesystem disk, or stream raw bytes for on-the-fly processing. Every download is content-addressed and deduplicated automatically, so re-processing the same message never wastes storage or bandwidth.
+Most mail integrations eventually need to download files -- invoices, contracts, receipts, or embedded images. Mailbox can list attachment metadata, download files to your Laravel filesystem disk, or return their bytes as streams. Downloads reuse existing files when their content matches; the provider bytes are still read to verify that match.
 
 Attachments are accessed through the message resource. You start with a message ID, then branch into metadata listing, single-file downloads, bulk downloads, or raw streaming.
 
@@ -85,7 +85,7 @@ $allFiles = Mailbox::mailbox('invoices@acme.com')
 
 ## Streaming Attachments
 
-When you do not want to write the file to disk -- for example, when piping it directly to an HTTP response, a ZIP archive, or an external API -- use `stream()`:
+Use `stream()` to read validated bytes without saving a permanent copy on your configured filesystem disk:
 
 ```php
 use Psr\Http\Message\StreamInterface;
@@ -111,14 +111,61 @@ $stream = Mailbox::mailbox('invoices@acme.com')
     ->stream();
 
 return response()->streamDownload(function () use ($stream) {
-    echo $stream->getContents();
+    try {
+        while (! $stream->eof()) {
+            echo $stream->read(8192);
+        }
+    } finally {
+        $stream->close();
+    }
 }, $meta->name, [
     'Content-Type' => $meta->contentType,
 ]);
 ```
 
 > **Note**
-> Streaming fetches the file content from the provider but does not write to disk or trigger deduplication. The `AttachmentDownloaded` and `AttachmentSkipped` events are only dispatched by `download()` and `downloadAttachments()`.
+> The built-in providers validate the complete read into an owned temporary file before returning its stream. Closing or releasing the stream removes that temporary file. Streaming does not save to your configured disk or trigger deduplication events. `AttachmentDownloaded` and `AttachmentSkipped` are dispatched by `download()` and `downloadAttachments()`.
+
+## Read Limits
+
+The built-in Gmail and Graph resources support the optional `SupportsAttachmentReadLimits` capability. You may select limits for one resource without changing the mandatory attachment interface used by custom drivers:
+
+```php
+use Pyle\Mailbox\Contracts\SupportsAttachmentReadLimits;
+use Pyle\Mailbox\DTOs\AttachmentReadLimits;
+
+$attachment = Mailbox::mailbox('invoices@acme.com')
+    ->message($messageId)
+    ->attachment($attachmentId);
+
+if (! $attachment instanceof SupportsAttachmentReadLimits) {
+    throw new LogicException('This driver does not support bounded attachment reads.');
+}
+
+$file = $attachment->withReadLimits(new AttachmentReadLimits(
+    maxResponseBytes: 32 * 1024 * 1024,
+    maxFileBytes: 10 * 1024 * 1024,
+    maxMemoryBytes: 64 * 1024 * 1024,
+))->download();
+```
+
+The default technical limits are 64 MiB of provider response bytes, 32 MiB of file bytes, and a 128 MiB allocation budget. Each operation shares its response and memory budget across its metadata and content requests. Actual bytes count even when a provider declares a smaller size. These limits apply together, so a read can reach its response or memory limit before its file limit. `downloadAttachments()` uses the defaults separately for each attachment.
+
+`ResponseLimitExceededException` reports a limit failure. Invalid encoding, missing content, inconsistent lengths, interrupted streams and unsupported responses raise a `MailboxException` subclass. Valid empty files remain empty files. Authenticated requests stay on the selected provider destination and reject redirects. Bounded reads request identity HTTP content encoding and reject compressed HTTP representations before reading them. A gzip file's media bytes remain valid file content.
+
+### Memory Behavior
+
+Gmail responses contain JSON and base64url content. The SDK retains a bounded encoded JSON envelope, reserves memory for string copies and JSON structure before native decoding, then decodes file bytes in small chunks into an owned temporary stream. It also reserves relevant MIME metadata before the existing parameter parser and path copies before sanitization and output. File-data strings are not counted again as MIME metadata. Gmail memory use therefore grows with the bounded encoded response. Graph raw bytes, content hashing and the built-in storage output path use streams.
+
+The allocation guard covers package-controlled buffers and checks tracked heap growth. Framework and dependency initialization, host adapters, third-party HTTP handlers and filesystem adapters can allocate independently. The configured amount is not a hard ceiling on cold-process memory. The SDK performs no production warmup to hide those costs.
+
+On 64-bit PHP 8.4.25, controlled 10 MiB fixtures measured 29,375,912 bytes of extra heap for Gmail and 92,816 bytes for the Graph download after a public metadata request initialized the transport. The Graph measurement includes real transport receipt, hashing and local filesystem output. A cold 2 MiB operation rejected during framework/transport initialization after 4,593,400 bytes of extra heap. Dense valid and truncated JSON were rejected before native JSON decoding within a 2 MiB budget after transport initialization. These measurements do not establish a runtime-independent allocator bound or constant memory for Gmail.
+
+Read the returned stream incrementally and close it when finished. Calling `getContents()`, casting a stream to a string, detaching its raw resource, or using a host filesystem adapter that buffers content creates caller-controlled allocations outside that measured path. Your application still chooses its storage visibility, file authorization, accepted media types and file-size policy.
+
+### Graph Content Forms
+
+Graph returns file attachments as raw file bytes. Their declared file size must match the observed bytes. Item attachments use the provider's MIME representation, including vCard or iCalendar where appropriate. Item metadata `size` does not have a documented equality guarantee with the raw MIME representation length. `metadata()->size` retains the provider declaration, while `download()->size` reports the actual stored byte length, including when a declaration is omitted. Reference attachments do not support `/$value` and fail explicitly. See the [Graph attachment contract](https://learn.microsoft.com/en-us/graph/api/attachment-get?view=graph-rest-1.0).
 
 ## Content-Addressable Deduplication
 
@@ -218,7 +265,7 @@ For example, an attachment named `invoice.pdf` on a message in the `invoices@acm
 mailbox-attachments/invoices_acme_com/AAMkAGI2TG93AAA=/invoice.pdf
 ```
 
-The mailbox address is sanitized by replacing `@` and `.` with underscores, ensuring a valid directory name on every filesystem.
+The mailbox address replaces `@` and `.` with underscores. Mailbox and message identifiers are then sanitized as single path segments. Unsafe characters in filenames become underscores, and dot-only names use `attachment.bin`. Returned metadata keeps the original provider name.
 
 > **Tip**
 > When using a cloud disk like S3, the `attachment_path` becomes the key prefix. You can use lifecycle policies on that prefix to automatically expire old attachments.
@@ -232,7 +279,7 @@ The `AttachmentDto` represents attachment metadata without file content. It is r
 | `id` | `string` | Provider-specific attachment identifier |
 | `name` | `string` | The original filename (e.g., `invoice-2025-001.pdf`) |
 | `contentType` | `string` | MIME type (e.g., `application/pdf`, `image/png`) |
-| `size` | `int` | File size in bytes |
+| `size` | `int` | Provider-declared file size in bytes; zero when omitted |
 | `isInline` | `bool` | Whether this is an inline/embedded attachment |
 | `contentId` | `?string` | The `Content-ID` header value for inline attachments, used in HTML `cid:` references |
 
@@ -255,7 +302,7 @@ The `AttachmentFileDto` extends the attachment metadata with storage information
 | `id` | `string` | Provider-specific attachment identifier |
 | `name` | `string` | The original filename |
 | `contentType` | `string` | MIME type |
-| `size` | `int` | File size in bytes |
+| `size` | `int` | Actual stored file length in bytes |
 | `isInline` | `bool` | Whether this is an inline/embedded attachment |
 | `contentId` | `?string` | The `Content-ID` header value for inline attachments |
 | `path` | `string` | The storage path where the file was saved |
