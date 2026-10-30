@@ -70,7 +70,7 @@ it('rejects native object MIME collections in ordinary Gmail reads', function (s
     $history = [];
     $resource = gmailBodyResource([new Response(200, [], '{"id":"message","payload":{"mimeType":"multipart/mixed","parts":'.$parts.'}}')], $history);
 
-    expect(fn () => $resource->{$operation}())->toThrow(ApiRequestException::class)
+    expect(fn () => $resource->{$operation}())->toThrow(MailboxException::class)
         ->and($history)->toHaveCount(1);
 })->with(['{}', '{"0":{"mimeType":"text/plain","body":{"size":0}}}'])->with(['get', 'attachments']);
 

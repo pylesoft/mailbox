@@ -21,6 +21,7 @@ use Pyle\Mailbox\DTOs\SyncIdentity;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Support\GrantAuthorization;
@@ -110,6 +111,28 @@ it('does not spend unbounded requests retrying a bounded read', function (): voi
         ->toThrow(ProviderServerException::class)
         ->and($history)->toHaveCount(1);
 });
+
+it('sanitizes malformed bounded URI errors before provider IO', function (string $operation): void {
+    $history = [];
+    $client = initialSyncClient([], $history);
+    $previous = ini_get('zend.exception_ignore_args');
+    ini_set('zend.exception_ignore_args', '0');
+
+    try {
+        try {
+            $client->{$operation}('https://gmail.googleapis.com:invalid/gmail/v1/users/same%40example.com/profile?cursor=malformed-uri-secret', new ResponseBudget(100), mailbox: 'same@example.com');
+            $this->fail('A malformed destination was accepted.');
+        } catch (Throwable $exception) {
+            expect($exception->getMessage())->not->toContain('malformed-uri-secret');
+            expect($exception)->toBeInstanceOf(ApiRequestException::class);
+            $trace = array_values(array_filter($exception->getTrace(), fn (array $frame): bool => str_starts_with($frame['class'] ?? '', 'Pyle\\Mailbox\\')));
+            expect(json_encode($trace, JSON_PARTIAL_OUTPUT_ON_ERROR))->not->toContain('malformed-uri-secret');
+            expect($history)->toBe([]);
+        }
+    } finally {
+        ini_set('zend.exception_ignore_args', (string) $previous);
+    }
+})->with(['getBounded', 'getBoundedObject']);
 
 it('enforces aggregate response bytes on the real stream and can retry the unretained listing', function (int $status): void {
     $readBytes = 0;
@@ -279,7 +302,7 @@ it('rejects a malformed message list instead of completing an empty import', fun
     ], $history);
 
     expect(fn () => $mailbox->initialSync(new SyncScope, new SyncBudget))
-        ->toThrow(ApiRequestException::class)
+        ->toThrow(MailboxException::class)
         ->and($history)->toHaveCount(2);
 })->with(['{"messages":null}', '{"messages":{}}', '{"messages":{"0":{"id":"one"}}}']);
 

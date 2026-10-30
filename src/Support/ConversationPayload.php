@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Support;
 
-use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use stdClass;
 
 final class ConversationPayload
@@ -16,7 +16,7 @@ final class ConversationPayload
         foreach (get_object_vars($payload) as $key => $value) {
             if (in_array($key, ['messages', 'parts', 'headers', 'labelIds', 'toRecipients', 'ccRecipients', 'bccRecipients', 'replyTo', 'history', 'messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'], true)
                 && (! is_array($value) || ! array_is_list($value))) {
-                throw new ApiRequestException('The provider returned an invalid collection.');
+                throw new MailboxException('The provider returned an invalid collection.');
             }
             $data[$key] = self::value($value);
         }
