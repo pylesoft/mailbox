@@ -73,11 +73,6 @@ final class GmailGrantRefresher implements GrantRefresher
             bin2hex(random_bytes(16)), $grant->email, $grant->metadata, $grant->nonceHash());
     }
 
-    private function token(mixed $value): ?string
-    {
-        return is_string($value) && $value !== '' && preg_match('/[\x00-\x20\x7f]/', $value) !== 1 ? $value : null;
-    }
-
     private function assertIdentity(#[\SensitiveParameter] mixed $jwt, StoredGrant $grant): void
     {
         $claims = $this->googleIdentityClaims($jwt, $grant->identity->clientId);

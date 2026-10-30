@@ -51,6 +51,12 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         private readonly ?GrantAccessGuard $grantGuard = null,
     ) {}
 
+    /** @return array{provider: string, mailbox: string} */
+    public function __debugInfo(): array
+    {
+        return ['provider' => 'ms-graph', 'mailbox' => $this->emailAddress];
+    }
+
     public function requireSharedMailboxLive(GraphSubscriptionRegistration $registration): void
     {
         if ($this->grantContext === null || ! $this->grantGuard instanceof VerifiesGraphSharedMailboxLiveAccess) {

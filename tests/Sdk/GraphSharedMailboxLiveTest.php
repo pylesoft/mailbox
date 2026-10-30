@@ -22,6 +22,33 @@ use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\GraphSharedMailboxHostTokens;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
+it('hides retained host tokens and client state in Graph resource debug dumps', function (string $format): void {
+    $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'shared@example.com');
+    $configuration = new GraphSubscriptionConfiguration(
+        'tenant-1', 'canonical-user-1', 'https://host.example/graph/changes',
+        'https://host.example/graph/lifecycle', 'private-client-state', 'inbox',
+    );
+    $tokens = new GraphSharedMailboxHostTokens($context, $configuration);
+    $mailbox = Mailbox::forGrant($context, $tokens, new Client(['handler' => new MockHandler]));
+
+    if ($format === 'print_r') {
+        $dump = print_r($mailbox, true);
+    } else {
+        ob_start();
+        try {
+            var_dump($mailbox);
+            $dump = ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
+    }
+
+    expect($dump)->not->toContain('selected-token');
+    expect($dump)->not->toContain('private-client-state');
+    expect($dump)->toContain('ms-graph', 'shared@example.com');
+    expect($tokens->tokens->tokenReads)->toBe(0);
+})->with(['print_r', 'var_dump']);
+
 it('does not treat a selected token as proof of required shared mailbox live capability', function (): void {
     $history = [];
     $handler = HandlerStack::create(new MockHandler([

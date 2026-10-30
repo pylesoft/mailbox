@@ -19,5 +19,5 @@ interface SupportsGmailWatch
 
     public function watchCatchUpHint(GmailWatchRegistration $registration): GmailChangeHint;
 
-    public function notification(#[\SensitiveParameter] RequestInterface $request, GmailWatchRegistration $registration, ?GmailPushVerifier $verifier = null, int $maxRequestBytes = 65_536): GmailChangeHint;
+    public function notification(#[\SensitiveParameter] RequestInterface $request, GmailWatchRegistration $registration, #[\SensitiveParameter] ?GmailPushVerifier $verifier = null, int $maxRequestBytes = 65_536): GmailChangeHint;
 }

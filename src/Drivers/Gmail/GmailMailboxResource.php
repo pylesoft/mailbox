@@ -54,7 +54,7 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
         return $this->watchClient()->register($configuration, $labelIds);
     }
 
-    public function notification(#[\SensitiveParameter] RequestInterface $request, GmailWatchRegistration $registration, ?GmailPushVerifier $verifier = null, int $maxRequestBytes = 65_536): GmailChangeHint
+    public function notification(#[\SensitiveParameter] RequestInterface $request, GmailWatchRegistration $registration, #[\SensitiveParameter] ?GmailPushVerifier $verifier = null, int $maxRequestBytes = 65_536): GmailChangeHint
     {
         return $this->watchClient()->notification($request, $registration, $verifier, $maxRequestBytes);
     }

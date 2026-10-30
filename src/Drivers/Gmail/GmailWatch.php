@@ -68,7 +68,7 @@ final readonly class GmailWatch
         return new GmailWatchRegistration($registration->context, $registration->configuration, $registration->historyId, $registration->expiresAt, 'stopped');
     }
 
-    public function notification(#[\SensitiveParameter] RequestInterface $request, GmailWatchRegistration $registration, ?GmailPushVerifier $verifier, int $maxRequestBytes): GmailChangeHint
+    public function notification(#[\SensitiveParameter] RequestInterface $request, GmailWatchRegistration $registration, #[\SensitiveParameter] ?GmailPushVerifier $verifier, int $maxRequestBytes): GmailChangeHint
     {
         $this->assertRegistration($registration);
         if ($verifier === null) {

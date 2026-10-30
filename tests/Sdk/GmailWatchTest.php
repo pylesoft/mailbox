@@ -154,6 +154,46 @@ it('fails closed on rejected verification and hides verifier secrets', function 
     expect($history)->toBe([]);
 })->with([false, true]);
 
+it('hides a host verifier retaining the raw request from rejected notification traces', function (bool $throws): void {
+    $history = [];
+    $mailbox = watchResource([], $history);
+    $request = watchRequest()->withHeader('Authorization', 'Bearer private-retained-bearer')
+        ->withBody(Utils::streamFor('private-retained-body'));
+    $verifier = new class($throws) implements GmailPushVerifier
+    {
+        public ?RequestInterface $received = null;
+
+        public function __construct(private bool $throws) {}
+
+        public function verify(RequestInterface $request): array
+        {
+            $this->received = $request;
+            if ($this->throws) {
+                throw new RuntimeException('private-verifier-error');
+            }
+
+            return ['aud' => 'wrong-audience'];
+        }
+    };
+    $previous = ini_set('zend.exception_ignore_args', '0');
+    try {
+        try {
+            $mailbox->notification($request, watchRegistration(), $verifier);
+            test()->fail('Rejected authentication produced a usable notification.');
+        } catch (InvalidChangeNotificationException $exception) {
+            $trace = print_r($exception->getTrace(), true);
+            expect($trace)->not->toContain('private-retained-bearer');
+            expect($trace)->not->toContain('private-retained-body');
+            expect($trace)->not->toContain('private-verifier-error');
+            expect($exception->getPrevious())->toBeNull();
+            expect($verifier->received)->toBe($request);
+        }
+    } finally {
+        ini_set('zend.exception_ignore_args', $previous);
+    }
+    expect($history)->toBe([]);
+})->with([false, true]);
+
 it('rejects verified claims which do not match the trusted push identity', function (array $claims): void {
     $history = [];
 

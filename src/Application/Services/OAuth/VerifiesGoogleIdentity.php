@@ -26,4 +26,9 @@ trait VerifiesGoogleIdentity
 
         return $claims;
     }
+
+    private function token(mixed $value): ?string
+    {
+        return is_string($value) && $value !== '' && preg_match('/[\x00-\x20\x7f]/', $value) !== 1 ? $value : null;
+    }
 }
