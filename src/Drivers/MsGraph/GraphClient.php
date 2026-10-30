@@ -116,15 +116,19 @@ class GraphClient
         ]], $this->mailboxKey($context->mailbox), 65_536);
     }
 
-    public function inspectBasicSubscription(GrantContext $context, string $subscriptionId): ProviderWriteResponse
+    public function inspectBasicSubscription(GrantContext $context, #[\SensitiveParameter] string $subscriptionId, ?ResponseBudget $budget = null): ProviderWriteResponse
     {
         $this->assertSubscriptionContext($context);
         if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._=-]{0,1023}\z/', $subscriptionId) !== 1) {
             throw new \InvalidArgumentException('Graph subscription inspection requires a valid subscription identity.');
         }
+        if ($budget !== null && $budget->remaining() < 1) {
+            throw new \InvalidArgumentException('Graph subscription inspection requires a remaining response budget.');
+        }
 
         return $this->exchangeOnce('GET', $this->resolveApiTarget('subscriptions/'.rawurlencode($subscriptionId)), ['query' => null],
-            $this->mailboxKey($context->mailbox), 65_536, beforeRequest: fn () => $this->assertSubscriptionContext($context));
+            $this->mailboxKey($context->mailbox), min(65_536, $budget?->remaining() ?? 65_536),
+            beforeRequest: fn () => $this->assertSubscriptionContext($context), budget: $budget);
     }
 
     public function listBasicSubscriptions(GrantContext $context, ResponseBudget $budget, #[\SensitiveParameter] ?string $continuation = null): ProviderWriteResponse
