@@ -128,3 +128,41 @@ Current source, review reports, coverage maps and terminal receipts are retained
 After the local review, [PR 15](https://github.com/pylesoft/mailbox/pull/15) was published under separate authorization. Its automatic review reproduced rejection of Microsoft's documented `v1.0` and `gv1.0` upload-session paths. The validator now accepts those message-session paths and their resource-name casing alongside `v2.0`, without rewriting the opaque URL or changing its trusted-host, credential, redirect or parent-message boundaries. Both documented forms failed before the repair and pass through resumed public upload preparation afterward.
 
 The focused attachment suite passes **51 tests / 463 assertions**; host-adapter compatibility passes **3 / 58**. Four fresh serial Graph TLS cases pass **4 / 82**, using the documented `gv1.0` path for actual cURL uploads, fingerprint `8744ae6802e5fbc8b10f3ca76dd67b0235bf40f53f2d0a94070243ccaac9a069`. Scoped PHPStan, Pint and whitespace checks pass. Receipts are retained in `C:/Users/hello/.codex/scratch/mailbox-sdk-pr/`. Earlier local checks retain their recorded source identities; latest-head GitHub CI is recorded on the PR. The repeated storage-race finding retains the disclosed inherited-limitation disposition above; no atomic-publication repair or live-provider acceptance is claimed.
+
+## Verified Graph Subscription Recovery
+
+Independent review accepted repair runtime `51e44fc709287aa3d912610cdcdd9065d3907ef7` and final author head `7112f5574813a2e3463d60e5848dd80b6a2f98e3`, merged as `8f33914d82ead4e48f9d926493730476d6a1553b`, tree `25afd284bff7c4528d209e4b307e455497e0f68a`. Microsoft [withholds clientState from LIST](https://learn.microsoft.com/en-us/graph/api/subscription-list?view=graph-rest-1.0#response-1).
+
+Earlier positive LIST fixtures echoed that secret and did not prove the documented response shape. LIST now discovers candidates only; each matching candidate requires an actual [known-ID GET](https://learn.microsoft.com/en-us/graph/api/subscription-get?view=graph-rest-1.0#response-1) through the same selected grant before the SDK retains its registration.
+
+LIST and candidate GETs share request and actual response-byte budgets. Private pending IDs resume without re-listing and still require fresh proof. Failed candidate inspection stays unknown; the host aggregates slices and owns coordination and retry decisions.
+
+The optional interface, mandatory custom-driver contracts and shared-live guards remain unchanged, and the exact opaque-mailbox comparison repair is retained.
+
+| Fresh merged-candidate gate | Actual terminal result |
+| --- | --- |
+| PHP 8.4.25 / Laravel 13.39.0 current lock, all four ordinary suites | **1,632 passed / 8,137 assertions / eight opt-in wire skips**, two workers, exit 0; 91 files preserve the original suite policies and environment |
+| Actual PHP 8.2.35 / Laravel 12.69.0 lowest graph | **259 passed / 966 assertions**, one combined nine-class affected selection, two workers, exit 0; Testbench 10.0.0, Pest 3.8.5, Mime 7.4.22 and 146 exact installed records |
+| Actual isolated Ngest snapshot `b899e17579f47065185f2eab9c3c62d0a748fc4c` | **5 passed / 37 assertions**, serially, exit 0 without test warnings; PHP 8.4.25/Laravel 13.39.0, 231 installed SDK paths and real reflection hashes match the candidate |
+
+The ordinary selection excludes the unchanged seven-case attachment-memory group and configured-Gmail privacy helper file. That helper's prior source-bound **1 / 21** loopback receipt remains valid; its test and Gmail/OAuth/support paths have no Git delta.
+
+No helper, allocation benchmark or wire case was rerun for this repair. The eight wire skips above are explicit; earlier platform, production-only, advisory and wire measurements retain their recorded source and scope.
+
+All 336 runtime/test/config Git blobs match the author: 305 raw files match and 31 differ only by CRLF/LF. The final ordinary run preserves all 428 tracked raw hashes.
+
+The lowest overlay matches all 427 non-lock Git blobs exactly and preserves its own separate lock, while Ngest preserves all 517 recorded consumer-source hashes. Its offline, scripts/plugins-disabled package-only reinstall leaves the other 193 installed name/version/source/dist records and manifest/lock unchanged. The inherited local label `0.1.4-dev` and path reference `c1464ac` are fixture metadata; the 231 source and reflection checks establish the actual SDK identity.
+
+The canonical SDK lock remains SHA256 `45D7E7D0B8C04191FBCDA4DD7D524F7A8A5D38B4631188BD9AC8485777A7AB64`, with 145 installed records. Only the exact source/dist GitHub owner alias for `vlucas/phpdotenv` v5.6.3 differs: both URLs resolve to repository 7769432 and the same reference/tree, and all 42 installed runtime blobs were checked.
+
+No metadata, dependency constraint, solver result or advisory policy was rewritten. The author's combined **259 / 966**, connected six-path level-8 PHPStan, Pint with no PHP byte changes, strict Composer validation and installed-platform receipts apply to the identical runtime Git blobs; they are not additional merger runs.
+
+Setup corrections remain separate evidence. The first ordinary child stopped before tests because empty disabled wire flags were absent in the Windows child environment. The first lowest archive failed its Git-byte check before PHP because it inherited line-ending conversion; a new archive with `core.autocrlf=false` repaired only the owned source export.
+
+The first Ngest run completed five cases and 37 assertions with five absent synthetic-environment warnings; a new zero-byte owned sentinel and fresh cache paths produced the clean five-case result above. Repeated counts are not added. Ngest's existing 23 PSR-4 layout warnings and its three previously recorded unchanged consumer advisories remain disclosed.
+
+Commands, raw source manifests, graph/reflection checks, preserved setup failures and stopped-process proofs are retained in `C:/Users/hello/.codex/scratch/ai-clerk-mailbox-implementation/merge-sdk-verified-lookup/`. Each PHP process uses a cleared synthetic testing environment, SQLite-only or SDK-forbidden database targets, disabled cURL initialization and URL fopen, and owned caches.
+
+No active consumer environment, vendor or database was read or changed. No provider operation was performed.
+
+Tickets 23/25 close local acceptance only; the specification and live tickets 26/27 remain open. Publication, exact-head remote CI and host adoption remain separate coordinator gates.

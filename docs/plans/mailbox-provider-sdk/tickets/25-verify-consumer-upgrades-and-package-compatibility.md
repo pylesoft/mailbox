@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** open
+**Resolution:** closed
 
 **Spec:** [Specification](../spec.md)
 
@@ -39,6 +39,18 @@ Preserve existing runner/platform coverage; no Blacksmith migration, package pub
 
 
 ## Comments
+
+- 2026-10-30: Fresh independent acceptance is complete at merged runtime `8f33914d82ead4e48f9d926493730476d6a1553b`, tree `25afd284bff7c4528d209e4b307e455497e0f68a`. All four ordinary suites retain their original policies and 91 selected files: **1,632 passed / 8,137 assertions / eight opt-in wire skips**, two workers. The unchanged seven-case attachment-memory group and configured-Gmail loopback file remain excluded; the latter's source-bound **1 / 21** receipt is reused without another helper run.
+
+Actual PHP 8.2.35/Laravel 12.69.0 lowest passes one combined nine-class affected selection, **259 / 966**, two workers. Its 146-package lock is confined to an owned overlay; the canonical 145-package graph and lock remain unchanged.
+
+- Actual isolated Ngest snapshot `b899e17579f47065185f2eab9c3c62d0a748fc4c` passes **5 / 37**, serially and without test warnings. All 231 installed SDK runtime paths match the accepted Git source, with real reflection hashes; the other 193 installed graph records, consumer manifest and lock are unchanged. The initial missing-sentinel run completed the same assertions with five setup warnings; a root-audited zero-byte owned sentinel and fresh cache paths removed those warnings.
+
+Earlier ordinary-child and archive-line-ending stops occurred before tests or PHP respectively. Each receipt is retained separately, without summing repeated runs or counting setup failures as product regressions.
+
+- All current/lowest/consumer source hashes remain unchanged during their final checks. The author's scoped static, Pint and Composer/platform results apply to the identical runtime Git blobs. The [compatibility receipt](../compatibility.md#verified-graph-subscription-recovery) records reuse limits, the narrow verified upstream URL alias and the consumer's existing 23 PSR-4 warnings.
+
+Evidence is retained in `C:/Users/hello/.codex/scratch/ai-clerk-mailbox-implementation/merge-sdk-verified-lookup/`. This closure changes Markdown only. The specification and live tickets 26/27 remain open; publication, exact-head remote CI and host adoption belong to the coordinator.
 
 - 2026-10-30: Acceptance remains open after independent provider-shape review found that Graph LIST does not return clientState. The merged inspection candidate `1a09641e4fb7dbdf30bdd13ece1a3a6b4cccdd00` and its earlier 74/175-case focused receipts do not establish documented-shape recovery: their successful LIST fixtures echoed the secret. Ticket 23 is reopened for actual GET verification of LIST candidates with aggregate budgets and resumable pending IDs. Its first real public regression fails with clientState=null. The existing fresh merger must validate the repaired immutable candidate through current/lowest/Ngest compatibility; no full compatibility run on the superseded candidate is claimed. All historical measurements retain their recorded source and limits.
 

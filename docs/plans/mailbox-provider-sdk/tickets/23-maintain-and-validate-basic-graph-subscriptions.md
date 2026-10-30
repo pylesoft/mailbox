@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** open
+**Resolution:** closed
 
 **Spec:** [Specification](../spec.md)
 
@@ -32,6 +32,12 @@ Create and maintain basic Graph subscriptions, validate callbacks and lifecycle 
 - Assert no direct provider-data publication, checkpoint advancement or package-owned callback queue.
 
 ## Comments
+
+- 2026-10-30: Independent review accepted final repair `7112f5574813a2e3463d60e5848dd80b6a2f98e3` and merged it as `8f33914d82ead4e48f9d926493730476d6a1553b`, with the exact author tree. The reviewer checked the complete lookup, selected-grant transport, private continuation, shared proof validator, callers, error privacy and corrected null/omitted LIST fixtures against Microsoft's LIST and GET documentation. All 336 runtime/test/config Git blobs match the author; 305 raw files match and 31 differ only by line endings, and the opaque-mailbox comparison repair remains intact.
+
+- The fresh merged current-lock ordinary gate passes **1,632 cases / 8,137 assertions**, with eight explicit wire skips and the existing separately controlled exclusions. Actual PHP 8.2/Laravel 12 lowest passes the combined nine-class affected set, **259 / 966**. Actual isolated Ngest passes **5 / 37** without test warnings.
+
+[Ticket 25](25-verify-consumer-upgrades-and-package-compatibility.md) and the [compatibility receipt](../compatibility.md#verified-graph-subscription-recovery) record the precise source, graphs, exclusions and setup corrections. Local acceptance is closed; live tickets 26/27, publication, remote CI and host adoption remain separate.
 
 - 2026-10-30: Reopened and claimed by the fresh LIST proof repair on `fix/mailbox-subscription-list-reads`, based on `1a09641e4fb7dbdf30bdd13ece1a3a6b4cccdd00`. Microsoft documents that subscription LIST withholds clientState; the earlier positive fixtures incorrectly echoed it, so their passing results do not prove real recovery. A public regression with clientState=null failed with zero registrations instead of one. This repair keeps the public optional API and uses LIST only to discover candidates, then actual same-selected-grant known-ID GET to verify each private configuration. Request/aggregate-byte limits and private pending-ID progress must cover those GETs. Earlier receipts remain tied to their actual source and fixture scope; they are not erased or relabeled. Focused red/green and affected checks precede local closure; ticket 25 remains open for fresh merged compatibility. No live/provider operation, dependency or host change, new ticket, publication or deployment is included.
 
