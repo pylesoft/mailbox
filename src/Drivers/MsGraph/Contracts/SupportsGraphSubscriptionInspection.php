@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\MsGraph\Contracts;
 
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
-use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionLookup;
+use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncContinuation;
 
