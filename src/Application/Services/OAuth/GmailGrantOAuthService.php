@@ -21,6 +21,7 @@ use Throwable;
 final class GmailGrantOAuthService
 {
     use NormalizesReturnTo;
+    use VerifiesGoogleIdentity;
 
     public function __construct(
         private readonly OAuthEnrollmentGuard $guard,
@@ -85,7 +86,6 @@ final class GmailGrantOAuthService
         if (! is_array($data)) {
             throw new OAuthEnrollmentException('Google returned an invalid authorization response.');
         }
-        // Only the direct, TLS-verified, client-authenticated token response enters this decoder (OIDC Core 3.1.3.7).
         $claims = $this->identityClaims($data['id_token'] ?? null, $clientId, $payload->nonce());
         $identity = new GrantIdentity('gmail', 'https://accounts.google.com', $claims['sub'], $clientId);
         $refreshToken = $this->token($data['refresh_token'] ?? null);
@@ -154,17 +154,10 @@ final class GmailGrantOAuthService
     }
 
     /** @return array{sub: string, email?: mixed, name?: mixed, hd?: mixed} */
-    private function identityClaims(mixed $jwt, string $clientId, string $nonce): array
+    private function identityClaims(#[SensitiveParameter] mixed $jwt, string $clientId, #[SensitiveParameter] string $nonce): array
     {
-        $parts = is_string($jwt) && preg_match('/\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\z/', $jwt) === 1 ? explode('.', $jwt) : [];
-        $header = count($parts) === 3 ? json_decode((string) base64_decode(strtr($parts[0], '-_', '+/'), true), true) : null;
-        $claims = count($parts) === 3 ? json_decode((string) base64_decode(strtr($parts[1], '-_', '+/'), true), true) : null;
-        if (! is_array($header) || ($header['alg'] ?? null) !== 'RS256'
-            || ! is_array($claims) || ! in_array($claims['iss'] ?? null, ['https://accounts.google.com', 'accounts.google.com'], true)
-            || ($claims['aud'] ?? null) !== $clientId || (isset($claims['azp']) && $claims['azp'] !== $clientId)
-            || ! is_string($claims['sub'] ?? null) || preg_match('/\A[\x21-\x7e]{1,255}\z/', $claims['sub']) !== 1
-            || ! is_int($claims['exp'] ?? null) || $claims['exp'] <= now()->getTimestamp()
-            || ! is_int($claims['iat'] ?? null) || $claims['iat'] > now()->getTimestamp() + 60
+        $claims = $this->googleIdentityClaims($jwt, $clientId);
+        if ($claims === null
             || ! is_string($claims['nonce'] ?? null) || ! hash_equals($nonce, $claims['nonce'])) {
             throw new OAuthEnrollmentException('Google authorization identity could not be verified.');
         }

@@ -119,7 +119,7 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
         );
     }
 
-    public function initialSync(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation = null): ChangePage
+    public function initialSync(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation = null): ChangePage
     {
         if ($this->grantContext === null) {
             throw new UnsupportedCapabilityException('Bounded synchronization requires an explicit grant context.');
@@ -128,7 +128,7 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
         return (new GmailInitialSync($this->client, $this->grantContext))->page($scope, $budget, $continuation);
     }
 
-    public function incrementalSync(SyncScope $scope, SyncBudget $budget, SyncCheckpoint $checkpoint, ?SyncContinuation $continuation = null): ChangePage
+    public function incrementalSync(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation = null): ChangePage
     {
         if ($this->grantContext === null) {
             throw new UnsupportedCapabilityException('Bounded synchronization requires an explicit grant context.');

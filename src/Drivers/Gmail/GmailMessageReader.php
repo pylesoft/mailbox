@@ -10,6 +10,7 @@ use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ResponseBudget;
 
@@ -45,7 +46,7 @@ final class GmailMessageReader
         $this->responses = $responses ?? new ResponseBudget($this->limits->maxResponseBytes);
         $this->parts = $this->hydrations = $this->bodyBytes = 0;
         $endpoint = sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($messageId));
-        $message = $this->client->getBounded($endpoint, $this->responses, ['format' => 'full'], $this->mailbox, retry: $this->retry);
+        $message = ConversationPayload::array($this->client->getBoundedObject($endpoint, $this->responses, ['format' => 'full'], $this->mailbox, retry: $this->retry));
 
         return $this->hydrateMessage($message, $messageId);
     }

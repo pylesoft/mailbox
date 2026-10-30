@@ -74,7 +74,7 @@ class GmailDriver implements MailboxDriver, SupportsGrantMailbox, SupportsRawCli
                 success: true,
                 error: null,
                 latencyMs: $latency,
-                authenticatedAs: (string) ($this->config['service_account_json_path'] ?? $this->config['service_account_json'] ?? null),
+                authenticatedAs: $mailbox,
                 accessibleMailboxes: [(string) $mailbox],
             );
         } catch (\Throwable $e) {

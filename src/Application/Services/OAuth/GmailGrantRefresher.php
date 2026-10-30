@@ -14,6 +14,8 @@ use Throwable;
 
 final class GmailGrantRefresher implements GrantRefresher
 {
+    use VerifiesGoogleIdentity;
+
     public function refresh(GrantContext $context, StoredGrant $grant): StoredGrant
     {
         $clientId = config('mailbox.oauth.gmail.client_id');
@@ -76,21 +78,13 @@ final class GmailGrantRefresher implements GrantRefresher
         return is_string($value) && $value !== '' && preg_match('/[\x00-\x20\x7f]/', $value) !== 1 ? $value : null;
     }
 
-    private function assertIdentity(mixed $jwt, StoredGrant $grant): void
+    private function assertIdentity(#[\SensitiveParameter] mixed $jwt, StoredGrant $grant): void
     {
-        // Only the direct, TLS-verified, client-authenticated token response enters this decoder (OIDC Core 3.1.3.7).
-        $parts = is_string($jwt) && preg_match('/\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\z/', $jwt) === 1 ? explode('.', $jwt) : [];
-        $header = count($parts) === 3 ? json_decode((string) base64_decode(strtr($parts[0], '-_', '+/'), true), true) : null;
-        $claims = count($parts) === 3 ? json_decode((string) base64_decode(strtr($parts[1], '-_', '+/'), true), true) : null;
-        if (! is_array($header) || ($header['alg'] ?? null) !== 'RS256' || ! is_array($claims)
-            || ! in_array($claims['iss'] ?? null, ['https://accounts.google.com', 'accounts.google.com'], true)
-            || ($claims['aud'] ?? null) !== $grant->identity->clientId
-            || (isset($claims['azp']) && $claims['azp'] !== $grant->identity->clientId)
-            || ($claims['sub'] ?? null) !== $grant->identity->subject
+        $claims = $this->googleIdentityClaims($jwt, $grant->identity->clientId);
+        if ($claims === null
+            || $claims['sub'] !== $grant->identity->subject
             || (array_key_exists('nonce', $claims) && (! is_string($claims['nonce']) || $grant->nonceHash() === null
-                || ! hash_equals($grant->nonceHash(), hash('sha256', $claims['nonce']))))
-            || ! is_int($claims['exp'] ?? null) || $claims['exp'] <= now()->getTimestamp()
-            || ! is_int($claims['iat'] ?? null) || $claims['iat'] > now()->getTimestamp() + 60) {
+                || ! hash_equals($grant->nonceHash(), hash('sha256', $claims['nonce']))))) {
             throw new GrantAccessDeniedException('Google refresh identity does not match the selected grant. Reconnect authorization.');
         }
     }

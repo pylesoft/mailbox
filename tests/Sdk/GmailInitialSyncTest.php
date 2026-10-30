@@ -271,16 +271,17 @@ it('reports provider item-limit violations without promoting a checkpoint', func
         ->and($page->checkpoint)->toBeNull();
 });
 
-it('rejects a null message list instead of completing an empty import', function (): void {
+it('rejects a malformed message list instead of completing an empty import', function (string $body): void {
     $history = [];
     $mailbox = initialSyncResource([
         new Response(200, [], '{"historyId":"100"}'),
-        new Response(200, [], '{"messages":null}'),
+        new Response(200, [], $body),
     ], $history);
 
     expect(fn () => $mailbox->initialSync(new SyncScope, new SyncBudget))
-        ->toThrow(ApiRequestException::class, 'message list');
-});
+        ->toThrow(ApiRequestException::class)
+        ->and($history)->toHaveCount(2);
+})->with(['{"messages":null}', '{"messages":{}}', '{"messages":{"0":{"id":"one"}}}']);
 
 it('refuses legacy initial completion without a history baseline', function (): void {
     $history = [];

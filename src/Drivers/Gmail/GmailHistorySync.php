@@ -15,13 +15,14 @@ use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 final readonly class GmailHistorySync
 {
     public function __construct(private GmailClient $client, private GrantContext $context) {}
 
-    public function page(SyncScope $scope, SyncBudget $budget, SyncCheckpoint $checkpoint, ?SyncContinuation $continuation): ChangePage
+    public function page(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation): ChangePage
     {
         $identity = new SyncIdentity('gmail', $this->context, $scope);
         $checkpoint->identity->assertMatches($identity);
@@ -46,7 +47,7 @@ final readonly class GmailHistorySync
                 $query['pageToken'] = $state['pageToken'];
             }
             try {
-                $response = $this->client->getBounded('users/'.rawurlencode($this->context->mailbox).'/history', $responses, $query, $this->context->mailbox);
+                $response = ConversationPayload::array($this->client->getBoundedObject('users/'.rawurlencode($this->context->mailbox).'/history', $responses, $query, $this->context->mailbox));
             } catch (ResponseLimitExceededException) {
                 return $this->unfinished($identity, $state, $upserts, $removals, 'response_limit');
             } catch (ResourceNotFoundException) {
@@ -84,7 +85,7 @@ final readonly class GmailHistorySync
     }
 
     /** @return array{baseline: string, pageToken: ?string, seenTokens: list<string>} */
-    private function state(SyncIdentity $identity, SyncCheckpoint $checkpoint, ?SyncContinuation $continuation): array
+    private function state(SyncIdentity $identity, #[\SensitiveParameter] SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation): array
     {
         if (preg_match('/^[0-9]+$/D', $checkpoint->position) !== 1) {
             throw new InvalidSyncStateException('The Gmail checkpoint does not contain a valid history position.');
@@ -116,7 +117,7 @@ final readonly class GmailHistorySync
      * @param  array<string, mixed>  $response
      * @return ?array{upserts: list<string>, removals: list<string>}
      */
-    private function changes(array $response, string $position): ?array
+    private function changes(#[\SensitiveParameter] array $response, #[\SensitiveParameter] string $position): ?array
     {
         $history = array_key_exists('history', $response) ? $response['history'] : [];
         if (! is_array($history) || ! array_is_list($history)) {
@@ -159,7 +160,7 @@ final readonly class GmailHistorySync
      * @param  array<string, mixed>  $entry
      * @return list<string>
      */
-    private function ids(array $entry, string $type, bool $nested): array
+    private function ids(#[\SensitiveParameter] array $entry, string $type, bool $nested): array
     {
         $items = array_key_exists($type, $entry) ? $entry[$type] : [];
         if (! is_array($items) || ! array_is_list($items)) {
@@ -182,12 +183,12 @@ final readonly class GmailHistorySync
      * @param  list<string>  $upserts
      * @param  list<string>  $removals
      */
-    private function unfinished(SyncIdentity $identity, array $state, array $upserts, array $removals, string $reason): ChangePage
+    private function unfinished(SyncIdentity $identity, #[\SensitiveParameter] array $state, array $upserts, array $removals, string $reason): ChangePage
     {
         return new ChangePage(upserts: $upserts, removals: $removals, continuation: new SyncContinuation($identity, 'gmail.history', $state), reason: $reason);
     }
 
-    private function atLeast(string $position, string $previous): bool
+    private function atLeast(#[\SensitiveParameter] string $position, #[\SensitiveParameter] string $previous): bool
     {
         $position = ltrim($position, '0');
         $previous = ltrim($previous, '0');
