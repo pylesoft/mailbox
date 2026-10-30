@@ -15,6 +15,11 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphChangeHint;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
+use Pyle\Mailbox\DTOs\GraphSubscriptionLookup;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncContinuation;
+use Pyle\Mailbox\DTOs\SyncIdentity;
+use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidChangeNotificationException;
@@ -25,6 +30,8 @@ use Pyle\Mailbox\Support\ResponseBudget;
 
 final readonly class MsGraphSubscriptions
 {
+    private const UUID_PATTERN = '/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i';
+
     public function __construct(private GraphClient $client, private GrantContext $context, private GrantAccessGuard $guard) {}
 
     public function create(GraphSubscriptionConfiguration $configuration, DateTimeImmutable $expiresAt): GraphSubscriptionRegistration
@@ -33,6 +40,114 @@ final readonly class MsGraphSubscriptions
         $response = $this->client->createBasicSubscription($this->context, $configuration, $expiresAt);
 
         return $this->confirmedRegistration($response, $configuration, 201);
+    }
+
+    public function inspect(string $subscriptionId, #[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, string $expectedApplicationId): ?GraphSubscriptionRegistration
+    {
+        $this->guard->assertActive($this->context);
+        $this->assertExpectedApplication($expectedApplicationId);
+        $response = $this->client->inspectBasicSubscription($this->context, $subscriptionId);
+        $this->guard->assertActive($this->context);
+        if ($response->status === 404) {
+            return null;
+        }
+        $data = json_decode($response->body() ?? '');
+        if (! $data instanceof \stdClass || ! is_string($data->applicationId ?? null) || strcasecmp($data->applicationId, $expectedApplicationId) !== 0) {
+            throw new ApiRequestException('The Graph subscription inspection could not be verified for the selected application.', status: $response->status, headers: $response->headers);
+        }
+
+        return $this->confirmedRegistration($response, $configuration, 200, $subscriptionId);
+    }
+
+    public function lookup(#[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, string $expectedApplicationId, SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation): GraphSubscriptionLookup
+    {
+        $this->guard->assertActive($this->context);
+        $this->assertExpectedApplication($expectedApplicationId);
+        $identity = new SyncIdentity('ms-graph', $this->context, new SyncScope(folderId: $configuration->folderId));
+        $fingerprint = hash('sha256', serialize([$configuration->tenantId, $configuration->providerMailboxId, $configuration->folderId,
+            $configuration->notificationUrl, $configuration->lifecycleNotificationUrl, $configuration->clientState(), $expectedApplicationId]));
+        $state = ['fingerprint' => $fingerprint, 'nextLink' => null, 'seenLinks' => []];
+        if ($continuation !== null) {
+            $continuation->identity->assertMatches($identity);
+            $state = $continuation->position;
+            if ($continuation->phase !== 'ms-graph.subscription-lookup' || count($state) !== 3 || ($state['fingerprint'] ?? null) !== $fingerprint
+                || ! array_key_exists('nextLink', $state) || ($state['nextLink'] !== null && ! is_string($state['nextLink']))
+                || ! is_array($state['seenLinks'] ?? null) || ! array_is_list($state['seenLinks'])) {
+                throw new InvalidSyncStateException('The subscription lookup continuation does not match the selected configuration and application.');
+            }
+            foreach ($state['seenLinks'] as $seen) {
+                if (! is_string($seen) || preg_match('/\A[0-9a-f]{64}\z/', $seen) !== 1) {
+                    throw new InvalidSyncStateException('The subscription lookup continuation contains invalid progress.');
+                }
+            }
+        }
+        $responses = new ResponseBudget($budget->maxResponseBytes);
+        $response = $this->client->listBasicSubscriptions($this->context, $responses, $state['nextLink']);
+        $this->guard->assertActive($this->context);
+        $body = $response->body();
+        if ($body !== null) {
+            $responses->consume(strlen($body));
+        }
+        $data = $body === null ? null : json_decode($body);
+        if ($response->status !== 200 || $body === null || ! $data instanceof \stdClass || ! is_array($data->value ?? null) || ! array_is_list($data->value)) {
+            throw new ApiRequestException('The Graph subscription lookup was incomplete, malformed or exceeded its response budget.', status: $response->status, headers: $response->headers);
+        }
+        $next = property_exists($data, '@odata.nextLink') ? $this->client->continuationEndpoint($data->{'@odata.nextLink'}, 'subscriptions') : null;
+        $current = hash('sha256', $state['nextLink'] ?? 'subscriptions');
+        if ($next !== null && (hash('sha256', $next) === $current || in_array(hash('sha256', $next), $state['seenLinks'], true))) {
+            $this->guard->assertActive($this->context);
+
+            return new GraphSubscriptionLookup([], false, new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state), 'provider_progress_repeated');
+        }
+        if (count($data->value) > $budget->maxItems) {
+            $this->guard->assertActive($this->context);
+
+            return new GraphSubscriptionLookup([], false, new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state), 'provider_item_limit');
+        }
+        $registrations = [];
+        $conflict = false;
+        foreach ($data->value as $value) {
+            if (! $value instanceof \stdClass || ! is_string($value->applicationId ?? null) || preg_match(self::UUID_PATTERN, $value->applicationId) !== 1
+                || ! is_string($value->resource ?? null) || trim($value->resource) === '' || preg_match('/[\x00-\x1f\x7f]/', $value->resource)
+                || ! is_string($value->changeType ?? null) || trim($value->changeType) === '') {
+                throw new ApiRequestException('Graph returned incomplete subscription lookup metadata.');
+            }
+            if (strcasecmp($value->applicationId, $expectedApplicationId) !== 0) {
+                continue;
+            }
+            $resource = $this->resourceParts($value->resource, $configuration);
+            $changes = explode(',', $value->changeType);
+            sort($changes);
+            if ($resource === null || $resource['message'] !== null || (($resource['folder'] === null) !== ($configuration->folderId === null)) || $changes !== ['created', 'deleted', 'updated']) {
+                continue;
+            }
+            if (($value->clientState ?? null) !== $configuration->clientState()
+                || ($value->notificationUrl ?? null) !== $configuration->notificationUrl || ($value->lifecycleNotificationUrl ?? null) !== $configuration->lifecycleNotificationUrl) {
+                $conflict = true;
+
+                continue;
+            }
+            $registration = $this->registration($value, $configuration);
+            if ($registration === null) {
+                throw new ApiRequestException('Graph returned unverified subscription lookup evidence.');
+            }
+            $registrations[] = $registration;
+        }
+        $this->guard->assertActive($this->context);
+        if ($next !== null) {
+            $state['nextLink'] = $next;
+            $state['seenLinks'][] = $current;
+        }
+
+        return new GraphSubscriptionLookup($registrations, $next === null, $next === null ? null : new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state),
+            $next === null ? null : 'more_pages', $conflict);
+    }
+
+    private function assertExpectedApplication(string $expectedApplicationId): void
+    {
+        if (preg_match(self::UUID_PATTERN, $expectedApplicationId) !== 1) {
+            throw new \InvalidArgumentException('Graph subscription inspection requires the trusted application client identity for the selected grant.');
+        }
     }
 
     public function renew(GraphSubscriptionRegistration $registration, DateTimeImmutable $expiresAt): GraphSubscriptionRegistration
@@ -204,7 +319,9 @@ final readonly class MsGraphSubscriptions
         $message = $parts[3] === null ? null : rawurldecode($parts[3]);
         $knownFolders = array_map(static fn (WellKnownFolder $value): string => strtolower($value->forDriver('ms-graph')), WellKnownFolder::cases());
         $expectedFolder = $configuration->folderId;
-        if (($mailbox !== $configuration->providerMailboxId && $mailbox !== $configuration->providerMailboxId.'@'.$configuration->tenantId && strcasecmp($mailbox, $this->context->mailbox) !== 0)
+        $contextAliasMatches = (filter_var($this->context->mailbox, FILTER_VALIDATE_EMAIL) !== false || preg_match(self::UUID_PATTERN, $this->context->mailbox) === 1)
+            && strcasecmp($mailbox, $this->context->mailbox) === 0;
+        if (($mailbox !== $configuration->providerMailboxId && $mailbox !== $configuration->providerMailboxId.'@'.$configuration->tenantId && $mailbox !== $this->context->mailbox && ! $contextAliasMatches)
             || ($folder !== null && $expectedFolder !== null && $folder !== $expectedFolder
                 && (! in_array(strtolower($expectedFolder), $knownFolders, true) || strcasecmp($folder, $expectedFolder) !== 0))
             || ($folder !== null && preg_match('/[\x00-\x1f\x7f?#\\\\]/', $folder))
@@ -215,15 +332,25 @@ final readonly class MsGraphSubscriptions
         return ['folder' => $folder, 'message' => $message];
     }
 
-    private function confirmedRegistration(ProviderWriteResponse $response, GraphSubscriptionConfiguration $configuration, int $status, ?string $subscriptionId = null): GraphSubscriptionRegistration
+    private function confirmedRegistration(ProviderWriteResponse $response, #[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, int $status, ?string $subscriptionId = null): GraphSubscriptionRegistration
     {
         $this->guard->assertActive($this->context);
         $data = json_decode($response->body() ?? '');
+        $registration = $this->registration($data, $configuration, $subscriptionId);
+        if ($response->status !== $status || $registration === null) {
+            throw new ApiRequestException('The Graph subscription acknowledgement could not be verified; retain the original attempt before retrying.', status: $response->status, headers: $response->headers);
+        }
+
+        return $registration;
+    }
+
+    private function registration(#[\SensitiveParameter] mixed $data, #[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, ?string $subscriptionId = null): ?GraphSubscriptionRegistration
+    {
         $expiresAt = $data instanceof \stdClass ? self::parseExpiry($data->expirationDateTime ?? null) : null;
         $resource = $data instanceof \stdClass ? $this->resourceParts($data->resource ?? null, $configuration) : null;
         $changes = $data instanceof \stdClass && is_string($data->changeType ?? null) ? explode(',', $data->changeType) : [];
         sort($changes);
-        if ($response->status !== $status || ! $data instanceof \stdClass
+        if (! $data instanceof \stdClass
             || ! is_string($data->id ?? null) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._=-]{0,1023}\z/', $data->id) !== 1
             || ($subscriptionId !== null && $data->id !== $subscriptionId)
             || $resource === null || $resource['message'] !== null || (($resource['folder'] === null) !== ($configuration->folderId === null))
@@ -233,7 +360,7 @@ final readonly class MsGraphSubscriptions
             || (property_exists($data, 'includeResourceData') && $data->includeResourceData !== false)
             || ! in_array($data->encryptionCertificate ?? null, [null, ''], true) || ! in_array($data->encryptionCertificateId ?? null, [null, ''], true)
             || $expiresAt === null || $expiresAt <= new DateTimeImmutable || $expiresAt > new DateTimeImmutable('+10080 minutes')) {
-            throw new ApiRequestException('The Graph subscription acknowledgement could not be verified; retain the original attempt before retrying.', status: $response->status, headers: $response->headers);
+            return null;
         }
 
         return new GraphSubscriptionRegistration($this->context, $configuration, $data->id, $expiresAt);

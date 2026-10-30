@@ -116,6 +116,29 @@ class GraphClient
         ]], $this->mailboxKey($context->mailbox), 65_536);
     }
 
+    public function inspectBasicSubscription(GrantContext $context, string $subscriptionId): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($context);
+        if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._=-]{0,1023}\z/', $subscriptionId) !== 1) {
+            throw new \InvalidArgumentException('Graph subscription inspection requires a valid subscription identity.');
+        }
+
+        return $this->exchangeOnce('GET', $this->resolveApiTarget('subscriptions/'.rawurlencode($subscriptionId)), ['query' => null],
+            $this->mailboxKey($context->mailbox), 65_536, beforeRequest: fn () => $this->assertSubscriptionContext($context));
+    }
+
+    public function listBasicSubscriptions(GrantContext $context, ResponseBudget $budget, #[\SensitiveParameter] ?string $continuation = null): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($context);
+        if ($budget->remaining() < 1) {
+            throw new \InvalidArgumentException('Graph subscription lookup requires a remaining response budget.');
+        }
+        $target = $continuation === null ? $this->resolveApiTarget('subscriptions') : $this->continuationEndpoint($continuation, 'subscriptions');
+
+        return $this->exchangeOnce('GET', $target, ['query' => null], $this->mailboxKey($context->mailbox), $budget->remaining(),
+            beforeRequest: fn () => $this->assertSubscriptionContext($context), budget: $budget);
+    }
+
     public function renewBasicSubscription(GraphSubscriptionRegistration $registration, DateTimeImmutable $expiresAt): ProviderWriteResponse
     {
         $this->assertSubscriptionContext($registration->context);
