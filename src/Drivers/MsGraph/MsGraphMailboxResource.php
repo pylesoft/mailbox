@@ -20,6 +20,7 @@ use Pyle\Mailbox\Contracts\SupportsFolderCatalogue;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSharedMailboxLive;
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptionInspection;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\VerifiesGraphSharedMailboxLiveAccess;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
@@ -30,6 +31,7 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphChangeHint;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
 use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
+use Pyle\Mailbox\DTOs\GraphSubscriptionLookup;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\SubmissionEvidence;
 use Pyle\Mailbox\DTOs\SubmissionLimits;
@@ -42,7 +44,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsFolderCatalogue, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsFolderCatalogue, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptionInspection, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -75,6 +77,16 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
     public function createSubscription(GraphSubscriptionConfiguration $configuration, \DateTimeImmutable $expiresAt): GraphSubscriptionRegistration
     {
         return $this->subscriptions()->create($configuration, $expiresAt);
+    }
+
+    public function inspectSubscription(string $subscriptionId, #[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, string $expectedApplicationId): ?GraphSubscriptionRegistration
+    {
+        return $this->subscriptions()->inspect($subscriptionId, $configuration, $expectedApplicationId);
+    }
+
+    public function lookupSubscriptions(#[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, string $expectedApplicationId, SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation = null): GraphSubscriptionLookup
+    {
+        return $this->subscriptions()->lookup($configuration, $expectedApplicationId, $budget, $continuation);
     }
 
     public function renewSubscription(GraphSubscriptionRegistration $registration, \DateTimeImmutable $expiresAt): GraphSubscriptionRegistration

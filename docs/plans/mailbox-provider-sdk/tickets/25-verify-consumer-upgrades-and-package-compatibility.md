@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** closed
+**Resolution:** open
 
 **Spec:** [Specification](../spec.md)
 
@@ -39,6 +39,12 @@ Preserve existing runner/platform coverage; no Blacksmith migration, package pub
 
 
 ## Comments
+
+- 2026-10-30: Reopened for the additive subscription-inspection repair on `fix/mailbox-subscription-inspection` from `edfb4abbbfa8be70a593e08e0fffd3ecac44b1b1`. Earlier subscription and compatibility receipts remain bound to their recorded source and do not establish selected-grant GET/list inspection, exact-private-configuration recovery or the corrected opaque-mailbox comparison. This implementer owns focused public provider/privacy/lifecycle/custom-driver checks and scoped static/format validation; the fresh merger owns exact-candidate current/lowest/Ngest and publication/CI follow-up. Existing interfaces, dependency graph, optional persistence and active consumers remain unchanged. The ticket stays open until that combined acceptance is recorded.
+
+- 2026-10-30: Subscription inspection runtime `e1e4355f4620cb74315d7a1b7bf2fe8a702d025b` completes ticket 23's local provider scope. Final focused inspection/recovery checks pass **74 / 217**; the disjoint existing subscription/shared-live/Graph-client/explicit-grant/custom-driver/architecture set passes **175 / 680**. Each command has a raw source manifest. Dirty Pint changes no PHP bytes; level-8 analysis of five changed files plus their unchanged transport trait, strict Composer validation and installed platform checks pass. The canonical lock SHA256 remains `45D7E7D0B8C04191FBCDA4DD7D524F7A8A5D38B4631188BD9AC8485777A7AB64`. A narrow, independently verified upstream repository URL alias changes no installed package version/reference or runtime blob. No advisory policy or dependency file changed.
+
+- This repair does not refresh the complete current/lowest/Ngest matrix or live gates. The earlier multi-path parallel invocation failed at argument parsing and is not a test result; its corrected single-root eight-class selection is the 175-case result above. The initial five-path static selection omitted the unchanged transport trait and produced two existing-member false positives; adding that connected trait resolved them without source changes or suppressions. Earlier fixture/setup problems and privacy-test corrections remain explicit in the execution receipts, rather than being counted as behavioral evidence. Fresh independent merge review, exact-candidate combined compatibility, portable publication/CI and host repin remain coordinator follow-up. This ticket stays open.
 
 - 2026-10-30: Host read-contract repair claimed by `mailbox_host_read_fix` on `fix/mailbox-host-read-contracts`, based on clean `e1ad4735e1be6abb9b303b90b01f0c7f9ab6a59e`. Reopened only for the affected additive folder-catalogue and Reply-To/header compatibility gate tracked in tickets 14/15. Historical results remain tied to their recorded source and scope. In particular, the earlier AI Clerk-shaped adapter proves durable submission/receipt/editor boundaries, not bounded host folder discovery or Reply-To/header acquisition. Focused real public SDK/Guzzle regressions, relevant configured/custom-driver/DTO contracts and scoped static/format checks belong to this repair; the coordinator will arrange the complete merged-candidate and actual-lowest compatibility gates. No new tracker ticket, dependency update, active consumer change, live operation or publication is included.
 
