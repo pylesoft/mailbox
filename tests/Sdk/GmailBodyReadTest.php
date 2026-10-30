@@ -66,6 +66,14 @@ it('preserves valid empty text and the literal zero', function (array $body, str
     [['data' => 'MA', 'size' => 1], '0'],
 ]);
 
+it('rejects native object MIME collections in ordinary Gmail reads', function (string $parts, string $operation): void {
+    $history = [];
+    $resource = gmailBodyResource([new Response(200, [], '{"id":"message","payload":{"mimeType":"multipart/mixed","parts":'.$parts.'}}')], $history);
+
+    expect(fn () => $resource->{$operation}())->toThrow(MailboxException::class)
+        ->and($history)->toHaveCount(1);
+})->with(['{}', '{"0":{"mimeType":"text/plain","body":{"size":0}}}'])->with(['get', 'attachments']);
+
 it('selects nested HTML body while retaining named text and inline image metadata', function (): void {
     $history = [];
     $payload = ['mimeType' => 'multipart/mixed', 'parts' => [

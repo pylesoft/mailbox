@@ -15,6 +15,7 @@ use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\AttachmentStorage;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ResponseBudget;
 
@@ -65,12 +66,12 @@ class GmailAttachmentResource implements AttachmentResource, SupportsAttachmentR
     private function resolveAttachmentPart(?ResponseBudget $responses = null): array
     {
         $responses ??= new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes);
-        $message = $this->client->getBounded(
+        $message = ConversationPayload::array($this->client->getBoundedObject(
             sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($this->messageId)),
             $responses,
             ['format' => 'full'],
             $this->mailbox,
-        );
+        ));
 
         $payload = is_array($message['payload'] ?? null) ? $message['payload'] : [];
         $part = $this->findPart($payload, $responses);

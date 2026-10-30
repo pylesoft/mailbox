@@ -422,9 +422,9 @@ vendor/bin/pest
 
 The continuous integration pipeline runs three jobs:
 
-- **tests-latest** -- PHP 8.2, 8.3, 8.4 with latest locked dependencies
-- **qa-static-style** -- PHP 8.2 for PHPStan and Pint
-- **tests-lowest** -- PHP 8.2 with `--prefer-lowest --prefer-stable`
+- **tests-latest** -- PHP 8.2, 8.3 and 8.4 with Laravel 12, plus PHP 8.4 with Laravel 13, using current dependency resolution and two Pest workers
+- **qa-static-style** -- PHP 8.4 with the committed lock for PHPStan, Pint and Composer validation, platform and audit checks
+- **tests-lowest** -- PHP 8.2 with Laravel 12 and `--prefer-lowest --prefer-stable`, using two Pest workers
 
 ### Test Categories
 

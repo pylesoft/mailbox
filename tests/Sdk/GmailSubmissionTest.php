@@ -40,7 +40,7 @@ it('submits explicit international Gmail content once without package persistenc
     $mailbox = Mailbox::forGrant(
         new GrantContext('connection', 'grant', '1', 'gmail', 'sender@example.com'),
         $tokens,
-        new Client(['handler' => $handler]),
+        new Client(['handler' => $handler, 'auth' => ['unrelated-user', 'unrelated-password']]),
     );
     $prepared = new PreparedMessage(
         sender: new EmailAddressDto('Élodie, Sender', 'sender@example.com'),

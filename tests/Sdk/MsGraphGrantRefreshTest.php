@@ -125,7 +125,7 @@ it('distinguishes transient Microsoft refresh failures client setup and reconnec
         test()->fail('A rejected refresh must stop the read.');
     } catch (MailboxException $exception) {
         expect($exception)->toBeInstanceOf($retryable === null ? GrantAccessDeniedException::class : GrantRefreshException::class)
-            ->and((string) $exception)->not->toContain('client-secret', 'old-refresh', 'private-response')
+            ->and((string) $exception)->not->toContain('client-secret')->not->toContain('old-refresh')->not->toContain('private-response')
             ->and($exception->getPrevious())->toBeNull();
         if ($exception instanceof GrantRefreshException) {
             expect($exception->retryable)->toBe($retryable)->and($exception->retryAfterSeconds)->toBe($retryable ? 7 : null);
@@ -157,7 +157,7 @@ it('redacts a Microsoft refresh transport failure and permits a later host retry
         test()->fail('Transport failure must be visible.');
     } catch (GrantRefreshException $exception) {
         expect($exception->retryable)->toBeTrue()->and($exception->getPrevious())->toBeNull()
-            ->and((string) $exception)->not->toContain('client-secret', 'old-refresh');
+            ->and((string) $exception)->not->toContain('client-secret')->not->toContain('old-refresh');
     }
     expect($resource->message('message-1')->get()->id)->toBe('message-1')
         ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer retry-access');

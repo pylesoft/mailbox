@@ -14,9 +14,9 @@ use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncIdentity;
 use Pyle\Mailbox\DTOs\SyncScope;
-use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
@@ -287,10 +287,19 @@ it('rejects malformed history evidence instead of completing an empty round', fu
     $scope = new SyncScope;
 
     expect(fn () => $mailbox->incrementalSync($scope, new SyncBudget, incrementalSyncCheckpoint($scope)))
-        ->toThrow(ApiRequestException::class)
+        ->toThrow(MailboxException::class)
         ->and($history)->toHaveCount(1);
 })->with([
     '{"history":null,"historyId":"110"}',
+    '{"history":{},"historyId":"110"}',
+    '{"history":{"0":{"id":"101"}},"historyId":"110"}',
+    '{"history":[{"id":"101","messages":{}}],"historyId":"110"}',
+    '{"history":[{"id":"101","messages":{"0":{"id":"one"}}}],"historyId":"110"}',
+    '{"history":[{"id":"101","messagesAdded":{}}],"historyId":"110"}',
+    '{"history":[{"id":"101","messagesAdded":{"0":{"message":{"id":"one"}}}}],"historyId":"110"}',
+    '{"history":[{"id":"101","messagesDeleted":{}}],"historyId":"110"}',
+    '{"history":[{"id":"101","labelsAdded":{}}],"historyId":"110"}',
+    '{"history":[{"id":"101","labelsRemoved":{}}],"historyId":"110"}',
     '{"history":[{}],"historyId":"110"}',
     '{"history":[{"id":"101","messagesAdded":[{}]}],"historyId":"110"}',
     '{"history":[{"id":"101","labelsRemoved":null}],"historyId":"110"}',

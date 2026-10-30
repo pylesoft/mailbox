@@ -14,6 +14,7 @@ use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ResponseBudget;
 
@@ -95,7 +96,7 @@ class GmailMessageResource implements MessageResource
     /** @return Collection<int, AttachmentDto> */
     public function attachments(): Collection
     {
-        $message = $this->client->getBounded($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), ['format' => 'full'], $this->mailbox, retry: true);
+        $message = ConversationPayload::array($this->client->getBoundedObject($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), ['format' => 'full'], $this->mailbox, retry: true));
         $parts = GmailMime::files((array) ($message['payload'] ?? []));
 
         return collect($parts)

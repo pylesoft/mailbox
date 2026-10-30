@@ -14,13 +14,14 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 final readonly class GmailInitialSync
 {
     public function __construct(private GmailClient $client, private GrantContext $context) {}
 
-    public function page(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation): ChangePage
+    public function page(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation): ChangePage
     {
         $identity = new SyncIdentity('gmail', $this->context, $scope);
         $state = $this->state($identity, $continuation);
@@ -70,7 +71,7 @@ final readonly class GmailInitialSync
                     $query['pageToken'] = $state['pageToken'];
                 }
 
-                $response = $this->client->getBounded($endpoint.'/messages', $responses, $query, $this->context->mailbox);
+                $response = ConversationPayload::array($this->client->getBoundedObject($endpoint.'/messages', $responses, $query, $this->context->mailbox));
             } catch (ResponseLimitExceededException) {
                 return $this->unfinished($identity, $state, $upserts, 'response_limit');
             }
@@ -113,7 +114,7 @@ final readonly class GmailInitialSync
     }
 
     /** @return array{baseline: ?string, pageToken: ?string, seenTokens: list<string>} */
-    private function state(SyncIdentity $identity, ?SyncContinuation $continuation): array
+    private function state(SyncIdentity $identity, #[\SensitiveParameter] ?SyncContinuation $continuation): array
     {
         if ($continuation === null) {
             return ['baseline' => null, 'pageToken' => null, 'seenTokens' => []];
@@ -154,7 +155,7 @@ final readonly class GmailInitialSync
      * @param  array<string, mixed>  $state
      * @param  list<string>  $upserts
      */
-    private function unfinished(SyncIdentity $identity, array $state, array $upserts, string $reason): ChangePage
+    private function unfinished(SyncIdentity $identity, #[\SensitiveParameter] array $state, array $upserts, string $reason): ChangePage
     {
         return new ChangePage(upserts: $upserts, continuation: new SyncContinuation($identity, 'gmail.initial', $state), reason: $reason);
     }

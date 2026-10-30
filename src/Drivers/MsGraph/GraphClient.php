@@ -149,7 +149,7 @@ class GraphClient
     {
         return array_merge($options, [
             'headers' => array_merge($this->defaultHeaders($mailboxKey), $options['headers'] ?? []),
-        ]);
+        ], $this->grantAuthorization !== null ? ['auth' => null] : []);
     }
 
     /**

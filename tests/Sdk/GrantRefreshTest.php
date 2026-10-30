@@ -40,6 +40,32 @@ beforeEach(function (): void {
         'expired-access', 'old-refresh', now()->subMinute()->toDateTimeImmutable(), ['openid'], 'revision-1');
 });
 
+it('redacts rejected Google refresh identity arguments with trace capture enabled', function (): void {
+    $encode = static fn (array $part): string => rtrim(strtr(base64_encode(json_encode($part, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+    $jwt = $encode(['alg' => 'RS256']).'.'.$encode(['iss' => 'https://foreign.example', 'sub' => 'subject', 'aud' => 'selected-client',
+        'exp' => now()->addHour()->getTimestamp(), 'iat' => now()->getTimestamp()]).'.private-signature';
+    Http::fake(['https://oauth2.googleapis.com/token' => Http::response(['access_token' => 'fresh-access', 'expires_in' => 3600,
+        'token_type' => 'Bearer', 'id_token' => $jwt])]);
+    $tokens = new RefreshingGrantTokenProvider($this->host, $this->host, new TestRefreshLocks, new GmailGrantRefresher);
+    $previous = ini_get('zend.exception_ignore_args');
+    ini_set('zend.exception_ignore_args', '0');
+
+    try {
+        try {
+            $tokens->accessToken($this->context);
+            $this->fail('A foreign Google refresh identity was accepted.');
+        } catch (GrantAccessDeniedException $exception) {
+            $trace = array_values(array_filter($exception->getTrace(), fn (array $frame): bool => str_starts_with($frame['class'] ?? '', 'Pyle\\Mailbox\\')));
+            foreach ([$jwt, 'client-secret', 'old-refresh', 'fresh-access'] as $secret) {
+                expect(json_encode($trace, JSON_PARTIAL_OUTPUT_ON_ERROR))->not->toContain($secret);
+            }
+            expect($this->host->load($this->context)?->revision)->toBe('revision-1');
+        }
+    } finally {
+        ini_set('zend.exception_ignore_args', (string) $previous);
+    }
+});
+
 it('returns retry information without HTTP or job release when the named lock store is unavailable', function (): void {
     $job = Mockery::mock(Job::class);
     $job->shouldNotReceive('release');
@@ -120,7 +146,7 @@ it('classifies refresh failures without exposing provider secrets', function (in
         test()->fail('Refresh should fail.');
     } catch (MailboxException $exception) {
         expect($exception)->toBeInstanceOf($exceptionClass)
-            ->and((string) $exception)->not->toContain('client-secret', 'old-refresh', 'fresh-access')
+            ->and((string) $exception)->not->toContain('client-secret')->not->toContain('old-refresh')->not->toContain('fresh-access')
             ->and($exception->getPrevious())->toBeNull();
         if ($exception instanceof GrantRefreshException) {
             expect($exception->retryable)->toBe($retryable)
@@ -254,7 +280,7 @@ it('fails closed with no exchange for failed or non atomic host coordination', f
         $tokens->accessToken($this->context);
         test()->fail('Coordination must fail.');
     } catch (GrantRefreshException $exception) {
-        expect($exception->retryable)->toBeTrue()->and((string) $exception)->not->toContain('redis-secret', 'old-refresh')
+        expect($exception->retryable)->toBeTrue()->and((string) $exception)->not->toContain('redis-secret')->not->toContain('old-refresh')
             ->and($exception->getPrevious())->toBeNull();
     }
     Http::assertNothingSent();
@@ -326,7 +352,7 @@ it('redacts refresh transport failures and releases coordination for a later hos
         test()->fail('The transport should fail.');
     } catch (GrantRefreshException $exception) {
         expect($exception->retryable)->toBeTrue()->and($exception->getPrevious())->toBeNull()
-            ->and((string) $exception)->not->toContain('client-secret', 'old-refresh');
+            ->and((string) $exception)->not->toContain('client-secret')->not->toContain('old-refresh');
     }
     expect($tokens->accessToken($this->context))->toBe('retry-access');
 });
@@ -374,8 +400,8 @@ it('verifies the original nonce from enrollment during refresh without exposing 
     $enrolled = $this->host->load($this->context);
     $nonceHash = hash('sha256', $query['nonce']);
     expect($enrolled->nonceHash())->toBe($nonceHash)
-        ->and(json_encode($enrolled))->not->toContain($query['nonce'], $nonceHash)
-        ->and(print_r($enrolled, true))->not->toContain($query['nonce'], $nonceHash);
+        ->and(json_encode($enrolled))->not->toContain($query['nonce'])->not->toContain($nonceHash)
+        ->and(print_r($enrolled, true))->not->toContain($query['nonce'])->not->toContain($nonceHash);
     if ($mode === 'missing-baseline') {
         $this->host->grants['grant'] = new StoredGrant($enrolled->identity, $enrolled->accessToken(), $enrolled->refreshToken(),
             $enrolled->expiresAt, $enrolled->scopes, $enrolled->revision);

@@ -145,12 +145,12 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         return new MsGraphDraftSubmission($this->client, $this->grantContext);
     }
 
-    public function initialSync(SyncScope $scope, SyncBudget $budget, ?SyncContinuation $continuation = null): ChangePage
+    public function initialSync(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation = null): ChangePage
     {
         return $this->boundedSync()->page($scope, $budget, null, $continuation);
     }
 
-    public function incrementalSync(SyncScope $scope, SyncBudget $budget, SyncCheckpoint $checkpoint, ?SyncContinuation $continuation = null): ChangePage
+    public function incrementalSync(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation = null): ChangePage
     {
         return $this->boundedSync()->page($scope, $budget, $checkpoint, $continuation);
     }

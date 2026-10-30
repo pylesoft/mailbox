@@ -178,7 +178,7 @@ class GmailClient
     {
         return array_merge($options, [
             'headers' => array_merge($this->defaultHeaders($mailboxKey), (array) ($options['headers'] ?? [])),
-        ]);
+        ], $this->grantAuthorization !== null ? ['auth' => null] : []);
     }
 
     /**

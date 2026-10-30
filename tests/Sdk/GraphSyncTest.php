@@ -32,7 +32,7 @@ it('resumes Graph folder deltas through documented opaque next and delta links',
         new Response(200, [], json_encode(['value' => [['id' => 'first', '@odata.etag' => 'same']], '@odata.nextLink' => $next], JSON_THROW_ON_ERROR)),
         new Response(200, [], json_encode(['value' => [['id' => 'second'], ['id' => 'moved', '@removed' => ['reason' => 'deleted']]], '@odata.deltaLink' => $delta], JSON_THROW_ON_ERROR)),
         new Response(200, [], json_encode(['value' => [], '@odata.deltaLink' => $delta], JSON_THROW_ON_ERROR)),
-    ], $history);
+    ], $history, httpOptions: ['query' => ['unrelated' => 'default']]);
     $scope = new SyncScope('FolderA', new DateTimeImmutable('2026-01-01T00:00:00Z'));
 
     $first = $mailbox->initialSync($scope, new SyncBudget);
@@ -418,6 +418,15 @@ it('rejects malformed Graph delta evidence instead of completing or inventing re
     'malformed removal' => [[['id' => 'message', '@removed' => null]]],
 ]);
 
+it('rejects native object collections in Graph folders and delta pages', function (string $value, ?string $folder): void {
+    $history = [];
+    $body = '{"value":'.$value.',"@odata.deltaLink":'.json_encode(graphSyncLink('FolderA', 'complete'), JSON_THROW_ON_ERROR).'}';
+    $mailbox = graphSyncResource([new Response(200, [], $body)], $history);
+
+    expect(fn () => $mailbox->initialSync(new SyncScope($folder), new SyncBudget))->toThrow(ApiRequestException::class)
+        ->and($history)->toHaveCount(1);
+})->with(['{}', '{"0":{"id":"one"}}'])->with([null, 'FolderA']);
+
 it('does not complete an empty mailbox when folder enumeration exceeds its item budget', function (): void {
     $history = [];
     $root = '{"value":[{"id":"A"},{"id":"B"}]}';
@@ -461,15 +470,16 @@ it('rejects Graph continuation destinations outside the exact mailbox folder and
 /**
  * @param  list<mixed>  $responses
  * @param  array<int, mixed>  $history
+ * @param  array<string, mixed>  $httpOptions
  */
-function graphSyncResource(array $responses, array &$history, ?TestGrantTokenProvider $tokens = null): SupportsInitialSync&SupportsIncrementalSync
+function graphSyncResource(array $responses, array &$history, ?TestGrantTokenProvider $tokens = null, array $httpOptions = []): SupportsInitialSync&SupportsIncrementalSync
 {
     $stack = HandlerStack::create(new MockHandler($responses));
     $stack->push(Middleware::history($history));
     $tokens ??= new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => 'selected-token'],
     ]);
-    $resource = Mailbox::forGrant(new GrantContext('connection', 'grant', '1', 'ms-graph', 'same@example.com'), $tokens, new Client(['handler' => $stack]));
+    $resource = Mailbox::forGrant(new GrantContext('connection', 'grant', '1', 'ms-graph', 'same@example.com'), $tokens, new Client(['handler' => $stack, ...$httpOptions]));
     expect($resource)->toBeInstanceOf(SupportsInitialSync::class)->toBeInstanceOf(SupportsIncrementalSync::class);
 
     return $resource;

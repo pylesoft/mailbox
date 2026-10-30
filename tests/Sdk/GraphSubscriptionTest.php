@@ -47,7 +47,7 @@ it('creates a basic Graph subscription under the selected grant with trusted can
         ], JSON_THROW_ON_ERROR)),
     ]));
     $stack->push(Middleware::history($history));
-    $http = new Client(['handler' => $stack, 'base_uri' => 'https://graph.microsoft.com/v1.0/']);
+    $http = new Client(['handler' => $stack, 'base_uri' => 'https://graph.microsoft.com/v1.0/', 'auth' => ['unrelated-user', 'unrelated-password']]);
     $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'shared@example.com');
     $tokens = new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['shared@example.com'], 'token' => 'selected-token'],

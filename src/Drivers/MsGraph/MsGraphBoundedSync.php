@@ -15,6 +15,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 /**
@@ -27,7 +28,7 @@ final readonly class MsGraphBoundedSync
 {
     public function __construct(private GraphClient $client, private GrantContext $context) {}
 
-    public function page(SyncScope $scope, SyncBudget $budget, ?SyncCheckpoint $checkpoint, ?SyncContinuation $continuation): ChangePage
+    public function page(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation): ChangePage
     {
         $identity = new SyncIdentity('ms-graph', $this->context, $scope);
         $checkpoint?->identity->assertMatches($identity);
@@ -78,7 +79,7 @@ final readonly class MsGraphBoundedSync
             $endpoint = $folder['nextLink'] ?? $base;
             $remaining = $budget->maxItems - $items;
             try {
-                $response = $this->client->getBounded($endpoint, $responses, $folder['nextLink'] === null ? ['$select' => 'id', '$top' => min(1000, $remaining)] : [], $this->context->mailbox);
+                $payload = $this->client->getBoundedObject($endpoint, $responses, $folder['nextLink'] === null ? ['$select' => 'id', '$top' => min(1000, $remaining)] : [], $this->context->mailbox);
             } catch (ResponseLimitExceededException) {
                 return $this->result($identity, $state, $changes, 'response_limit');
             } catch (ApiRequestException $e) {
@@ -87,10 +88,12 @@ final readonly class MsGraphBoundedSync
                 }
                 throw $e;
             }
-            $values = $response['value'] ?? null;
+            $values = $payload->value ?? null;
             if (! is_array($values) || ! array_is_list($values)) {
                 throw new ApiRequestException('Graph returned a missing or malformed delta collection.');
             }
+            $response = ConversationPayload::array($payload);
+            $values = $response['value'];
             $hasNext = array_key_exists('@odata.nextLink', $response);
             if ($hasNext === array_key_exists('@odata.deltaLink', $response)) {
                 return $this->result($identity, $state, $changes, 'provider_progress_missing');
@@ -149,7 +152,7 @@ final readonly class MsGraphBoundedSync
      * @param  list<array{folderId: string, deltaLink: string}>  $previous
      * @return SyncState
      */
-    private function state(SyncIdentity $identity, ?SyncCheckpoint $checkpoint, ?SyncContinuation $continuation, array $previous): array
+    private function state(SyncIdentity $identity, #[\SensitiveParameter] ?SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation, #[\SensitiveParameter] array $previous): array
     {
         if ($continuation !== null) {
             $continuation->identity->assertMatches($identity);
@@ -209,16 +212,18 @@ final readonly class MsGraphBoundedSync
      * @param  SyncState  $state
      * @param  list<array{folderId: string, deltaLink: string}>  $previous
      */
-    private function enumerate(array &$state, array $previous, int $remaining, ResponseBudget $responses, int &$items): ?string
+    private function enumerate(#[\SensitiveParameter] array &$state, #[\SensitiveParameter] array $previous, int $remaining, ResponseBudget $responses, int &$items): ?string
     {
         $progress = $state['enumeration'][0];
         $base = $this->enumerationEndpoint($progress['folderId']);
         $endpoint = $progress['nextLink'] ?? $base;
-        $response = $this->client->getBounded($endpoint, $responses, $progress['nextLink'] === null ? ['$select' => 'id', '$top' => min(1000, $remaining), 'includeHiddenFolders' => 'true'] : [], $this->context->mailbox);
-        $values = $response['value'] ?? null;
+        $payload = $this->client->getBoundedObject($endpoint, $responses, $progress['nextLink'] === null ? ['$select' => 'id', '$top' => min(1000, $remaining), 'includeHiddenFolders' => 'true'] : [], $this->context->mailbox);
+        $values = $payload->value ?? null;
         if (! is_array($values) || ! array_is_list($values)) {
             throw new ApiRequestException('Graph returned a missing or malformed folder collection.');
         }
+        $response = ConversationPayload::array($payload);
+        $values = $response['value'];
         $next = array_key_exists('@odata.nextLink', $response)
             ? $this->client->continuationEndpoint($response['@odata.nextLink'], $base, $this->context->mailbox)
             : null;
@@ -253,7 +258,7 @@ final readonly class MsGraphBoundedSync
      * @param  list<array{folderId: string, deltaLink: string}>  $previous
      * @return FolderProgress
      */
-    private function newFolder(string $folderId, array $previous): array
+    private function newFolder(string $folderId, #[\SensitiveParameter] array $previous): array
     {
         $next = null;
         foreach ($previous as $folder) {
@@ -277,7 +282,7 @@ final readonly class MsGraphBoundedSync
     }
 
     /** @return list<array{folderId: string, deltaLink: string}> */
-    private function checkpointFolders(SyncIdentity $identity, ?SyncCheckpoint $checkpoint): array
+    private function checkpointFolders(SyncIdentity $identity, #[\SensitiveParameter] ?SyncCheckpoint $checkpoint): array
     {
         if ($checkpoint === null) {
             return [];
@@ -309,7 +314,7 @@ final readonly class MsGraphBoundedSync
     }
 
     /** @param list<string> $tokens */
-    private function stateLink(mixed $link, string $base, array $tokens = []): ?string
+    private function stateLink(#[\SensitiveParameter] mixed $link, string $base, array $tokens = []): ?string
     {
         if ($link === null) {
             return null;
@@ -327,7 +332,7 @@ final readonly class MsGraphBoundedSync
     }
 
     /** @param list<string> $names */
-    private function hasToken(string $link, array $names): bool
+    private function hasToken(#[\SensitiveParameter] string $link, array $names): bool
     {
         $query = (string) parse_url($link, PHP_URL_QUERY);
         foreach ($names as $name) {
@@ -357,7 +362,7 @@ final readonly class MsGraphBoundedSync
      * @param  SyncState  $state
      * @param  FolderChanges  $changes
      */
-    private function result(SyncIdentity $identity, array $state, array $changes, ?string $reason = null, bool $reset = false): ChangePage
+    private function result(SyncIdentity $identity, #[\SensitiveParameter] array $state, array $changes, ?string $reason = null, bool $reset = false): ChangePage
     {
         $folders = array_map(static fn (array $folder): array => ['folderId' => $folder['folderId'], 'deltaLink' => $folder['deltaLink']], $state['folders']);
 

@@ -81,6 +81,29 @@ it('rejects a malformed ID token even in a successful token response', function 
         ->and($host->load($context))->toBeNull();
 });
 
+it('redacts rejected Google enrollment identity arguments with trace capture enabled', function (): void {
+    [$host, $context, $oauth, $query] = gmailEnrollmentFlow();
+    $data = gmailEnrollmentTokens($query['nonce'], ['iss' => 'https://foreign.example']);
+    Http::fake(['https://oauth2.googleapis.com/token' => Http::response($data)]);
+    $previous = ini_get('zend.exception_ignore_args');
+    ini_set('zend.exception_ignore_args', '0');
+
+    try {
+        try {
+            $oauth->handleCallback($context, 'host-a', $query['state'], 'secret-code');
+            $this->fail('A foreign Google identity was accepted.');
+        } catch (OAuthEnrollmentException $exception) {
+            $trace = array_values(array_filter($exception->getTrace(), fn (array $frame): bool => str_starts_with($frame['class'] ?? '', 'Pyle\\Mailbox\\')));
+            foreach ([$data['id_token'], $query['nonce'], $query['state'], 'secret-code', 'client-secret'] as $secret) {
+                expect(json_encode($trace, JSON_PARTIAL_OUTPUT_ON_ERROR))->not->toContain($secret);
+            }
+            expect($host->load($context))->toBeNull();
+        }
+    } finally {
+        ini_set('zend.exception_ignore_args', (string) $previous);
+    }
+});
+
 it('supports personal and Workspace identities without using email to select a grant', function (string $driver, ?string $domain): void {
     [$host, $context, $oauth, $query] = gmailEnrollmentFlow(driver: $driver);
     Http::fake(['https://oauth2.googleapis.com/token' => Http::response(gmailEnrollmentTokens($query['nonce'], ['hd' => $domain]))]);
@@ -275,7 +298,7 @@ it('keeps provider responses and transport secrets out of public errors', functi
         $oauth->handleCallback($context, 'host-a', $query['state'], 'secret-code');
         $this->fail('Expected an enrollment failure.');
     } catch (OAuthEnrollmentException $exception) {
-        expect((string) $exception)->not->toContain('provider-secret', 'client-secret', 'secret-code')
+        expect((string) $exception)->not->toContain('provider-secret')->not->toContain('client-secret')->not->toContain('secret-code')
             ->and($exception->getPrevious())->toBeNull()
             ->and($host->load($context))->toBeNull();
     }
@@ -306,10 +329,10 @@ it('returns safe destinations and exposes no credentials in results or debug out
     $grant = $host->load($context);
 
     expect($result->returnTo)->toBe($expected)
-        ->and(json_encode($result))->not->toContain('enrolled-access', 'renewable-token', 'id_token', 'client-secret')
-        ->and(json_encode($grant))->not->toContain('enrolled-access', 'renewable-token')
-        ->and(print_r($grant, true))->not->toContain('enrolled-access', 'renewable-token')
-        ->and(print_r($state, true))->not->toContain($state->codeVerifier(), $state->nonce());
+        ->and(json_encode($result))->not->toContain('enrolled-access')->not->toContain('renewable-token')->not->toContain('id_token')->not->toContain('client-secret')
+        ->and(json_encode($grant))->not->toContain('enrolled-access')->not->toContain('renewable-token')
+        ->and(print_r($grant, true))->not->toContain('enrolled-access')->not->toContain('renewable-token')
+        ->and(print_r($state, true))->not->toContain($state->codeVerifier())->not->toContain($state->nonce());
 })->with([['/connections', '/connections'], ['//evil.example', '/'], ['/\\evil.example', '/'], ['https://evil.example/path', '/'], ["/\nevil", '/']]);
 
 it('compares numeric-looking context and subject identifiers exactly', function (string $mismatch): void {
