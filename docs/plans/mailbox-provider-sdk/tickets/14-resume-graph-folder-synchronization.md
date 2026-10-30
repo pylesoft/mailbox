@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** closed
+**Resolution:** open
 
 **Spec:** [Specification](../spec.md)
 
@@ -31,6 +31,8 @@ Use the shared bounded-progress contract for Microsoft Graph folder delta. Make 
 - Cover interrupted/replayed pages, expired checkpoints, cyclic progress and independently unfinished folders; assert no false mailbox-wide completion or destructive retention interpretation.
 
 ## Comments
+
+- 2026-10-30: Host read-contract repair claimed by `mailbox_host_read_fix` on `fix/mailbox-host-read-contracts`, based on clean `e1ad4735e1be6abb9b303b90b01f0c7f9ab6a59e`. The earlier receipts prove bounded ID-only hierarchy discovery coupled to folder message delta. They do not prove a metadata-rich, independently complete folder catalogue. Reopened for the authorized additive catalogue prerequisite: bounded roots and children, canonical well-known IDs, parent/hidden metadata, honest completion and private resumable state. The host continues to select folders and descendants, cutoffs and retention. Mandatory folder/query contracts and existing delta behavior remain unchanged. Public SDK/Guzzle RED cases precede implementation; PHP, dependency setup and checks require the coordinator's exclusive heavy slot. No live provider operation, dependency update, consumer edit or publication is authorized.
 
 - 2026-10-29: Claimed by the ticket 14 implementer on `feat/mailbox-sdk-14`, based on integration `72a728a1f2c143333c3b50d411ad783830352fec`. Reusing the approved Q13 public SDK, real Guzzle HTTP-history and host-port seams with `matt:tdd`. Scope is bounded Graph folder delta and explicit mailbox-wide covered-folder progress; no enrollment, live provider operations, application projections or publication. The branch has no upstream and started clean. Dependency setup and checks are queued behind the global single-check slot.
 - First selected-folder tracer: observed RED because the Graph resource lacked `SupportsInitialSync`; GREEN after implementing initial/resumed/incremental folder delta and accepting Microsoft's documented `mailfolders('ID')` path form without altering opaque queries. `GraphSyncTest.php`: 1 test, 12 assertions, SDK-forbidden database. Locked dependency setup completed with scripts disabled. Mailbox-wide, state-validation and reset slices remain open.

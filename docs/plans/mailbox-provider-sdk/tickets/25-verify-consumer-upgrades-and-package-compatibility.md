@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** closed
+**Resolution:** open
 
 **Spec:** [Specification](../spec.md)
 
@@ -39,6 +39,8 @@ Preserve existing runner/platform coverage; no Blacksmith migration, package pub
 
 
 ## Comments
+
+- 2026-10-30: Host read-contract repair claimed by `mailbox_host_read_fix` on `fix/mailbox-host-read-contracts`, based on clean `e1ad4735e1be6abb9b303b90b01f0c7f9ab6a59e`. Reopened only for the affected additive folder-catalogue and Reply-To/header compatibility gate tracked in tickets 14/15. Historical results remain tied to their recorded source and scope. In particular, the earlier AI Clerk-shaped adapter proves durable submission/receipt/editor boundaries, not bounded host folder discovery or Reply-To/header acquisition. Focused real public SDK/Guzzle regressions, relevant configured/custom-driver/DTO contracts and scoped static/format checks belong to this repair; the coordinator will arrange the complete merged-candidate and actual-lowest compatibility gates. No new tracker ticket, dependency update, active consumer change, live operation or publication is included.
 
 - 2026-10-29: Final-review repair claimed by the fresh implementer on `fix/mailbox-sdk-review`, based on reviewed integration `2e07289774e9315bbe22f167b425e7c3b1a9e839`. Scope is the five concrete spec findings, two privacy standard findings, narrow Google verification duplication and stale documentation. Public Q13 regressions precede fixes; one heavy check runs at a time, Pest at most two workers. Existing compatibility receipts remain reusable until affected behavior invalidates them. Live tickets 26/27 and the specification stay open; no publication, live operation or active-consumer change is authorized.
 
