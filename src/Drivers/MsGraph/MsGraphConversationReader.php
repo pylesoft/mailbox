@@ -96,9 +96,10 @@ final readonly class MsGraphConversationReader
                     $message = ConversationPayload::array($this->client->getBoundedObject($endpoint, $work->responses, ['$select' => self::MESSAGE_SELECT], $this->context->mailbox));
                 }
                 $this->assertMessage($message, $conversationId);
-                if ($message['id'] !== $id || ! is_array($message['body'] ?? null)
+                if ($message['id'] !== $id || ! array_key_exists('replyTo', $message) || ! array_key_exists('internetMessageHeaders', $message)
+                    || ! is_array($message['body'] ?? null)
                     || ! in_array($message['body']['contentType'] ?? null, ['text', 'html'], true) || ! is_string($message['body']['content'] ?? null)) {
-                    throw new MailboxException('Graph returned missing or malformed conversation body content.');
+                    throw new MailboxException('Graph returned missing or malformed conversation content.');
                 }
                 $work->content(strlen($message['body']['content']));
                 $mapped = MessageDto::fromMsGraph($message);

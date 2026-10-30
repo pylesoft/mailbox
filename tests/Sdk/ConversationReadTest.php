@@ -220,6 +220,47 @@ it('preserves Graph Reply-To and repeated headers after bounded hydration resume
     expect(explode(',', $query['$select']))->toContain('replyTo', 'internetMessageHeaders');
 });
 
+it('accepts explicit empty Graph reply and internet header collections as complete received evidence', function (): void {
+    Http::preventStrayRequests();
+    $history = [];
+    $message = [...graphConversationMessage('empty'), 'replyTo' => [], 'internetMessageHeaders' => []];
+
+    $read = conversationMailbox('ms-graph', [['value' => [$message]], ['value' => []]], $history)
+        ->conversation('thread', new SyncScope('FolderA'), new SyncBudget(maxPages: 2));
+
+    expect($read->complete)->toBeTrue();
+    expect($read->messages[0]->replyTo)->toBe([]);
+    expect($read->messages[0]->headers)->toBe([]);
+    expect($history)->toHaveCount(2);
+});
+
+it('keeps a selected missing Graph collection incomplete and recovers it through the existing resumed hydration', function (string $field): void {
+    Http::preventStrayRequests();
+    $history = [];
+    $complete = [...graphConversationMessage('older'), 'replyTo' => [], 'internetMessageHeaders' => []];
+    $message = $complete;
+    unset($message[$field]);
+    $scope = new SyncScope('FolderA');
+    $first = conversationMailbox('ms-graph', [['value' => [$message]], ['value' => []]], $history)
+        ->conversation('thread', $scope, new SyncBudget(maxPages: 2));
+
+    expect($first->complete)->toBeFalse();
+    expect($first->reason)->toBe('content_incomplete');
+    expect($first->messages)->toBe([]);
+    expect($first->continuation)->not->toBeNull();
+    expect($history)->toHaveCount(1);
+
+    $resumedHistory = [];
+    $last = conversationMailbox('ms-graph', [$complete, ['value' => []]], $resumedHistory)
+        ->conversation('thread', $scope, new SyncBudget(maxRequests: 2), unserialize(serialize($first->continuation)));
+
+    expect($last->complete)->toBeTrue();
+    expect($last->messages[0]->replyTo)->toBe([]);
+    expect($last->messages[0]->headers)->toBe([]);
+    expect($resumedHistory[0]['request']->getUri()->getPath())->toEndWith('/mailFolders/FolderA/messages/older');
+    expect($resumedHistory)->toHaveCount(2);
+})->with(['replyTo', 'internetMessageHeaders']);
+
 it('maps repeated Gmail Reply-To headers with decoded RFC addresses through the same conversation DTO', function (): void {
     Http::preventStrayRequests();
     $history = [];
@@ -603,6 +644,7 @@ function graphConversationMessage(string $id, string $conversationId = 'thread')
         'id' => $id, 'conversationId' => $conversationId, 'parentFolderId' => 'FolderA',
         'body' => ['contentType' => 'html', 'content' => 'Older context'],
         'receivedDateTime' => '2010-01-01T00:00:00Z', 'hasAttachments' => false,
+        'replyTo' => [], 'internetMessageHeaders' => [],
     ];
 }
 
