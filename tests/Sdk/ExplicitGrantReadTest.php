@@ -74,6 +74,21 @@ it('isolates grants for two host contexts accessing the same account', function 
         ->and(Mailbox::driver($driver))->toBe($configuredDriver);
 })->with(['gmail', 'ms-graph']);
 
+it('uses the selected grant despite ordinary supplied client authentication', function (string $driver): void {
+    $history = [];
+    $stack = HandlerStack::create(new MockHandler([new Response(200, [], '{"id":"one"}')]));
+    $stack->push(Middleware::history($history));
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => 'selected-token'],
+    ]);
+    $mailbox = Mailbox::forGrant(new GrantContext('connection', 'grant', '1', $driver, 'same@example.com'), $tokens,
+        new Client(['handler' => $stack, 'auth' => ['unrelated-user', 'unrelated-password']]));
+
+    expect($mailbox->message('one')->get()->id)->toBe('one')
+        ->and($history)->toHaveCount(1)
+        ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
+})->with(['gmail', 'ms-graph']);
+
 it('checks the captured lifecycle again before a read retry', function (string $driver): void {
     $history = [];
     $tokens = new TestGrantTokenProvider([

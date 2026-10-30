@@ -130,6 +130,9 @@ trait PerformsApiRequests
     {
         $budget->assertMemoryAvailable(65536);
         $options = $query === [] ? [] : ['query' => $query];
+        if ($query === [] && (new Uri($endpoint))->getQuery() !== '') {
+            $options['query'] = null;
+        }
         $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox, retry: false);
         $stream = $response->getBody();
         $body = '';
