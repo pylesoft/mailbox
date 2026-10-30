@@ -14,7 +14,7 @@ final class ConversationPayload
     {
         $data = [];
         foreach (get_object_vars($payload) as $key => $value) {
-            if (in_array($key, ['messages', 'parts', 'headers', 'labelIds', 'toRecipients', 'ccRecipients', 'bccRecipients', 'replyTo', 'history', 'messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'], true)
+            if (in_array($key, ['messages', 'parts', 'headers', 'internetMessageHeaders', 'labelIds', 'toRecipients', 'ccRecipients', 'bccRecipients', 'replyTo', 'history', 'messagesAdded', 'messagesDeleted', 'labelsAdded', 'labelsRemoved'], true)
                 && (! is_array($value) || ! array_is_list($value))) {
                 throw new MailboxException('The provider returned an invalid collection.');
             }

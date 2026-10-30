@@ -30,7 +30,7 @@ use Pyle\Mailbox\Support\ConversationReadBudget;
 /** @phpstan-type ConversationState array{conversationId: string, started: bool, nextLink: ?string, seenLinks: list<string>, pending: list<string>, seenIds: list<string>, files: list<array<string, mixed>>, filesStarted: bool, fileNext: ?string, fileSeen: list<string>} */
 final readonly class MsGraphConversationReader
 {
-    private const MESSAGE_SELECT = 'id,subject,bodyPreview,body,from,sender,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,importance,conversationId,internetMessageId,parentFolderId';
+    private const MESSAGE_SELECT = 'id,subject,bodyPreview,body,from,sender,toRecipients,ccRecipients,bccRecipients,replyTo,internetMessageHeaders,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,importance,conversationId,internetMessageId,parentFolderId';
 
     private const FILE_SELECT = 'id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId';
 
@@ -96,9 +96,10 @@ final readonly class MsGraphConversationReader
                     $message = ConversationPayload::array($this->client->getBoundedObject($endpoint, $work->responses, ['$select' => self::MESSAGE_SELECT], $this->context->mailbox));
                 }
                 $this->assertMessage($message, $conversationId);
-                if ($message['id'] !== $id || ! is_array($message['body'] ?? null)
+                if ($message['id'] !== $id || ! array_key_exists('replyTo', $message) || ! array_key_exists('internetMessageHeaders', $message)
+                    || ! is_array($message['body'] ?? null)
                     || ! in_array($message['body']['contentType'] ?? null, ['text', 'html'], true) || ! is_string($message['body']['content'] ?? null)) {
-                    throw new MailboxException('Graph returned missing or malformed conversation body content.');
+                    throw new MailboxException('Graph returned missing or malformed conversation content.');
                 }
                 $work->content(strlen($message['body']['content']));
                 $mapped = MessageDto::fromMsGraph($message);

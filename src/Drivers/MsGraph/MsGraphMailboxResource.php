@@ -16,6 +16,7 @@ use Pyle\Mailbox\Contracts\SupportsConversationRead;
 use Pyle\Mailbox\Contracts\SupportsDraftAttachmentPreparation;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
+use Pyle\Mailbox\Contracts\SupportsFolderCatalogue;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSharedMailboxLive;
@@ -24,6 +25,7 @@ use Pyle\Mailbox\Drivers\MsGraph\Contracts\VerifiesGraphSharedMailboxLiveAccess;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\ConversationRead;
+use Pyle\Mailbox\DTOs\FolderCatalogue;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\GraphChangeHint;
 use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
@@ -40,7 +42,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsFolderCatalogue, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -115,6 +117,16 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         }
 
         return (new MsGraphConversationReader($this->client, $this->grantContext))->read($conversationId, $scope, $budget, $continuation, $limits);
+    }
+
+    /** @param list<WellKnownFolder> $wellKnownFolders */
+    public function folderCatalogue(SyncBudget $budget, #[\SensitiveParameter] ?SyncContinuation $continuation = null, array $wellKnownFolders = []): FolderCatalogue
+    {
+        if ($this->grantContext === null) {
+            throw new UnsupportedCapabilityException('Bounded folder catalogues require an explicit grant context.');
+        }
+
+        return (new MsGraphFolderCatalogue($this->client, $this->grantContext))->read($budget, $continuation, $wellKnownFolders);
     }
 
     public function prepareSubmission(PreparedMessage $message, int $maxRequestBytes = 4_000_000): SubmissionPreparation

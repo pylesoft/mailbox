@@ -397,6 +397,22 @@ Gmail reads the selected thread in the selected mailbox, including messages olde
 
 Graph filters messages by `conversationId` in the requested mailbox or one requested folder. It follows every message page and attachment-metadata page within that scope, including inline files when `hasAttachments` is false. A folder scope covers that folder's message collection, not its child folders. A mailbox scope covers the provider's mailbox message collection; it does not claim access to another mailbox, archive store or inaccessible shared folders. Graph also retains older messages in the selected conversation rather than applying the selection cutoff again.
 
+Conversation messages expose `replyTo` as received `EmailAddressDto` values and `headers` as an ordered list of `{name, value}` records. Gmail parses every Reply-To header through the incoming address parser, including encoded names, quoted commas and repeated fields. Graph explicitly selects `replyTo` and `internetMessageHeaders` for both initial pages and resumed message hydration. Malformed lists or entries remain unfinished content.
+
+Explicit empty Graph arrays are accepted. A missing selected collection remains `content_incomplete`, with the message retained for the existing resumed hydration path. It is not evidence that no Reply-To or headers exist. Microsoft's [get-message examples](https://learn.microsoft.com/en-us/graph/api/message-get?view=graph-rest-1.0) show empty Reply-To arrays and explicitly selected header arrays; the SDK preserves that distinction without changing legacy DTO defaults for partial eager payloads.
+
+```php
+foreach ($message->replyTo as $address) {
+    $replyAddress = $address->address;
+}
+
+foreach ($message->headers as $header) {
+    // Repeated names remain separate records; values retain the provider's text.
+}
+```
+
+These trailing DTO values default to empty arrays for existing constructors. Header names, values and order are retained; the host chooses which fields to publish and how to select reply recipients. Reading a historical Bcc recipient does not add it to a new submission. Individual eager Graph reads expose these values only when the provider payload contains them; use the bounded conversation capability when you need explicit acquisition.
+
 `ConversationRead::identity` declares the provider, selected grant/generation, mailbox and requested scope. `messages` contains complete message DTOs from this call; `files` associates complete file metadata with its message ID. The host still owns HTML sanitization, file authorization, retention and presentation. A completed conversation read does not create a synchronization checkpoint or establish that a synchronization round has completed.
 
 ### Retaining Unfinished Work
