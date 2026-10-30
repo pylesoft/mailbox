@@ -54,7 +54,7 @@ class MsGraphDriver implements MailboxDriver, SupportsGrantMailbox, SupportsRawC
 
         return new MsGraphMailboxResource(
             client: $client,
-            batch: new BatchRequest($client),
+            batch: new BatchRequest($client, $context->mailbox),
             deltaSync: new MsGraphDeltaSync($client),
             emailAddress: $context->mailbox,
             grantContext: $context,

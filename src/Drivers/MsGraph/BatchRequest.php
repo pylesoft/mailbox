@@ -12,6 +12,7 @@ class BatchRequest
 
     public function __construct(
         private readonly GraphClient $client,
+        private readonly ?string $mailbox = null,
     ) {}
 
     /**
@@ -22,6 +23,10 @@ class BatchRequest
     {
         if ($requests === []) {
             return ['responses' => []];
+        }
+
+        if ($this->mailbox !== null) {
+            return ['responses' => array_map($this->retryIndividually(...), $requests)];
         }
 
         $mergedResponses = [];
@@ -100,12 +105,12 @@ class BatchRequest
                 'POST' => [
                     'id' => $id,
                     'status' => 200,
-                    'body' => $this->client->post($url, $body),
+                    'body' => $this->client->post($url, $body, $this->mailbox),
                 ],
                 'PATCH' => [
                     'id' => $id,
                     'status' => 200,
-                    'body' => $this->client->patch($url, $body),
+                    'body' => $this->client->patch($url, $body, $this->mailbox),
                 ],
                 'DELETE' => $this->retryDelete($id, $url),
                 default => throw new ApiRequestException(
@@ -116,6 +121,9 @@ class BatchRequest
         } catch (ApiRequestException $e) {
             throw $e;
         } catch (\Throwable $e) {
+            if ($this->mailbox !== null) {
+                throw $e;
+            }
             throw new ApiRequestException(
                 message: sprintf('Batch subrequest %s failed after individual retry: %s', $id, $e->getMessage()),
                 endpoint: '/$batch',
@@ -143,14 +151,14 @@ class BatchRequest
         return [
             'id' => $id,
             'status' => 200,
-            'body' => $this->client->get($path, $query),
+            'body' => $this->client->get($path, $query, $this->mailbox),
         ];
     }
 
     /** @return array<string, mixed> */
     private function retryDelete(string $id, string $url): array
     {
-        $this->client->delete($url);
+        $this->client->delete($url, $this->mailbox);
 
         return [
             'id' => $id,

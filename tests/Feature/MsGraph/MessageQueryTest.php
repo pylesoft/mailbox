@@ -13,7 +13,7 @@ it('queries messages and maps DTOs', function (): void {
     {
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return [
                 'value' => [
@@ -37,7 +37,7 @@ it('applies client-side filters when using search with where clauses', function 
     {
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             expect($query)->toHaveKey('$search');
 
@@ -66,7 +66,7 @@ it('applies internetMessageId and from.address client-side filters during search
     {
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             expect($query)->toHaveKey('$search');
 
@@ -124,7 +124,7 @@ it('sends bulk actions in chunked batch requests', function (): void {
             return [];
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return ['value' => []];
         }
@@ -170,7 +170,7 @@ it('retries failed bulk batch items individually', function (): void {
             return [];
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return ['value' => []];
         }
@@ -192,7 +192,7 @@ it('queries across all folders when allFolders is used', function (): void {
 
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->endpoints[] = $endpoint;
 
@@ -219,7 +219,7 @@ it('builds grouped OR filters when whereAny is used', function (): void {
 
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->queries[] = $query;
 
@@ -249,7 +249,7 @@ it('deduplicates message ids across completed pages', function (): void {
             parent::__construct([], new TokenManager([]), new RateLimiter([]));
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->endpoints[] = $endpoint;
 

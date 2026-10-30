@@ -25,8 +25,10 @@ use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 class GraphClient
 {
@@ -54,12 +56,32 @@ class GraphClient
         return 'ms-graph';
     }
 
+    /**
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>
+     */
+    public function getMessagePayload(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
+    {
+        $options = $query === [] ? [] : ['query' => $query];
+        if ($query === [] && str_contains($endpoint, '?')) {
+            $options['query'] = null;
+        }
+        $payload = $this->decodeApiResponse($this->requestRaw('GET', $endpoint, $options, $mailbox), $endpoint, $mailbox, false);
+
+        return $payload instanceof \stdClass ? ConversationPayload::array($payload) : $payload;
+    }
+
     protected function providerLabel(): string
     {
         return 'Graph';
     }
 
     public function uploadFileRange(GraphUploadSession $session, int $start, StreamInterface $range, int $length): ProviderWriteResponse
+    {
+        return $this->uploadFileRangeBudgeted($session, $start, $range, $length);
+    }
+
+    public function uploadFileRangeBudgeted(GraphUploadSession $session, int $start, StreamInterface $range, int $length, ?ResponseBudget $budget = null): ProviderWriteResponse
     {
         if ($this->grantAuthorization === null || $session->context->driver !== 'ms-graph') {
             throw new UnsupportedCapabilityException('Outlook uploads require an explicit captured Graph authorization.');
@@ -75,7 +97,7 @@ class GraphClient
             'body' => $range, 'headers' => ['Content-Type' => 'application/octet-stream', 'Content-Length' => (string) $length,
                 'Content-Range' => 'bytes '.$start.'-'.($start + $length - 1).'/'.$session->byteLength],
         ], $this->mailboxKey($session->context->mailbox), 65_536, authenticated: false,
-            beforeRequest: fn () => $this->grantAuthorization->assertActive($session->context));
+            beforeRequest: fn () => $this->grantAuthorization->assertActive($session->context), budget: $budget);
     }
 
     public function createBasicSubscription(GrantContext $context, GraphSubscriptionConfiguration $configuration, DateTimeImmutable $expiresAt): ProviderWriteResponse

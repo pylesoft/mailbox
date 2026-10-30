@@ -215,7 +215,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
             $seenPageSignatures[$pageSignature] = true;
             $pageCount++;
 
-            $response = $this->client->get($endpoint, $query, $this->mailbox);
+            $response = $this->client->getMessagePayload($endpoint, $query, $this->mailbox);
             if (! isset($response['value']) || ! is_array($response['value'])) {
                 throw new ApiRequestException('The provider returned a missing or malformed collection.');
             }

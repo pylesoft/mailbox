@@ -21,7 +21,7 @@ it('performs message read and move operations', function (): void {
 
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return msgraphMessageFixture();
         }

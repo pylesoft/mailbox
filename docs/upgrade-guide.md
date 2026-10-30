@@ -61,6 +61,8 @@ Gmail message mapping now parses received addresses and decodes encoded names an
 
 The existing `MessageDto` and `EmailAddressDto` fields and resource interfaces remain unchanged. Recipient groups flatten into the existing recipient arrays; group names and comments remain available in the original `raw` payload. The singular `from` and `sender` fields cannot represent multiple mailboxes, so those values now fail explicitly instead of selecting or inventing an address.
 
+Built-in Graph message, query and eager delta reads use `GraphClient::getMessagePayload()` to validate native JSON collection types before converting them to arrays. Raw `get()` and `request()` retain their array results. If a custom `GraphClient` subclass overrides `get()` to intercept built-in typed message reads, update that interception for `getMessagePayload()` too. Existing custom-driver resource interfaces and raw-client mocks remain unchanged; provider contract tests should inject HTTP responses into the real client.
+
 Malformed address structure, truncated delimiters or encoded words, invalid encoded bytes, unsupported header charsets, and malformed provider address/header collections throw `Pyle\Mailbox\Exceptions\MailboxException`. Missing optional fields still use the existing null or empty values. Received header text must contain valid UTF-8 bytes, with other supported charsets declared in encoded words. Parsing does not perform DNS or mailbox-deliverability checks, and the parser's token limits remain explicit failures. Body hydration and outbound serialization have separate implementation and acceptance gates.
 
 ### Parser Dependency

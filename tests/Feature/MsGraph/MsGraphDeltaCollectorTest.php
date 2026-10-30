@@ -18,7 +18,7 @@ it('collects created, updated, and deleted graph delta changes across pages', fu
             parent::__construct([], new TokenManager([]), new RateLimiter([]));
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->requests[] = [
                 'endpoint' => $endpoint,
@@ -84,7 +84,7 @@ it('uses the existing delta token as the initial request endpoint', function ():
             parent::__construct([], new TokenManager([]), new RateLimiter([]));
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->endpoints[] = $endpoint;
 

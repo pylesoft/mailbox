@@ -92,6 +92,14 @@ final readonly class MsGraphBoundedSync
             if (! is_array($values) || ! array_is_list($values)) {
                 throw new ApiRequestException('Graph returned a missing or malformed delta collection.');
             }
+            foreach ($values as $value) {
+                if (! $value instanceof \stdClass) {
+                    throw new ApiRequestException('Graph returned a malformed delta entry.');
+                }
+                if (property_exists($value, '@removed') && ! $value->{'@removed'} instanceof \stdClass) {
+                    throw new ApiRequestException('Graph returned malformed folder-removal evidence.');
+                }
+            }
             $response = ConversationPayload::array($payload);
             $values = $response['value'];
             $hasNext = array_key_exists('@odata.nextLink', $response);

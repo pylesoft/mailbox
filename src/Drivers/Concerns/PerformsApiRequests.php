@@ -56,7 +56,12 @@ trait PerformsApiRequests
      */
     public function get(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
     {
-        return $this->request('GET', $endpoint, $query === [] ? [] : ['query' => $query], $mailbox);
+        $options = $query === [] ? [] : ['query' => $query];
+        if ($query === [] && str_contains($endpoint, '?')) {
+            $options['query'] = null;
+        }
+
+        return $this->request('GET', $endpoint, $options, $mailbox);
     }
 
     /**
@@ -278,21 +283,28 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $options */
     public function requestOnce(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, int $maxResponseBytes = 65_536): ProviderWriteResponse
     {
+        return $this->requestOnceBudgeted($method, $endpoint, $options, $mailbox, $maxResponseBytes);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function requestOnceBudgeted(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, int $maxResponseBytes = 65_536, ?ResponseBudget $budget = null): ProviderWriteResponse
+    {
         if ($maxResponseBytes < 1) {
             throw new \InvalidArgumentException('The one-attempt response byte budget must be positive.');
         }
         $target = $this->resolveTarget($endpoint, $mailbox);
         $mailboxKey = $this->mailboxKey($mailbox);
 
-        return $this->exchangeOnce($method, $target, $options, $mailboxKey, $maxResponseBytes);
+        return $this->exchangeOnce($method, $target, $options, $mailboxKey, $maxResponseBytes, budget: $budget);
     }
 
     /**
      * @param  array<string, mixed>  $options
      * @param  (\Closure(): void)|null  $beforeRequest
      */
-    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null): ProviderWriteResponse
+    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null, ?ResponseBudget $budget = null): ProviderWriteResponse
     {
+        $budget?->assertMemoryAvailable(65_536);
         $attempted = false;
         try {
             $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, $authenticated, $beforeRequest, &$attempted): ResponseInterface {
@@ -367,6 +379,7 @@ trait PerformsApiRequests
                 return new ProviderWriteResponse($response->getStatusCode(), $headers);
             }
             while (true) {
+                $budget?->assertMemoryAvailable(strlen($body) + 32_768);
                 $chunk = $stream->read(min(8192, $maxResponseBytes - strlen($body) + 1));
                 if ($chunk === '' && $stream->eof()) {
                     break;
@@ -376,6 +389,7 @@ trait PerformsApiRequests
                 }
                 $body .= $chunk;
             }
+            $budget?->assertJsonDecodeMemory($body);
         } catch (\Throwable) {
             return new ProviderWriteResponse($response->getStatusCode(), $headers);
         } finally {
@@ -513,6 +527,13 @@ trait PerformsApiRequests
     {
         $response = $this->requestRaw($method, $endpoint, $options, $mailbox);
 
+        return $this->decodeApiResponse($response, $endpoint, $mailbox);
+    }
+
+    /** @return ($associative is true ? array<string, mixed> : array<string, mixed>|\stdClass) */
+    private function decodeApiResponse(ResponseInterface $response, #[\SensitiveParameter] string $endpoint, ?string $mailbox, bool $associative = true): array|\stdClass
+    {
+
         if ($response->getStatusCode() === 204) {
             return [];
         }
@@ -524,7 +545,7 @@ trait PerformsApiRequests
         }
 
         try {
-            return json_decode($body, true, flags: JSON_THROW_ON_ERROR);
+            return json_decode($body, $associative, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException) {
             $endpoint = $this->redactedEndpoint($endpoint);
             throw new ProviderTransportException(

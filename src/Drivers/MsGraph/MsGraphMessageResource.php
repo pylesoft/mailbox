@@ -25,7 +25,7 @@ class MsGraphMessageResource implements MessageResource
 
     public function get(): MessageDto
     {
-        $payload = $this->client->get($this->messageEndpoint(), mailbox: $this->mailbox);
+        $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
 
         return MessageDto::fromMsGraph($payload);
     }

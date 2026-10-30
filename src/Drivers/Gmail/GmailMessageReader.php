@@ -84,7 +84,8 @@ final class GmailMessageReader
             return $part;
         }
         $body = is_array($part['body'] ?? null) ? $part['body'] : [];
-        if (GmailMime::isBody($part, $relatedRoot) && isset($body['attachmentId'])) {
+        $isBody = GmailMime::isBody($part, $relatedRoot);
+        if ($isBody && isset($body['attachmentId'])) {
             if (! is_string($body['attachmentId']) || $body['attachmentId'] === '' || (array_key_exists('data', $body) && $body['data'] !== '')) {
                 throw new MailboxException('Gmail returned ambiguous or malformed external body content.');
             }
@@ -104,7 +105,7 @@ final class GmailMessageReader
             }
             $part['body'] = array_merge($external, $body, ['data' => $external['data']]);
         }
-        if (GmailMime::isBody($part, $relatedRoot)) {
+        if ($isBody) {
             $encoded = $part['body']['data'] ?? '';
             $remaining = $this->limits->maxBodyBytes - $this->bodyBytes;
             if (is_string($encoded) && strlen($encoded) > 4 * (int) ceil($remaining / 3)) {

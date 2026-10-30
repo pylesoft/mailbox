@@ -16,7 +16,7 @@ it('performs initial delta sync', function (): void {
             parent::__construct([], new TokenManager([]), new RateLimiter([]));
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return [
                 'value' => [
@@ -44,7 +44,7 @@ it('handles expired delta token', function (): void {
             parent::__construct([], new TokenManager([]), new RateLimiter([]));
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             throw new ApiRequestException('Gone', status: 410);
         }
@@ -67,7 +67,7 @@ it('handles incremental delta pages with updated and deleted messages', function
             parent::__construct([], new TokenManager([]), new RateLimiter([]));
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->calls++;
 

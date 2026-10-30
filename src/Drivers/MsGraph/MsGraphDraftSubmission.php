@@ -26,6 +26,7 @@ use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\PreparedMessageMime;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
@@ -62,8 +63,12 @@ final readonly class MsGraphDraftSubmission
 
     public function prepareAttachments(SubmissionPreparation $preparation, PreparedMessage $message, SubmissionLimits $limits, int $maxRequestBytes): SubmissionPreparation
     {
-        (new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes))->assertMemoryAvailable(65_536);
-        $draftId = $this->assertIntent($preparation, $message);
+        if ($maxRequestBytes < 1) {
+            throw new InvalidArgumentException('The submission byte budget must be positive.');
+        }
+        $budget = new ResponseBudget(PHP_INT_MAX, $limits->maxMemoryBytes);
+        $budget->assertMemoryAvailable(65_536);
+        $draftId = $this->assertIntent($preparation, $message, $budget);
         if ($preparation->outcome !== PreparationOutcome::Preparing) {
             throw new InvalidArgumentException('Attachment preparation requires an acknowledged incomplete draft.');
         }
@@ -81,15 +86,15 @@ final readonly class MsGraphDraftSubmission
         }
         $progress = $preparation->attachments[$index] ?? null;
         if ($file->byteLength >= 3_000_000) {
-            $next = $this->largeFileStep($draftId, $file, $progress, $limits, $maxRequestBytes);
+            $next = $this->largeFileStep($draftId, $file, $progress, $maxRequestBytes, $budget);
 
             return $this->withAttachment($preparation, $message, $index, $next);
         }
-        $body = $this->smallFilePayload($file, $limits, $maxRequestBytes);
+        $body = $this->smallFilePayload($file, $maxRequestBytes, $budget);
         try {
-            $response = $this->client->requestOnce('POST', $this->endpoint().'/'.rawurlencode($draftId).'/attachments', [
+            $response = $this->client->requestOnceBudgeted('POST', $this->endpoint().'/'.rawurlencode($draftId).'/attachments', [
                 'body' => $body, 'headers' => ['Content-Type' => 'application/json', 'Prefer' => 'IdType="ImmutableId"'],
-            ], $this->context->mailbox);
+            ], $this->context->mailbox, budget: $budget);
         } finally {
             $body->close();
         }
@@ -163,8 +168,13 @@ final readonly class MsGraphDraftSubmission
 
     public function inspectAttachments(SubmissionPreparation $preparation, PreparedMessage $message, SubmissionLimits $limits): SubmissionPreparation
     {
-        (new ResponseBudget(4_194_304, $limits->maxMemoryBytes))->assertMemoryAvailable(65_536);
-        $draftId = $this->assertIntent($preparation, $message);
+        $budget = new ResponseBudget(PHP_INT_MAX, $limits->maxMemoryBytes);
+        try {
+            $budget->assertMemoryAvailable(65_536);
+            $draftId = $this->assertIntent($preparation, $message, $budget);
+        } catch (ResponseLimitExceededException) {
+            return $preparation;
+        }
         $index = $this->attachmentIndex($preparation, $message);
         $progress = $preparation->attachments[$index] ?? null;
         if (! in_array($preparation->outcome, [PreparationOutcome::Uncertain, PreparationOutcome::Expired], true)
@@ -174,7 +184,7 @@ final readonly class MsGraphDraftSubmission
         $file = $message->files[$index];
         $source = $file->openVerified();
         $source->close();
-        $response = $this->observe($draftId, $message);
+        $response = $this->observe($draftId, $message, $budget);
         $draft = json_decode($response->body() ?? '');
         if ($response->status !== 200 || ! $draft instanceof \stdClass || ! $this->matchesDraft(get_object_vars($draft), $message, $draftId)
             || ($preparation->conversationId !== null && ($draft->conversationId ?? null) !== $preparation->conversationId)) {
@@ -184,7 +194,7 @@ final readonly class MsGraphDraftSubmission
         $candidates = array_values(array_filter($draft->attachments, fn (mixed $attachment): bool => $attachment instanceof \stdClass
             && self::validId($attachment->id ?? null) && ! in_array($attachment->id, $knownIds, true)
             && $this->attachmentMetadataMatches($attachment, $file)));
-        if (count($candidates) !== 1 || ! $this->attachmentBytesMatch($draftId, $candidates[0]->id, $file, $limits)) {
+        if (count($candidates) !== 1 || ! $this->attachmentBytesMatch($draftId, $candidates[0]->id, $file, $limits, $budget)) {
             return $preparation;
         }
 
@@ -193,21 +203,27 @@ final readonly class MsGraphDraftSubmission
                 $candidates[0]->id, $response->status, $response->headers, $progress->session()));
     }
 
-    private function largeFileStep(string $draftId, PreparedFile $file, ?AttachmentPreparation $progress, SubmissionLimits $limits, int $maxRequestBytes): AttachmentPreparation
+    private function largeFileStep(string $draftId, PreparedFile $file, ?AttachmentPreparation $progress, int $maxRequestBytes, ResponseBudget $budget): AttachmentPreparation
     {
         $source = $file->openVerified();
         try {
             $session = $progress?->session();
             if ($progress === null) {
-                $payload = json_encode(['AttachmentItem' => ['attachmentType' => 'file', 'name' => $file->name,
+                $metadata = ['AttachmentItem' => ['attachmentType' => 'file', 'name' => $file->name,
                     'size' => $file->byteLength, 'contentType' => $file->mediaType, 'isInline' => $file->inline,
-                    'contentId' => $file->contentId]], JSON_THROW_ON_ERROR);
+                    'contentId' => $file->contentId]];
+                $bytes = $this->jsonBytes($metadata, min($maxRequestBytes, 3_999_999), $budget);
+                if ($bytes > min($maxRequestBytes, 3_999_999)) {
+                    throw new UnsupportedCapabilityException('The upload session request exceeds its write byte limit.');
+                }
+                $budget->assertMemoryAvailable($bytes * 2 + 65_536);
+                $payload = json_encode($metadata, JSON_THROW_ON_ERROR);
                 if (strlen($payload) > $maxRequestBytes || strlen($payload) >= 4_000_000) {
                     throw new UnsupportedCapabilityException('The upload session request exceeds its write byte limit.');
                 }
-                $response = $this->client->requestOnce('POST', $this->endpoint().'/'.rawurlencode($draftId).'/attachments/createUploadSession', [
+                $response = $this->client->requestOnceBudgeted('POST', $this->endpoint().'/'.rawurlencode($draftId).'/attachments/createUploadSession', [
                     'body' => $payload, 'headers' => ['Content-Type' => 'application/json', 'Prefer' => 'IdType="ImmutableId"'],
-                ], $this->context->mailbox);
+                ], $this->context->mailbox, budget: $budget);
                 $data = json_decode($response->body() ?? '');
                 if ($response->status === 201 && $data instanceof \stdClass && is_string($data->uploadUrl ?? null)
                     && is_string($data->expirationDateTime ?? null) && in_array($data->nextExpectedRanges ?? null, [['0'], ['0-']], true)) {
@@ -236,10 +252,9 @@ final readonly class MsGraphDraftSubmission
                     $progress->acknowledgedBytes, null, $progress->status, $progress->headers, $session);
             }
             $length = min(3_000_000, $file->byteLength - $progress->acknowledgedBytes, $maxRequestBytes);
-            $budget = new ResponseBudget($length, $limits->maxMemoryBytes);
             $budget->assertMemoryAvailable(65_536);
             $range = new SubmissionBody(new LimitStream($source, $length, $progress->acknowledgedBytes), $budget);
-            $response = $this->client->uploadFileRange($session, $progress->acknowledgedBytes, $range, $length);
+            $response = $this->client->uploadFileRangeBudgeted($session, $progress->acknowledgedBytes, $range, $length, $budget);
             $end = $progress->acknowledgedBytes + $length;
             $data = json_decode($response->body() ?? '');
             $attachmentId = $response->status === 201 && $response->body() === '' && $end === $file->byteLength
@@ -275,9 +290,9 @@ final readonly class MsGraphDraftSubmission
         return is_string($value) && $this->sessionExpiry($value) == $session->expiresAt;
     }
 
-    private function smallFilePayload(PreparedFile $file, SubmissionLimits $limits, int $maxRequestBytes): StreamInterface
+    private function smallFilePayload(PreparedFile $file, int $maxRequestBytes, ResponseBudget $budget): StreamInterface
     {
-        $budget = new ResponseBudget(min($maxRequestBytes, 3_999_999), $limits->maxMemoryBytes);
+        $maxRequestBytes = min($maxRequestBytes, 3_999_999);
         $budget->assertMemoryAvailable(65_536);
         $source = $file->openVerified();
         $body = null;
@@ -287,8 +302,14 @@ final readonly class MsGraphDraftSubmission
                 throw new MailboxException('The private attachment spool could not be created.');
             }
             $body = Utils::streamFor($temporary);
-            $metadata = json_encode(['@odata.type' => '#microsoft.graph.fileAttachment', 'name' => $file->name,
-                'contentType' => $file->mediaType, 'isInline' => $file->inline, 'contentId' => $file->contentId], JSON_THROW_ON_ERROR);
+            $fields = ['@odata.type' => '#microsoft.graph.fileAttachment', 'name' => $file->name,
+                'contentType' => $file->mediaType, 'isInline' => $file->inline, 'contentId' => $file->contentId];
+            $bytes = $this->jsonBytes($fields, $maxRequestBytes, $budget) + 18 + 4 * (int) ceil($file->byteLength / 3);
+            if ($bytes > $maxRequestBytes) {
+                throw new ResponseLimitExceededException('The attachment request exceeds its write byte limit.');
+            }
+            $budget->assertMemoryAvailable(($bytes - 4 * (int) ceil($file->byteLength / 3)) * 2 + 65_536);
+            $metadata = json_encode($fields, JSON_THROW_ON_ERROR);
             $this->write($body, substr($metadata, 0, -1).',"contentBytes":"', $budget);
             $tail = '';
             while (! $source->eof()) {
@@ -299,6 +320,9 @@ final readonly class MsGraphDraftSubmission
                 $this->write($body, base64_encode(substr($chunk, 0, $length)), $budget);
             }
             $this->write($body, base64_encode($tail).'"}', $budget);
+            if ($body->getSize() > $maxRequestBytes) {
+                throw new ResponseLimitExceededException('The attachment request exceeds its write byte limit.');
+            }
             $body->rewind();
 
             return new SubmissionBody($body, $budget);
@@ -368,9 +392,9 @@ final readonly class MsGraphDraftSubmission
             $response->status, $response->headers, $preparation->conversationId ?? ($observed ? $copy->conversationId : null));
     }
 
-    private function assertIntent(SubmissionPreparation $preparation, PreparedMessage $message): string
+    private function assertIntent(SubmissionPreparation $preparation, PreparedMessage $message, ?ResponseBudget $budget = null): string
     {
-        $payload = $this->payload($message, 4_000_000);
+        $payload = $this->payload($message, 4_000_000, $budget);
         if ($message->context !== null) {
             $this->sourceEndpoint($message);
         }
@@ -378,31 +402,31 @@ final readonly class MsGraphDraftSubmission
         if (! $preparation->context->matches($this->context) || ! is_string($draftId) || ! self::validId($draftId)
             || ($message->context !== null && ($preparation->conversationId === null || trim($preparation->conversationId) === ''))
             || $preparation->correlationId !== $message->correlationId
-            || ! hash_equals($preparation->intentFingerprint(), $this->fingerprint($message, $payload))) {
+            || ! hash_equals($preparation->intentFingerprint(), $this->fingerprint($message, $payload, $budget))) {
             throw new InvalidArgumentException('Submission preparation does not match the selected grant, generation, mailbox or original message intent.');
         }
 
         return $draftId;
     }
 
-    private function observe(string $draftId, PreparedMessage $message): ProviderWriteResponse
+    private function observe(string $draftId, PreparedMessage $message, ?ResponseBudget $budget = null): ProviderWriteResponse
     {
-        return $this->client->requestOnce('GET', $this->endpoint().'/'.rawurlencode($draftId), [
+        return $this->client->requestOnceBudgeted('GET', $this->endpoint().'/'.rawurlencode($draftId), [
             'query' => [
                 '$select' => 'id,isDraft,from,toRecipients,ccRecipients,bccRecipients,subject,body,internetMessageHeaders,hasAttachments,conversationId,sentDateTime',
                 '$expand' => 'attachments($select=id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId)',
             ],
             'headers' => ['Prefer' => 'IdType="ImmutableId", outlook.body-content-type="'.($message->htmlBody === null ? 'text' : 'html').'"'],
-        ], $this->context->mailbox, maxResponseBytes: 4_194_304);
+        ], $this->context->mailbox, maxResponseBytes: 4_194_304, budget: $budget);
     }
 
     private function prepareNative(PreparedMessage $message, string $payload, int $maxRequestBytes): SubmissionPreparation
     {
         $source = $this->sourceEndpoint($message);
-        $nativePayload = '{"message":'.$payload.'}';
-        if (strlen($nativePayload) > $maxRequestBytes || strlen($nativePayload) >= 4_000_000) {
+        if (strlen($payload) + 12 > min($maxRequestBytes, 3_999_999)) {
             throw new UnsupportedCapabilityException('The native Graph request exceeds the caller budget or the 4 MB write limit.');
         }
+        $nativePayload = '{"message":'.$payload.'}';
         $headers = ['Prefer' => 'IdType="ImmutableId"', 'Content-Type' => 'application/json'];
         $verification = $this->client->requestOnce('GET', $source, [
             'query' => ['$select' => 'id,conversationId,parentFolderId,isDraft'], 'headers' => $headers,
@@ -487,25 +511,36 @@ final readonly class MsGraphDraftSubmission
         throw new UnsupportedCapabilityException('The selected source is absent from the complete scoped conversation.');
     }
 
-    private function fingerprint(PreparedMessage $message, string $payload): string
+    private function fingerprint(PreparedMessage $message, string $payload, ?ResponseBudget $budget = null): string
     {
+        $hash = hash_init('sha256');
+        hash_update($hash, $payload);
         if ($message->files !== []) {
-            $payload .= json_encode(array_map(static fn (PreparedFile $file): array => [$file->identity, $file->name,
-                $file->mediaType, $file->byteLength, $file->fingerprint(), $file->inline, $file->contentId], $message->files), JSON_THROW_ON_ERROR);
+            $metadataBytes = 0;
+            foreach ($message->files as $file) {
+                $metadataBytes += strlen($file->identity) + strlen($file->name) + strlen($file->mediaType) + strlen($file->contentId ?? '') + 2048;
+            }
+            $budget?->assertMemoryAvailable($metadataBytes * 2 + 65_536);
+            $files = array_map(static fn (PreparedFile $file): array => [$file->identity, $file->name,
+                $file->mediaType, $file->byteLength, $file->fingerprint(), $file->inline, $file->contentId], $message->files);
+            $budget?->assertMemoryAvailable($this->jsonBytes($files, PHP_INT_MAX, $budget) * 2 + 65_536);
+            hash_update($hash, json_encode($files, JSON_THROW_ON_ERROR));
         }
         $context = $message->context;
         if ($context === null) {
-            return hash('sha256', $payload);
+            return hash_final($hash);
         }
 
         $identity = $context->conversation->identity;
 
-        return hash('sha256', $payload.serialize([$context->operation->value, $context->sourceMessageId,
+        hash_update($hash, serialize([$context->operation->value, $context->sourceMessageId,
             $context->conversation->conversationId, $identity->provider, get_object_vars($identity->context), $identity->formatVersion,
             $identity->scope->folderId, $identity->scope->importSince?->format('U.u')]));
+
+        return hash_final($hash);
     }
 
-    private function payload(PreparedMessage $message, int $maxRequestBytes): string
+    private function payload(PreparedMessage $message, int $maxRequestBytes, ?ResponseBudget $budget = null): string
     {
         if ($maxRequestBytes < 1) {
             throw new InvalidArgumentException('The submission byte budget must be positive.');
@@ -513,6 +548,27 @@ final readonly class MsGraphDraftSubmission
         if ($message->textBody !== null && $message->htmlBody !== null) {
             throw new UnsupportedCapabilityException('Graph draft submission supports one text or HTML body.');
         }
+        $limit = min($maxRequestBytes, 3_999_999);
+        $inputBytes = strlen($message->textBody ?? '') + strlen($message->htmlBody ?? '') + strlen($message->subject) + strlen($message->correlationId);
+        /** @var array<array-key, mixed> $rawHeaders */
+        $rawHeaders = $message->headers;
+        foreach ($rawHeaders as $name => $value) {
+            $inputBytes += strlen((string) $name) + (is_string($value) ? strlen($value) : 0);
+        }
+        /** @var list<array<array-key, mixed>> $addressLists */
+        $addressLists = [$message->to, $message->cc, $message->bcc, [$message->sender]];
+        foreach ($addressLists as $addresses) {
+            foreach ($addresses as $address) {
+                if ($address instanceof EmailAddressDto) {
+                    $inputBytes += strlen($address->name) + strlen($address->address);
+                }
+            }
+        }
+        if ($inputBytes > $limit) {
+            throw new UnsupportedCapabilityException('The Graph JSON request exceeds the caller budget or the 4 MB write limit.');
+        }
+        $budget?->assertMemoryAvailable($inputBytes * 2 + 65_536
+            + (count($message->to) + count($message->cc) + count($message->bcc) + count($message->headers) + count($message->files) + 1) * 2048);
         PreparedMessageMime::validate($message);
         $headers = [];
         foreach ($message->headers as $name => $value) {
@@ -522,7 +578,7 @@ final readonly class MsGraphDraftSubmission
             $headers[] = ['name' => $name, 'value' => $value];
         }
         $headers[] = ['name' => 'X-Mailbox-Correlation-Id', 'value' => $message->correlationId];
-        $payload = json_encode([
+        $data = [
             'from' => self::recipient($message->sender),
             'toRecipients' => array_map(self::recipient(...), $message->to),
             'ccRecipients' => array_map(self::recipient(...), $message->cc),
@@ -530,12 +586,53 @@ final readonly class MsGraphDraftSubmission
             'subject' => $message->subject,
             'body' => ['contentType' => $message->htmlBody === null ? 'Text' : 'HTML', 'content' => $message->htmlBody ?? $message->textBody],
             'internetMessageHeaders' => $headers,
-        ], JSON_THROW_ON_ERROR);
+        ];
+        $bytes = $this->jsonBytes($data, $limit, $budget);
+        if ($bytes > $limit) {
+            throw new UnsupportedCapabilityException('The Graph JSON request exceeds the caller budget or the 4 MB write limit.');
+        }
+        $budget?->assertMemoryAvailable($bytes * 2 + 65_536);
+        $payload = json_encode($data, JSON_THROW_ON_ERROR);
         if (strlen($payload) > $maxRequestBytes || strlen($payload) >= 4_000_000) {
             throw new UnsupportedCapabilityException('The Graph JSON request exceeds the caller budget or the 4 MB write limit.');
         }
 
         return $payload;
+    }
+
+    private function jsonBytes(#[\SensitiveParameter] mixed $value, int $limit, ?ResponseBudget $budget = null): int
+    {
+        if (is_string($value)) {
+            $bytes = 2;
+            for ($offset = 0, $length = strlen($value); $offset < $length;) {
+                $budget?->assertMemoryAvailable(65_536);
+                $chunk = mb_strcut($value, $offset, 8192, 'UTF-8');
+                if ($chunk === '') {
+                    throw new InvalidArgumentException('Prepared JSON text must make progress as valid UTF-8.');
+                }
+                $bytes += strlen(json_encode($chunk, JSON_THROW_ON_ERROR)) - 2;
+                $offset += strlen($chunk);
+                if ($bytes > $limit) {
+                    break;
+                }
+            }
+
+            return $bytes;
+        }
+        if (! is_array($value)) {
+            return strlen(json_encode($value, JSON_THROW_ON_ERROR));
+        }
+        $bytes = 2;
+        $list = array_is_list($value);
+        foreach ($value as $key => $item) {
+            $bytes += ($list ? 0 : $this->jsonBytes((string) $key, $limit, $budget) + 1)
+                + $this->jsonBytes($item, $limit, $budget) + 1;
+            if ($bytes - 1 > $limit) {
+                return $bytes;
+            }
+        }
+
+        return $bytes - ($value === [] ? 0 : 1);
     }
 
     /** @return array{emailAddress: array{name: string, address: string}} */
@@ -624,11 +721,11 @@ final readonly class MsGraphDraftSubmission
             && ($attachment->isInline ?? null) === $file->inline && ($attachment->contentId ?? null) === $file->contentId;
     }
 
-    private function attachmentBytesMatch(string $draftId, string $attachmentId, PreparedFile $file, SubmissionLimits $limits): bool
+    private function attachmentBytesMatch(string $draftId, string $attachmentId, PreparedFile $file, SubmissionLimits $limits, ?ResponseBudget $budget = null): bool
     {
         try {
             $source = $this->client->streamBounded($this->endpoint().'/'.rawurlencode($draftId).'/attachments/'.rawurlencode($attachmentId).'/$value',
-                new ResponseBudget(max(1, $file->byteLength), $limits->maxMemoryBytes), max(1, $file->byteLength), $this->context->mailbox);
+                $budget ?? new ResponseBudget(max(1, $file->byteLength), $limits->maxMemoryBytes), max(1, $file->byteLength), $this->context->mailbox);
             try {
                 $hash = hash_init('sha256');
                 while (! $source->eof()) {

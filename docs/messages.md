@@ -614,7 +614,7 @@ For more details, see [Attachments](attachments.md).
 
 ## Bulk Operations
 
-The query builder provides bulk versions of common operations that are optimized for each provider. Microsoft Graph uses JSON batch requests, and Gmail uses batch modify endpoints -- both are handled automatically.
+The query builder provides bulk versions of common operations. Configured Microsoft Graph integrations use JSON batch requests, while explicitly selected grants use individual requests that retain the selected mailbox authorization. Gmail uses batch modify endpoints.
 
 ### Bulk Mark as Read
 
@@ -659,7 +659,7 @@ Mailbox::mailbox('invoices@acme.com')
 ```
 
 > **Tip**
-> Bulk operations handle large ID lists gracefully. Gmail batches are automatically chunked into groups of 1,000 (the provider's maximum per request). Microsoft Graph uses its JSON batch API. You do not need to manually chunk your arrays.
+> Gmail batches are automatically chunked into groups of 1,000 (the provider's maximum per request). Configured Microsoft Graph integrations use JSON batches of up to 20 requests. Selected Graph grants authorize each individual request. You do not need to manually chunk your arrays.
 
 ## Working with Raw Provider Data
 
@@ -1120,6 +1120,8 @@ Keep preparation facts, the original `SubmissionResult` and later observations s
 This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers, with optional explicit native reply/forward context and structured files through `SupportsDraftAttachmentPreparation`. Both body formats together, raw MIME and unsupported headers remain unsupported; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above. See Microsoft's [native reply](https://learn.microsoft.com/en-us/graph/api/message-createreply?view=graph-rest-1.0), [native forward](https://learn.microsoft.com/en-us/graph/api/message-createforward?view=graph-rest-1.0), [draft update](https://learn.microsoft.com/en-us/graph/api/message-update?view=graph-rest-1.0) and [attachment removal](https://learn.microsoft.com/en-us/graph/api/attachment-delete?view=graph-rest-1.0) references.
 
 `maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget and remain strictly below Graph's 4 MB write limit. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow, truncation or inconsistent unencoded Content-Length preserves observed status and safe headers without establishing successful preparation, verification or send.
+
+Draft preparation checks input and escaped JSON sizes before allocating the complete encoded request. Attachment preparation and inspection share the caller's `SubmissionLimits::maxMemoryBytes` across intent reconstruction, file metadata, response collection and JSON decoding. A memory limit reached before a write prevents that write. An incomplete inspection retains the original uncertain preparation; it never authorizes another attachment write or send.
 
 One-attempt receipts request identity encoding and disable automatic decompression. An encoded response is closed without reading its body; its status and safe headers remain available, but it cannot establish preparation or send acceptance. This keeps compressed bytes from expanding before the response budget can run.
 
