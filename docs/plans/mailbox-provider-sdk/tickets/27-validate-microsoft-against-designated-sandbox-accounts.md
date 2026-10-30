@@ -44,4 +44,3 @@ Validate the candidate SDK against designated Microsoft organizational, personal
 ## Integration notes
 
 Status remains needs-info and Resolution remains open until these prerequisites are supplied. This live gate is independent of Gmail after ticket 25. Relevant candidate changes invalidate only the affected live evidence.
-

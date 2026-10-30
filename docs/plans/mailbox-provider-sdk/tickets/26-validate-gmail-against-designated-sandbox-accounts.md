@@ -41,4 +41,3 @@ Validate the candidate SDK against designated personal Gmail and Workspace sandb
 ## Integration notes
 
 Status remains needs-info and Resolution remains open until these prerequisites are supplied. Completion of ticket 25 alone does not make this ticket available. If the candidate changes in a relevant way, rerun only the affected live cases and retain their source identity.
-
