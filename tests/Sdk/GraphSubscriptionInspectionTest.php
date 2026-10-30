@@ -186,14 +186,187 @@ it('keeps private subscription configuration and provider content out of inspect
     }
 });
 
+it('verifies a redacted list candidate through actual selected-grant inspection', function (bool $omitted): void {
+    $history = [];
+    $expiry = new DateTimeImmutable('+1 day');
+    $acknowledgement = inspectionAcknowledgement($expiry);
+    $metadata = array_replace($acknowledgement, ['clientState' => null]);
+    if ($omitted) {
+        unset($metadata['clientState']);
+    }
+    $mailbox = inspectionMailbox([
+        new Response(200, [], json_encode(['value' => [$metadata]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($acknowledgement, JSON_THROW_ON_ERROR)),
+    ], $history);
+
+    $lookup = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget);
+
+    expect($lookup->registrations)->toHaveCount(1)
+        ->and($lookup->registrations[0]->subscriptionId)->toBe('subscription-1')
+        ->and($lookup->registrations[0]->context->grantId)->toBe('grant')
+        ->and($lookup->complete)->toBeTrue()
+        ->and($lookup->conflict)->toBeFalse()
+        ->and($history)->toHaveCount(2)
+        ->and(array_map(fn (array $entry): string => $entry['request']->getMethod().' '.(string) $entry['request']->getUri(), $history))->toBe([
+            'GET https://graph.microsoft.com/v1.0/subscriptions',
+            'GET https://graph.microsoft.com/v1.0/subscriptions/subscription-1',
+        ]);
+    foreach ($history as $entry) {
+        expect($entry['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
+    }
+})->with(['null client state' => false, 'omitted client state' => true]);
+
+it('resumes pending subscription candidates without repeating the list under one-request budgets', function (): void {
+    $history = [];
+    $expiry = new DateTimeImmutable('+1 day');
+    $firstAcknowledgement = inspectionAcknowledgement($expiry);
+    $secondAcknowledgement = array_replace($firstAcknowledgement, ['id' => 'subscription-2']);
+    $foreign = array_replace($firstAcknowledgement, ['id' => 'private-foreign-id', 'resource' => 'users/private-foreign-mailbox/messages', 'clientState' => null]);
+    $mailbox = inspectionMailbox([
+        new Response(200, [], json_encode(['value' => [$foreign, array_replace($firstAcknowledgement, ['clientState' => null]), array_replace($secondAcknowledgement, ['clientState' => null])]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($firstAcknowledgement, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($secondAcknowledgement, JSON_THROW_ON_ERROR)),
+    ], $history);
+
+    $first = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxItems: 3, maxRequests: 1));
+
+    expect($first->complete)->toBeFalse()->and($first->reason)->toBe('request_limit')
+        ->and($first->registrations)->toBe([])->and($first->conflict)->toBeFalse()->and($history)->toHaveCount(1);
+    foreach (['private-foreign-id', 'private-foreign-mailbox', 'private-client-state', 'host.example'] as $secret) {
+        expect(serialize($first->continuation))->not->toContain($secret);
+    }
+
+    $second = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxItems: 1), unserialize(serialize($first->continuation)));
+    expect($second->complete)->toBeFalse()->and($second->reason)->toBe('item_limit')
+        ->and(array_column($second->registrations, 'subscriptionId'))->toBe(['subscription-1'])->and($history)->toHaveCount(2);
+
+    $third = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxRequests: 1), $second->continuation);
+    expect($third->complete)->toBeTrue()->and($third->conflict)->toBeFalse()
+        ->and(array_column($third->registrations, 'subscriptionId'))->toBe(['subscription-2'])
+        ->and(array_map(fn (array $entry): string => (string) $entry['request']->getUri(), $history))->toBe([
+            'https://graph.microsoft.com/v1.0/subscriptions',
+            'https://graph.microsoft.com/v1.0/subscriptions/subscription-1',
+            'https://graph.microsoft.com/v1.0/subscriptions/subscription-2',
+        ]);
+});
+
+it('bounds candidate inspection by the actual response bytes remaining after listing', function (): void {
+    $history = [];
+    $acknowledgement = inspectionAcknowledgement(new DateTimeImmutable('+1 day'));
+    $listBody = json_encode(['value' => [array_replace($acknowledgement, ['clientState' => null])]], JSON_THROW_ON_ERROR);
+    $body = Utils::streamFor(json_encode([...$acknowledgement, 'privatePadding' => str_repeat('x', 5000)], JSON_THROW_ON_ERROR));
+    $read = 0;
+    $closed = false;
+    $stream = FnStream::decorate($body, [
+        'read' => function (int $length) use ($body, &$read): string {
+            $chunk = $body->read($length);
+            $read += strlen($chunk);
+
+            return $chunk;
+        },
+        'close' => function () use ($body, &$closed): void {
+            $closed = true;
+            $body->close();
+        },
+    ]);
+    $mailbox = inspectionMailbox([new Response(200, [], $listBody), new Response(200, [], $stream)], $history);
+
+    expect(fn () => $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxResponseBytes: strlen($listBody) + 64)))->toThrow(ApiRequestException::class)
+        ->and($read)->toBeLessThanOrEqual(65)->and($closed)->toBeTrue()->and($history)->toHaveCount(2);
+});
+
+it('keeps unverified candidate identities and private provider evidence out of lookup errors', function (): void {
+    $previous = ini_set('zend.exception_ignore_args', '0');
+    try {
+        $history = [];
+        $configuration = new GraphSubscriptionConfiguration('tenant-1', 'canonical-user-1', 'https://host.example/changes?handle=private-candidate-handle', 'https://host.example/lifecycle?handle=private-lifecycle-handle', 'private-client-state', 'inbox');
+        $metadata = array_replace(inspectionAcknowledgement(new DateTimeImmutable('+1 day')), [
+            'id' => 'private-unverified-id', 'clientState' => null,
+            'notificationUrl' => $configuration->notificationUrl, 'lifecycleNotificationUrl' => $configuration->lifecycleNotificationUrl,
+        ]);
+        $mailbox = inspectionMailbox([
+            new Response(200, [], json_encode(['value' => [$metadata]], JSON_THROW_ON_ERROR)),
+            new Response(200, [], json_encode(array_replace($metadata, ['clientState' => 'private-wrong-state', 'privateExtra' => 'private-provider-body']), JSON_THROW_ON_ERROR)),
+        ], $history);
+
+        try {
+            $mailbox->lookupSubscriptions($configuration, '11111111-1111-4111-8111-111111111111', new SyncBudget);
+            test()->fail('Unverified candidate evidence cannot become a registration.');
+        } catch (ApiRequestException $exception) {
+            expect($exception->getTrace()[0])->toHaveKey('args');
+            $public = (string) $exception.print_r($exception->getTrace(), true).json_encode($exception->getTrace(), JSON_THROW_ON_ERROR);
+            foreach (['private-unverified-id', 'private-candidate-handle', 'private-lifecycle-handle', 'private-client-state', 'private-wrong-state', 'private-provider-body'] as $secret) {
+                expect($public)->not->toContain($secret);
+            }
+        }
+        expect($history)->toHaveCount(2);
+    } finally {
+        ini_set('zend.exception_ignore_args', $previous === false ? '1' : $previous);
+    }
+});
+
+it('keeps unverified candidate GET outcomes unknown instead of completing lookup', function (string $case): void {
+    $history = [];
+    $expiry = new DateTimeImmutable('+1 day');
+    $metadata = inspectionListMetadata($expiry);
+    $acknowledgement = inspectionAcknowledgement($expiry);
+    if ($case === 'echoed list state') {
+        $metadata['clientState'] = 'private-client-state';
+    }
+    $response = $case === 'unavailable' ? new Response(404, [], '{}')
+        : new Response(200, [], json_encode(array_replace($acknowledgement, ['clientState' => 'private-wrong-state']), JSON_THROW_ON_ERROR));
+    $mailbox = inspectionMailbox([new Response(200, [], json_encode(['value' => [$metadata]], JSON_THROW_ON_ERROR)), $response], $history);
+    $continuation = null;
+    if ($case === 'resumed wrong state') {
+        $first = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxRequests: 1));
+        expect($first->complete)->toBeFalse()->and($history)->toHaveCount(1);
+        $continuation = unserialize(serialize($first->continuation));
+    }
+
+    expect(fn () => $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget, $continuation))->toThrow(ApiRequestException::class)
+        ->and($history)->toHaveCount(2)
+        ->and((string) $history[1]['request']->getUri())->toBe('https://graph.microsoft.com/v1.0/subscriptions/subscription-1');
+})->with(['unavailable', 'echoed list state', 'resumed wrong state']);
+
+it('resumes candidate proof after byte exhaustion before advancing to the next list page', function (): void {
+    $history = [];
+    $expiry = new DateTimeImmutable('+1 day');
+    $next = 'https://graph.microsoft.com/v1.0/subscriptions?$skiptoken=private-next';
+    $body = json_encode(['value' => [inspectionListMetadata($expiry)], '@odata.nextLink' => $next], JSON_THROW_ON_ERROR);
+    $mailbox = inspectionMailbox([
+        new Response(200, [], $body),
+        new Response(200, [], json_encode(inspectionAcknowledgement($expiry), JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+    ], $history);
+
+    $first = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxResponseBytes: strlen($body)));
+    expect($first->complete)->toBeFalse()->and($first->reason)->toBe('response_limit')
+        ->and($first->registrations)->toBe([])->and($history)->toHaveCount(1);
+
+    $second = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget, $first->continuation);
+    expect($second->complete)->toBeFalse()->and($second->reason)->toBe('more_pages')
+        ->and(array_column($second->registrations, 'subscriptionId'))->toBe(['subscription-1'])->and($history)->toHaveCount(2);
+
+    $third = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget, $second->continuation);
+    expect($third->complete)->toBeTrue()->and($third->registrations)->toBe([])
+        ->and(array_map(fn (array $entry): string => (string) $entry['request']->getUri(), $history))->toBe([
+            'https://graph.microsoft.com/v1.0/subscriptions',
+            'https://graph.microsoft.com/v1.0/subscriptions/subscription-1',
+            $next,
+        ]);
+});
+
 it('looks up only the exact private subscription configuration through the selected grant', function (): void {
     $history = [];
     $expiry = new DateTimeImmutable('+1 day');
-    $foreign = array_replace(inspectionAcknowledgement($expiry), [
-        'id' => 'foreign-subscription', 'resource' => 'users/foreign-mailbox/messages', 'clientState' => 'foreign-private-client-state',
+    $foreign = array_replace(inspectionListMetadata($expiry), [
+        'id' => 'foreign-subscription', 'resource' => 'users/foreign-mailbox/messages',
         'notificationUrl' => 'https://foreign.example/changes?handle=foreign-private-handle',
     ]);
-    $mailbox = inspectionMailbox([new Response(200, [], json_encode(['value' => [$foreign, inspectionAcknowledgement($expiry)]], JSON_THROW_ON_ERROR))], $history);
+    $mailbox = inspectionMailbox([
+        new Response(200, [], json_encode(['value' => [$foreign, inspectionListMetadata($expiry)]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(inspectionAcknowledgement($expiry), JSON_THROW_ON_ERROR)),
+    ], $history);
 
     $lookup = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget);
 
@@ -203,11 +376,11 @@ it('looks up only the exact private subscription configuration through the selec
         ->and($lookup->complete)->toBeTrue()
         ->and($lookup->conflict)->toBeFalse()
         ->and($lookup->continuation)->toBeNull()
-        ->and($history)->toHaveCount(1)
+        ->and($history)->toHaveCount(2)
         ->and($history[0]['request']->getMethod())->toBe('GET')
         ->and((string) $history[0]['request']->getUri())->toBe('https://graph.microsoft.com/v1.0/subscriptions');
     $public = json_encode($lookup, JSON_THROW_ON_ERROR).print_r($lookup, true);
-    foreach (['foreign-subscription', 'foreign-mailbox', 'foreign-private-client-state', 'foreign-private-handle'] as $secret) {
+    foreach (['foreign-subscription', 'foreign-mailbox', 'foreign-private-handle'] as $secret) {
         expect($public)->not->toContain($secret);
     }
 });
@@ -215,9 +388,11 @@ it('looks up only the exact private subscription configuration through the selec
 it('returns one bounded lookup page and preserves the opaque continuation query on resume', function (): void {
     $history = [];
     $next = 'https://graph.microsoft.com/v1.0/subscriptions?$skiptoken=private-opaque%2B%2F+%3D%25';
+    $expiry = new DateTimeImmutable('+1 day');
     $mailbox = inspectionMailbox([
         new Response(200, [], json_encode(['value' => [], '@odata.nextLink' => $next], JSON_THROW_ON_ERROR)),
-        new Response(200, [], json_encode(['value' => [inspectionAcknowledgement(new DateTimeImmutable('+1 day'))]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(['value' => [inspectionListMetadata($expiry)]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(inspectionAcknowledgement($expiry), JSON_THROW_ON_ERROR)),
     ], $history);
 
     $first = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxPages: 8, maxRequests: 8));
@@ -228,18 +403,22 @@ it('returns one bounded lookup page and preserves the opaque continuation query 
 
     $second = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget, unserialize(serialize($first->continuation)));
     expect($second->complete)->toBeTrue()->and($second->registrations)->toHaveCount(1)
-        ->and($history)->toHaveCount(2)->and((string) $history[1]['request']->getUri())->toBe($next);
+        ->and($history)->toHaveCount(3)->and((string) $history[1]['request']->getUri())->toBe($next);
 });
 
 it('keeps an oversized lookup page unfinished and retries that same page only with a sufficient item budget', function (): void {
     $history = [];
-    $foreign = array_replace(inspectionAcknowledgement(new DateTimeImmutable('+1 day')), ['id' => 'private-foreign-id', 'resource' => 'users/private-foreign-mailbox/messages', 'clientState' => 'private-foreign-state']);
-    $body = json_encode(['value' => [$foreign, inspectionAcknowledgement(new DateTimeImmutable('+1 day'))]], JSON_THROW_ON_ERROR);
-    $mailbox = inspectionMailbox([new Response(200, [], $body), new Response(200, [], $body)], $history);
+    $expiry = new DateTimeImmutable('+1 day');
+    $foreign = array_replace(inspectionListMetadata($expiry), ['id' => 'private-foreign-id', 'resource' => 'users/private-foreign-mailbox/messages']);
+    $body = json_encode(['value' => [$foreign, inspectionListMetadata($expiry)]], JSON_THROW_ON_ERROR);
+    $mailbox = inspectionMailbox([
+        new Response(200, [], $body), new Response(200, [], $body),
+        new Response(200, [], json_encode(inspectionAcknowledgement($expiry), JSON_THROW_ON_ERROR)),
+    ], $history);
 
     $first = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxItems: 1));
     expect($first->complete)->toBeFalse()->and($first->reason)->toBe('provider_item_limit')->and($first->registrations)->toBe([]);
-    foreach (['private-foreign-id', 'private-foreign-mailbox', 'private-foreign-state'] as $secret) {
+    foreach (['private-foreign-id', 'private-foreign-mailbox'] as $secret) {
         expect(serialize($first->continuation))->not->toContain($secret);
     }
     $second = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxItems: 2), $first->continuation);
@@ -272,8 +451,8 @@ it('enforces actual lookup response bytes before decoding and closes the bounded
 
 it('rejects lookup continuations after their trusted binding changes before another request', function (string $change): void {
     $history = [];
-    $mailbox = inspectionMailbox([new Response(200, [], '{"value":[],"@odata.nextLink":"https://graph.microsoft.com/v1.0/subscriptions?$skiptoken=private-next"}')], $history);
-    $first = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget);
+    $mailbox = inspectionMailbox([new Response(200, [], json_encode(['value' => [inspectionListMetadata(new DateTimeImmutable('+1 day'))], '@odata.nextLink' => 'https://graph.microsoft.com/v1.0/subscriptions?$skiptoken=private-next'], JSON_THROW_ON_ERROR))], $history);
+    $first = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget(maxRequests: 1));
     $fields = ['tenantId' => 'tenant-1', 'providerMailboxId' => 'canonical-user-1', 'notificationUrl' => 'https://host.example/graph/changes', 'lifecycleNotificationUrl' => 'https://host.example/graph/lifecycle', 'clientState' => 'private-client-state', 'folderId' => 'inbox'];
     $application = '11111111-1111-4111-8111-111111111111';
     $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'shared@example.com');
@@ -297,15 +476,19 @@ it('rejects lookup continuations after their trusted binding changes before anot
 it('reports conflicting private configurations and leaves multiple exact matches for the host to resolve', function (): void {
     $history = [];
     $expiry = new DateTimeImmutable('+1 day');
-    $conflicting = array_replace(inspectionAcknowledgement($expiry), ['id' => 'private-conflicting-id', 'clientState' => 'private-conflicting-state', 'notificationUrl' => 'https://private-other.example/changes']);
-    $otherApplication = array_replace(inspectionAcknowledgement($expiry), ['id' => 'private-other-app-id', 'applicationId' => '22222222-2222-4222-8222-222222222222']);
-    $second = array_replace(inspectionAcknowledgement($expiry), ['id' => 'subscription-2']);
-    $mailbox = inspectionMailbox([new Response(200, [], json_encode(['value' => [$otherApplication, $conflicting, inspectionAcknowledgement($expiry), $second]], JSON_THROW_ON_ERROR))], $history);
+    $conflicting = array_replace(inspectionListMetadata($expiry), ['id' => 'private-conflicting-id', 'notificationUrl' => 'https://private-other.example/changes']);
+    $otherApplication = array_replace(inspectionListMetadata($expiry), ['id' => 'private-other-app-id', 'applicationId' => '22222222-2222-4222-8222-222222222222']);
+    $second = array_replace(inspectionListMetadata($expiry), ['id' => 'subscription-2']);
+    $mailbox = inspectionMailbox([
+        new Response(200, [], json_encode(['value' => [$otherApplication, $conflicting, inspectionListMetadata($expiry), $second]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(inspectionAcknowledgement($expiry), JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(array_replace(inspectionAcknowledgement($expiry), ['id' => 'subscription-2']), JSON_THROW_ON_ERROR)),
+    ], $history);
 
     $lookup = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget);
     expect(array_column($lookup->registrations, 'subscriptionId'))->toBe(['subscription-1', 'subscription-2'])
         ->and($lookup->conflict)->toBeTrue()->and($lookup->complete)->toBeTrue();
-    foreach (['private-conflicting-id', 'private-conflicting-state', 'private-other.example', 'private-other-app-id', 'host.example', 'private-client-state'] as $secret) {
+    foreach (['private-conflicting-id', 'private-other.example', 'private-other-app-id', 'host.example', 'private-client-state'] as $secret) {
         expect(json_encode($lookup, JSON_THROW_ON_ERROR).print_r($lookup, true))->not->toContain($secret);
     }
 });
@@ -372,24 +555,29 @@ it('keeps repeated provider lookup progress unfinished without automatically rep
         ->and($history)->toHaveCount(2);
 });
 
-it('rejects lookup evidence when authority is invalidated during provider IO', function (): void {
+it('rejects lookup evidence when authority is invalidated during provider IO', function (string $phase): void {
     $history = [];
+    $expiry = new DateTimeImmutable('+1 day');
     $tokens = new TestGrantTokenProvider(['grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['shared@example.com'], 'token' => 'selected-token']]);
-    $mailbox = inspectionMailbox([function () use ($tokens): Response {
+    $responses = $phase === 'candidate' ? [new Response(200, [], json_encode(['value' => [inspectionListMetadata($expiry)]], JSON_THROW_ON_ERROR))] : [];
+    $responses[] = function () use ($tokens, $phase, $expiry): Response {
         $tokens->grants['grant']['generation'] = '2';
 
-        return new Response(200, [], '{"value":[]}');
-    }], $history, tokens: $tokens);
+        return new Response(200, [], $phase === 'listing' ? '{"value":[]}' : json_encode(inspectionAcknowledgement($expiry), JSON_THROW_ON_ERROR));
+    };
+    $mailbox = inspectionMailbox($responses, $history, tokens: $tokens);
 
     expect(fn () => $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget))->toThrow(GrantAccessDeniedException::class)
-        ->and($history)->toHaveCount(1);
-});
+        ->and($history)->toHaveCount($phase === 'listing' ? 1 : 2);
+})->with(['listing', 'candidate']);
 
 it('recovers an unacknowledged create through exact lookup without another POST', function (): void {
     $history = [];
+    $expiry = new DateTimeImmutable('+1 day');
     $mailbox = inspectionMailbox([
         new ConnectException('private-lost-create-acknowledgement', new Request('POST', 'https://graph.microsoft.com/v1.0/subscriptions')),
-        new Response(200, [], json_encode(['value' => [inspectionAcknowledgement(new DateTimeImmutable('+1 day'))]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(['value' => [inspectionListMetadata($expiry)]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(inspectionAcknowledgement($expiry), JSON_THROW_ON_ERROR)),
     ], $history);
 
     expect(fn () => $mailbox->createSubscription(inspectionConfiguration(), new DateTimeImmutable('+1 day')))->toThrow(ApiRequestException::class);
@@ -398,12 +586,12 @@ it('recovers an unacknowledged create through exact lookup without another POST'
     expect($lookup->complete)->toBeTrue()->and($lookup->conflict)->toBeFalse()
         ->and($lookup->registrations[0]->subscriptionId)->toBe('subscription-1')
         ->and($lookup->registrations[0]->context->grantId)->toBe('grant')
-        ->and(array_map(static fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['POST', 'GET']);
+        ->and(array_map(static fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['POST', 'GET', 'GET']);
 });
 
 it('distinguishes a completed empty visible collection from a conflicting private watch', function (bool $conflict): void {
     $history = [];
-    $rows = $conflict ? [array_replace(inspectionAcknowledgement(new DateTimeImmutable('+1 day')), ['clientState' => 'private-other-state'])] : [];
+    $rows = $conflict ? [array_replace(inspectionListMetadata(new DateTimeImmutable('+1 day')), ['notificationUrl' => 'https://other.example/changes'])] : [];
     $mailbox = inspectionMailbox([new Response(200, [], json_encode(['value' => $rows], JSON_THROW_ON_ERROR))], $history);
 
     $lookup = $mailbox->lookupSubscriptions(inspectionConfiguration(), '11111111-1111-4111-8111-111111111111', new SyncBudget);
@@ -451,6 +639,12 @@ function inspectionNotification(DateTimeImmutable $expiry, string $mailbox): Req
 function inspectionConfiguration(): GraphSubscriptionConfiguration
 {
     return new GraphSubscriptionConfiguration('tenant-1', 'canonical-user-1', 'https://host.example/graph/changes', 'https://host.example/graph/lifecycle', 'private-client-state', 'inbox');
+}
+
+/** @return array<string, mixed> */
+function inspectionListMetadata(DateTimeImmutable $expiresAt): array
+{
+    return array_replace(inspectionAcknowledgement($expiresAt), ['clientState' => null]);
 }
 
 /** @return array<string, mixed> */

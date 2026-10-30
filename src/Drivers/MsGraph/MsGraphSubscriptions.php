@@ -47,6 +47,12 @@ final readonly class MsGraphSubscriptions
         $this->guard->assertActive($this->context);
         $this->assertExpectedApplication($expectedApplicationId);
         $response = $this->client->inspectBasicSubscription($this->context, $subscriptionId);
+
+        return $this->inspectedRegistration($response, $subscriptionId, $configuration, $expectedApplicationId);
+    }
+
+    private function inspectedRegistration(ProviderWriteResponse $response, #[\SensitiveParameter] string $subscriptionId, #[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, string $expectedApplicationId): ?GraphSubscriptionRegistration
+    {
         $this->guard->assertActive($this->context);
         if ($response->status === 404) {
             return null;
@@ -66,13 +72,14 @@ final readonly class MsGraphSubscriptions
         $identity = new SyncIdentity('ms-graph', $this->context, new SyncScope(folderId: $configuration->folderId));
         $fingerprint = hash('sha256', serialize([$configuration->tenantId, $configuration->providerMailboxId, $configuration->folderId,
             $configuration->notificationUrl, $configuration->lifecycleNotificationUrl, $configuration->clientState(), $expectedApplicationId]));
-        $state = ['fingerprint' => $fingerprint, 'nextLink' => null, 'seenLinks' => []];
+        $state = ['fingerprint' => $fingerprint, 'nextLink' => null, 'seenLinks' => [], 'pendingIds' => []];
         if ($continuation !== null) {
             $continuation->identity->assertMatches($identity);
             $state = $continuation->position;
-            if ($continuation->phase !== 'ms-graph.subscription-lookup' || count($state) !== 3 || ($state['fingerprint'] ?? null) !== $fingerprint
+            if ($continuation->phase !== 'ms-graph.subscription-lookup' || count($state) !== 4 || ($state['fingerprint'] ?? null) !== $fingerprint
                 || ! array_key_exists('nextLink', $state) || ($state['nextLink'] !== null && ! is_string($state['nextLink']))
-                || ! is_array($state['seenLinks'] ?? null) || ! array_is_list($state['seenLinks'])) {
+                || ! is_array($state['seenLinks'] ?? null) || ! array_is_list($state['seenLinks'])
+                || ! is_array($state['pendingIds'] ?? null) || ! array_is_list($state['pendingIds'])) {
                 throw new InvalidSyncStateException('The subscription lookup continuation does not match the selected configuration and application.');
             }
             foreach ($state['seenLinks'] as $seen) {
@@ -80,64 +87,106 @@ final readonly class MsGraphSubscriptions
                     throw new InvalidSyncStateException('The subscription lookup continuation contains invalid progress.');
                 }
             }
+            foreach ($state['pendingIds'] as $subscriptionId) {
+                if (! is_string($subscriptionId) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._=-]{0,1023}\z/', $subscriptionId) !== 1) {
+                    throw new InvalidSyncStateException('The subscription lookup continuation contains invalid candidates.');
+                }
+            }
+            if (count(array_unique($state['pendingIds'])) !== count($state['pendingIds'])) {
+                throw new InvalidSyncStateException('The subscription lookup continuation contains repeated candidates.');
+            }
+            if ($state['nextLink'] !== null) {
+                $state['nextLink'] = $this->client->continuationEndpoint($state['nextLink'], 'subscriptions');
+            }
         }
+        /** @var array{fingerprint: string, nextLink: ?string, seenLinks: list<string>, pendingIds: list<string>} $state */
         $responses = new ResponseBudget($budget->maxResponseBytes);
-        $response = $this->client->listBasicSubscriptions($this->context, $responses, $state['nextLink']);
-        $this->guard->assertActive($this->context);
-        $body = $response->body();
-        if ($body !== null) {
-            $responses->consume(strlen($body));
-        }
-        $data = $body === null ? null : json_decode($body);
-        if ($response->status !== 200 || $body === null || ! $data instanceof \stdClass || ! is_array($data->value ?? null) || ! array_is_list($data->value)) {
-            throw new ApiRequestException('The Graph subscription lookup was incomplete, malformed or exceeded its response budget.', status: $response->status, headers: $response->headers);
-        }
-        $next = property_exists($data, '@odata.nextLink') ? $this->client->continuationEndpoint($data->{'@odata.nextLink'}, 'subscriptions') : null;
-        $current = hash('sha256', $state['nextLink'] ?? 'subscriptions');
-        if ($next !== null && (hash('sha256', $next) === $current || in_array(hash('sha256', $next), $state['seenLinks'], true))) {
-            $this->guard->assertActive($this->context);
-
-            return new GraphSubscriptionLookup([], false, new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state), 'provider_progress_repeated');
-        }
-        if (count($data->value) > $budget->maxItems) {
-            $this->guard->assertActive($this->context);
-
-            return new GraphSubscriptionLookup([], false, new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state), 'provider_item_limit');
-        }
+        $requests = 0;
         $registrations = [];
         $conflict = false;
-        foreach ($data->value as $value) {
-            if (! $value instanceof \stdClass || ! is_string($value->applicationId ?? null) || preg_match(self::UUID_PATTERN, $value->applicationId) !== 1
-                || ! is_string($value->resource ?? null) || trim($value->resource) === '' || preg_match('/[\x00-\x1f\x7f]/', $value->resource)
-                || ! is_string($value->changeType ?? null) || trim($value->changeType) === '') {
-                throw new ApiRequestException('Graph returned incomplete subscription lookup metadata.');
+        if ($state['pendingIds'] === []) {
+            $response = $this->client->listBasicSubscriptions($this->context, $responses, $state['nextLink']);
+            $requests++;
+            $this->guard->assertActive($this->context);
+            $body = $response->body();
+            if ($body !== null) {
+                $responses->consume(strlen($body));
             }
-            if (strcasecmp($value->applicationId, $expectedApplicationId) !== 0) {
-                continue;
+            $data = $body === null ? null : json_decode($body);
+            if ($response->status !== 200 || $body === null || ! $data instanceof \stdClass || ! is_array($data->value ?? null) || ! array_is_list($data->value)) {
+                throw new ApiRequestException('The Graph subscription lookup was incomplete, malformed or exceeded its response budget.', status: $response->status, headers: $response->headers);
             }
-            $resource = $this->resourceParts($value->resource, $configuration);
-            $changes = explode(',', $value->changeType);
-            sort($changes);
-            if ($resource === null || $resource['message'] !== null || (($resource['folder'] === null) !== ($configuration->folderId === null)) || $changes !== ['created', 'deleted', 'updated']) {
-                continue;
-            }
-            if (($value->clientState ?? null) !== $configuration->clientState()
-                || ($value->notificationUrl ?? null) !== $configuration->notificationUrl || ($value->lifecycleNotificationUrl ?? null) !== $configuration->lifecycleNotificationUrl) {
-                $conflict = true;
+            $next = property_exists($data, '@odata.nextLink') ? $this->client->continuationEndpoint($data->{'@odata.nextLink'}, 'subscriptions') : null;
+            $current = hash('sha256', $state['nextLink'] ?? 'subscriptions');
+            if ($next !== null && (hash('sha256', $next) === $current || in_array(hash('sha256', $next), $state['seenLinks'], true))) {
+                $this->guard->assertActive($this->context);
 
-                continue;
+                return new GraphSubscriptionLookup([], false, new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state), 'provider_progress_repeated');
             }
-            $registration = $this->registration($value, $configuration);
+            if (count($data->value) > $budget->maxItems) {
+                $this->guard->assertActive($this->context);
+
+                return new GraphSubscriptionLookup([], false, new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state), 'provider_item_limit');
+            }
+            foreach ($data->value as $value) {
+                if (! $value instanceof \stdClass || ! is_string($value->applicationId ?? null) || preg_match(self::UUID_PATTERN, $value->applicationId) !== 1
+                    || ! is_string($value->resource ?? null) || trim($value->resource) === '' || preg_match('/[\x00-\x1f\x7f]/', $value->resource)
+                    || ! is_string($value->changeType ?? null) || trim($value->changeType) === '') {
+                    throw new ApiRequestException('Graph returned incomplete subscription lookup metadata.');
+                }
+                if (strcasecmp($value->applicationId, $expectedApplicationId) !== 0) {
+                    continue;
+                }
+                $resource = $this->resourceParts($value->resource, $configuration);
+                $changes = explode(',', $value->changeType);
+                sort($changes);
+                if ($resource === null || $resource['message'] !== null || (($resource['folder'] === null) !== ($configuration->folderId === null)) || $changes !== ['created', 'deleted', 'updated']) {
+                    continue;
+                }
+                if (($value->notificationUrl ?? null) !== $configuration->notificationUrl || ($value->lifecycleNotificationUrl ?? null) !== $configuration->lifecycleNotificationUrl) {
+                    $conflict = true;
+
+                    continue;
+                }
+                if (! is_string($value->id ?? null) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._=-]{0,1023}\z/', $value->id) !== 1) {
+                    throw new ApiRequestException('Graph returned an invalid subscription lookup identity.');
+                }
+                $state['pendingIds'][] = $value->id;
+            }
+            $state['pendingIds'] = array_values(array_unique($state['pendingIds']));
+            $state['nextLink'] = $next;
+            if ($next !== null) {
+                $state['seenLinks'][] = $current;
+            }
+        }
+        foreach ($state['pendingIds'] as $subscriptionId) {
+            $reason = match (true) {
+                $requests >= $budget->maxRequests => 'request_limit',
+                count($registrations) >= $budget->maxItems => 'item_limit',
+                $responses->remaining() === 0 => 'response_limit',
+                default => null,
+            };
+            if ($reason !== null) {
+                $this->guard->assertActive($this->context);
+
+                return new GraphSubscriptionLookup($registrations, false, new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state), $reason, $conflict);
+            }
+            $response = $this->client->inspectBasicSubscription($this->context, $subscriptionId, $responses);
+            $requests++;
+            $this->guard->assertActive($this->context);
+            $body = $response->body();
+            if ($body !== null) {
+                $responses->consume(strlen($body));
+            }
+            $registration = $this->inspectedRegistration($response, $subscriptionId, $configuration, $expectedApplicationId);
             if ($registration === null) {
                 throw new ApiRequestException('Graph returned unverified subscription lookup evidence.');
             }
             $registrations[] = $registration;
+            array_shift($state['pendingIds']);
         }
         $this->guard->assertActive($this->context);
-        if ($next !== null) {
-            $state['nextLink'] = $next;
-            $state['seenLinks'][] = $current;
-        }
+        $next = $state['nextLink'];
 
         return new GraphSubscriptionLookup($registrations, $next === null, $next === null ? null : new SyncContinuation($identity, 'ms-graph.subscription-lookup', $state),
             $next === null ? null : 'more_pages', $conflict);
@@ -332,7 +381,7 @@ final readonly class MsGraphSubscriptions
         return ['folder' => $folder, 'message' => $message];
     }
 
-    private function confirmedRegistration(ProviderWriteResponse $response, #[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, int $status, ?string $subscriptionId = null): GraphSubscriptionRegistration
+    private function confirmedRegistration(ProviderWriteResponse $response, #[\SensitiveParameter] GraphSubscriptionConfiguration $configuration, int $status, #[\SensitiveParameter] ?string $subscriptionId = null): GraphSubscriptionRegistration
     {
         $this->guard->assertActive($this->context);
         $data = json_decode($response->body() ?? '');

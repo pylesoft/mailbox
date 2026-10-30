@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** closed
+**Resolution:** open
 
 **Spec:** [Specification](../spec.md)
 
@@ -32,6 +32,12 @@ Create and maintain basic Graph subscriptions, validate callbacks and lifecycle 
 - Assert no direct provider-data publication, checkpoint advancement or package-owned callback queue.
 
 ## Comments
+
+- 2026-10-30: Reopened and claimed by the fresh LIST proof repair on `fix/mailbox-subscription-list-reads`, based on `1a09641e4fb7dbdf30bdd13ece1a3a6b4cccdd00`. Microsoft documents that subscription LIST withholds clientState; the earlier positive fixtures incorrectly echoed it, so their passing results do not prove real recovery. A public regression with clientState=null failed with zero registrations instead of one. This repair keeps the public optional API and uses LIST only to discover candidates, then actual same-selected-grant known-ID GET to verify each private configuration. Request/aggregate-byte limits and private pending-ID progress must cover those GETs. Earlier receipts remain tied to their actual source and fixture scope; they are not erased or relabeled. Focused red/green and affected checks precede local closure; ticket 25 remains open for fresh merged compatibility. No live/provider operation, dependency or host change, new ticket, publication or deployment is included.
+
+- 2026-10-30: Runtime repair `51e44fc709287aa3d912610cdcdd9065d3907ef7` verifies every candidate with actual GET under the same selected grant and existing full application/configuration/secret/ID/expiry checks. LIST state is never proof. LIST plus candidate GETs share actual byte/request budgets; bound private pending IDs resume without re-listing, including maxRequests=1 and a smaller resumed item budget. Every resumed candidate receives fresh provider proof. Candidate GET404, contradictory evidence or access failure stays unknown; different callback URLs at the same key produce only safe conflict metadata. All positive LIST fixtures now contain null/omitted state and separate GET acknowledgements. A reproduced exception-argument leak of unverified IDs is fixed with sensitive-parameter annotations on the three ID carrier parameters.
+
+- One final combined public inspection and existing eight-class affected selection passes **259 cases / 966 assertions**, two workers, exit 0. This is one actual combined run, not added or relabeled historical totals. Dirty Pint changes no PHP bytes; the same connected six-path level-8 PHPStan scope, strict Composer validation, installed platform checks and diff checks pass. Raw manifests prove all 428 recorded tracked files unchanged after formatting, including 336 runtime/test/config paths. Evidence is retained in `C:/Users/hello/.codex/scratch/ai-clerk-mailbox-implementation/sdk-list-reads-fix/`. The initial vendor-copy cache-exclusion claim was invalid: preflight stopped before autoload, both copied generated directories were preserved with hashes, and a fresh seven-path preflight passed before tests. The corrected receipt explicitly supersedes that claim. No actual environment or application database was loaded; the sole Testbench junction targets only this owned vendor. This ticket remains open for fresh independent merge acceptance; ticket 25's full compatibility gate and live tickets 26/27 remain open.
 
 - 2026-10-30: Reopened and claimed by the fresh subscription-inspection implementer on `fix/mailbox-subscription-inspection`, based on clean `edfb4abbbfa8be70a593e08e0fffd3ecac44b1b1`. Approved AI Clerk integration exposed a provider-primitive gap: separate selected grants cannot obtain fresh evidence for an existing Graph watch, and an unknown create acknowledgement cannot be reconciled by exact private configuration. This repair adds optional known-ID inspection and bounded exact-configuration lookup through each selected grant; it preserves exact registration contexts, mandatory custom-driver contracts, host-owned coordination and all historical receipts. Public SDK-to-real-Guzzle regressions precede changes, SDK database access remains forbidden, and heavy checks wait for the coordinator's serialized lease. No host models, new tracker ticket, provider operation, consumer migration or publication is included.
 
