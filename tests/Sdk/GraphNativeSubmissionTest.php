@@ -520,7 +520,8 @@ function nativeGraphMessage(array $changes = []): PreparedMessage
 function nativeGraphSource(): array
 {
     return ['id' => 'source=', 'conversationId' => 'source-conversation', 'parentFolderId' => 'Inbox', 'isDraft' => false,
-        'subject' => 'Original subject', 'body' => ['contentType' => 'text', 'content' => 'Original content']];
+        'subject' => 'Original subject', 'body' => ['contentType' => 'text', 'content' => 'Original content'],
+        'replyTo' => [], 'internetMessageHeaders' => []];
 }
 
 /** @return array<string, mixed> */
