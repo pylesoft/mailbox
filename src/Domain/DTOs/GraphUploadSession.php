@@ -35,7 +35,7 @@ final readonly class GraphUploadSession
             || isset($url['user']) || isset($url['pass']) || isset($url['fragment']) || isset($url['port'])
             || ! is_string($url['query'] ?? null) || $url['query'] === ''
             || preg_match('/[\x00-\x20\x7f\\\\]/', $this->uploadUrl) === 1
-            || preg_match("~\\A/api/v2\\.0/Users\\('[^']+'\\)/Messages\\('[^']+'\\)/AttachmentSessions\\('[^']+'\\)\\z~", $url['path'] ?? '') !== 1) {
+            || preg_match("~\\A/api/(?:g?v1|v2)\\.0/Users\\('[^']+'\\)/Messages\\('[^']+'\\)/AttachmentSessions\\('[^']+'\\)\\z~i", $url['path'] ?? '') !== 1) {
             throw new InvalidArgumentException('The Outlook upload session has an invalid trusted target.');
         }
 

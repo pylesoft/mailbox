@@ -107,7 +107,7 @@ function graphAttachmentWireCase(int $fileCount, int $fileBytes, bool $control =
                 $metadata[] = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR)['AttachmentItem'];
                 $index = $sessionCount++;
 
-                return Create::promiseFor(new Response(201, [], json_encode(['uploadUrl' => "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')/AttachmentSessions('session-{$index}')?authtoken=dummy-private-session-{$index}",
+                return Create::promiseFor(new Response(201, [], json_encode(['uploadUrl' => "https://outlook.office.com/api/gv1.0/users('provider-user')/messages('provider-draft')/AttachmentSessions('session-{$index}')?authtoken=dummy-private-session-{$index}",
                     'expirationDateTime' => $expires, 'nextExpectedRanges' => ['0-']], JSON_THROW_ON_ERROR)));
             }
 

@@ -530,10 +530,10 @@ it('rejects a same length changed source after a retained acknowledged prefix be
         ->and($history)->toHaveCount(3);
 });
 
-it('retains each acknowledged Outlook upload step before sending another sequential range', function (): void {
+it('retains each acknowledged Outlook upload step before sending another sequential range', function (string $basePath): void {
     $history = [];
     $ranges = [];
-    $url = "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')/AttachmentSessions('session-1')?authtoken=private-upload-secret";
+    $url = $basePath."/AttachmentSessions('session-1')?authtoken=private-upload-secret";
     $expires = (new DateTimeImmutable('+1 hour'))->format(DATE_ATOM);
     $bytes = str_repeat('a', 3_000_000).'z';
     $mailbox = graphAttachmentMailbox([
@@ -544,10 +544,10 @@ it('retains each acknowledged Outlook upload step before sending another sequent
 
             return new Response(200, [], json_encode(['ExpirationDateTime' => $expires, 'nextExpectedRanges' => ['3000000']], JSON_THROW_ON_ERROR));
         },
-        static function (RequestInterface $request) use (&$ranges): Response {
+        static function (RequestInterface $request) use (&$ranges, $basePath): Response {
             $ranges[] = ['range' => $request->getHeaderLine('Content-Range'), 'bytes' => (string) $request->getBody()];
 
-            return new Response(201, ['Location' => "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')/Attachments('large-attachment=')"]);
+            return new Response(201, ['Location' => $basePath."/Attachments('large-attachment=')"]);
         },
     ], $history);
     $file = new PreparedFile('large-host-file', 'chosen.bin', 'application/octet-stream', strlen($bytes),
@@ -589,7 +589,11 @@ it('retains each acknowledged Outlook upload step before sending another sequent
         expect($public)->not->toContain('outlook.office.com');
         expect($public)->not->toContain('private-token');
     }
-});
+})->with([
+    'legacy v2.0' => "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')",
+    'documented v1.0' => "https://outlook.office.com/api/v1.0/Users('provider-user')/Messages('provider-draft')",
+    'documented gv1.0' => "https://outlook.office.com/api/gv1.0/users('provider-user')/messages('provider-draft')",
+]);
 
 /** @param list<PreparedFile> $files */
 function graphAttachmentMessage(array $files): PreparedMessage

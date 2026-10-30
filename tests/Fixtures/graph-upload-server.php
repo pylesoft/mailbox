@@ -29,7 +29,7 @@ while ($index < count($expected)) {
         }
         $headers .= $byte;
     }
-    $target = "/api/v2.0/Users('provider-user')/Messages('provider-draft')/AttachmentSessions('session-{$index}')?authtoken=dummy-private-session-{$index}";
+    $target = "/api/gv1.0/users('provider-user')/messages('provider-draft')/AttachmentSessions('session-{$index}')?authtoken=dummy-private-session-{$index}";
     if (! str_starts_with($headers, 'PUT '.$target.' HTTP/')
         || preg_match('/\r\nHost: outlook\.office\.com\r\n/i', $headers) !== 1
         || preg_match('/\r\n(?:Authorization|Cookie):/i', $headers) === 1
@@ -62,7 +62,7 @@ while ($index < count($expected)) {
             throw new RuntimeException('The local Outlook fixture received changed file bytes.');
         }
         $files[] = ['bytes' => $offset, 'sha256' => $fingerprint];
-        $location = "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')/Attachments('wire-file-{$index}=')";
+        $location = "https://outlook.office.com/api/gv1.0/users('provider-user')/messages('provider-draft')/Attachments('wire-file-{$index}=')";
         fwrite($connection, "HTTP/1.1 201 Created\r\nLocation: {$location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         $index++;
         $offset = 0;
