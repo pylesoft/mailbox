@@ -167,7 +167,7 @@ Read the returned stream incrementally and close it when finished. Calling `getC
 
 ### Graph Content Forms
 
-Graph returns file attachments as raw file bytes. Their declared file size must match the observed bytes. Item attachments use the provider's MIME representation, including vCard or iCalendar where appropriate. Item metadata `size` does not have a documented equality guarantee with the raw MIME representation length. `metadata()->size` retains the provider declaration, while `download()->size` reports the actual stored byte length, including when a declaration is omitted. Reference attachments do not support `/$value` and fail explicitly. See the [Graph attachment contract](https://learn.microsoft.com/en-us/graph/api/attachment-get?view=graph-rest-1.0).
+Graph returns file attachments as raw file bytes. Both `stream()` and `download()` fetch metadata before content and require the declared file size to match the observed bytes. Metadata and content share the operation's response and memory budgets. Item attachments use the provider's MIME representation, including vCard or iCalendar where appropriate. Item metadata `size` does not have a documented equality guarantee with the raw MIME representation length. `metadata()->size` retains the provider declaration, while `download()->size` reports the actual stored byte length, including when a declaration is omitted. Reference attachments do not support `/$value` and fail explicitly. See the [Graph attachment contract](https://learn.microsoft.com/en-us/graph/api/attachment-get?view=graph-rest-1.0).
 
 ## Content-Addressable Deduplication
 
@@ -179,7 +179,9 @@ Mailbox uses SHA-256 content hashing to avoid storing duplicate files. When `dow
 
 3. **Preferred path exists, content differs.** If a file exists at the expected path but its hash does not match (a different file with the same name), Mailbox appends the first 12 characters of the content hash as a suffix to the filename. For example, `report.pdf` becomes `report-a1b2c3d4e5f6.pdf`. If that hash-suffixed path also exists and its content matches, the download is skipped.
 
-This means you can safely call `downloadAttachments()` multiple times on the same message -- or on different messages that happen to have identically named files -- without overwriting unrelated data or wasting disk space.
+Sequential downloads reuse matching content and preserve conflicting files. If the hash-suffixed destination also contains different content, the download fails without replacing it.
+
+The filesystem existence check and write are separate operations. When workers can download to the same destination concurrently, the host must coordinate writes by the effective destination directory on the configured disk, after the package's path normalization. Include every writer sharing that directory; distinct mailbox or message identifiers can normalize to the same path. The package does not provide atomic create-if-absent storage or a cross-worker download lock. This limitation also applies to existing configured integrations.
 
 ```php
 // First download: file is written to disk

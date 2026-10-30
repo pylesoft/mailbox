@@ -111,14 +111,22 @@ it('writes a hash-suffixed path when existing path has different content', funct
     Storage::disk('local')->assertExists($second->path);
 });
 
-it('streams file attachment bytes without reading contentBytes', function (): void {
+it('streams validated file attachment bytes without reading contentBytes', function (): void {
     $client = new class extends FakeGraphClient
     {
         public function __construct() {}
 
         public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
-            throw new RuntimeException('Metadata must not be requested while streaming.');
+            expect($query['$select'])->not->toContain('contentBytes');
+
+            return [
+                '@odata.type' => '#microsoft.graph.fileAttachment',
+                'id' => 'att1',
+                'name' => 'file.bin',
+                'size' => 14,
+                'contentBytes' => 'must-not-be-used',
+            ];
         }
 
         public function stream(string $endpoint, ?string $mailbox = null): StreamInterface

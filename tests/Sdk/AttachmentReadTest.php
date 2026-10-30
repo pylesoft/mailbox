@@ -11,6 +11,7 @@ use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
+use Psr\Http\Message\RequestInterface;
 use Pyle\Mailbox\Contracts\AttachmentResource;
 use Pyle\Mailbox\Contracts\SupportsAttachmentReadLimits;
 use Pyle\Mailbox\DTOs\AttachmentReadLimits;
@@ -161,12 +162,15 @@ it('enforces Gmail file limits against declared and actual decoded bytes', funct
 
 it('enforces Graph file limits against actual HTTP bytes before returning a stream', function (): void {
     $history = [];
-    $attachment = attachmentReadResource('ms-graph', [new Response(200, ['Content-Length' => '2'], 'four')], $history);
+    $attachment = attachmentReadResource('ms-graph', [
+        ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2],
+        new Response(200, ['Content-Length' => '2'], 'four'),
+    ], $history);
     expect($attachment)->toBeInstanceOf(SupportsAttachmentReadLimits::class);
     $bounded = $attachment->withReadLimits(new AttachmentReadLimits(maxFileBytes: 3));
 
     expect(fn () => $bounded->stream())->toThrow(ResponseLimitExceededException::class);
-    expect($history)->toHaveCount(1)->and($history[0]['response']->getBody()->isReadable())->toBeFalse();
+    expect($history)->toHaveCount(2)->and($history[1]['response']->getBody()->isReadable())->toBeFalse();
 });
 
 it('stores a ten MiB Graph file with bounded memory after transport initialization', function (): void {
@@ -213,10 +217,13 @@ it('stores a ten MiB Graph file with bounded memory after transport initializati
 
 it('rejects incomplete or malformed Graph HTTP content lengths', function (string $declared): void {
     $history = [];
-    $attachment = attachmentReadResource('ms-graph', [new Response(200, ['Content-Length' => $declared], 'OK')], $history);
+    $attachment = attachmentReadResource('ms-graph', [
+        ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2],
+        new Response(200, ['Content-Length' => $declared], 'OK'),
+    ], $history);
 
     expect(fn () => $attachment->stream())->toThrow(MailboxException::class);
-    expect($history[0]['response']->getBody()->isReadable())->toBeFalse();
+    expect($history[1]['response']->getBody()->isReadable())->toBeFalse();
 })->with(['truncated' => '3', 'excess bytes' => '1', 'negative' => '-1', 'nonnumeric' => 'bad', 'integer overflow' => '18446744073709551616']);
 
 it('preserves unrelated files when the hash-suffix destination also exists', function (string $provider): void {
@@ -344,7 +351,10 @@ it('removes owned file streams on explicit close or caller abandonment', functio
     $history = [];
     $attachment = attachmentReadResource($provider, $provider === 'gmail' ? [
         ['payload' => ['partId' => 'attachment', 'filename' => 'file.bin', 'body' => ['data' => 'T0s', 'size' => 2]]],
-    ] : [new Response(200, ['Content-Length' => '2'], 'OK')], $history);
+    ] : [
+        ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2],
+        new Response(200, ['Content-Length' => '2'], 'OK'),
+    ], $history);
     $stream = $attachment->stream();
     $path = $stream->getMetadata('uri');
     expect((string) $stream)->toBe('OK')->and(is_file($path))->toBeTrue();
@@ -362,7 +372,10 @@ it('removes owned file streams on explicit close or caller abandonment', functio
 
 it('preserves valid empty files and gzip media bytes without treating them as HTTP encoding', function (string $bytes): void {
     $history = [];
-    $attachment = attachmentReadResource('ms-graph', [new Response(200, ['Content-Type' => 'application/gzip', 'Content-Length' => (string) strlen($bytes)], $bytes)], $history);
+    $attachment = attachmentReadResource('ms-graph', [
+        ['id' => 'attachment', 'name' => 'file.gz', 'size' => strlen($bytes)],
+        new Response(200, ['Content-Type' => 'application/gzip', 'Content-Length' => (string) strlen($bytes)], $bytes),
+    ], $history);
     $stream = $attachment->stream();
     try {
         expect((string) $stream)->toBe($bytes)->and($stream->getSize())->toBe(strlen($bytes));
@@ -389,7 +402,11 @@ it('keeps provider storage segments contained and replaces dot-only file names',
 
 it('rejects hostile attachment redirects and closes their response without exposing access material', function (string $provider): void {
     $history = [];
-    $attachment = attachmentReadResource($provider, [new Response(302, ['Location' => 'https://evil.example/file?access_token=redirect-private'], 'redirect')], $history);
+    $responses = [new Response(302, ['Location' => 'https://evil.example/file?access_token=redirect-private'], 'redirect')];
+    if ($provider === 'ms-graph') {
+        array_unshift($responses, ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2]);
+    }
+    $attachment = attachmentReadResource($provider, $responses, $history);
     $failure = null;
     try {
         $attachment->stream();
@@ -397,10 +414,14 @@ it('rejects hostile attachment redirects and closes their response without expos
         $failure = $exception;
     }
 
+    $content = $history[array_key_last($history)];
     expect($failure)->toBeInstanceOf(MailboxException::class)
-        ->and($history)->toHaveCount(1)
-        ->and($history[0]['options']['allow_redirects'])->toBeFalse()
-        ->and($history[0]['response']->getBody()->isReadable())->toBeFalse();
+        ->and($history)->toHaveCount($provider === 'ms-graph' ? 2 : 1)
+        ->and($content['options']['allow_redirects'])->toBeFalse()
+        ->and($content['response']->getBody()->isReadable())->toBeFalse();
+    if ($provider === 'ms-graph') {
+        expect($content['request']->getUri()->getPath())->toEndWith('/$value');
+    }
     expect($failure->getMessage())->not->toContain('redirect-private');
 })->with(['gmail', 'ms-graph']);
 
@@ -415,6 +436,53 @@ it('rejects Graph file metadata that does not match the observed bytes', functio
 
     expect(fn () => $attachment->download())->toThrow(MailboxException::class);
     expect(Storage::disk('attachment-read-tests')->allFiles())->toBeEmpty();
+});
+
+it('rejects incomplete Graph file streams against their declared file size', function (string $bytes): void {
+    $response = static fn (RequestInterface $request): Response => str_ends_with($request->getUri()->getPath(), '/$value')
+        ? new Response(200, [], $bytes)
+        : new Response(200, [], '{"@odata.type":"#microsoft.graph.fileAttachment","id":"attachment","name":"file.bin","size":4}');
+    $history = [];
+    $attachment = attachmentReadResource('ms-graph', [$response, $response], $history);
+
+    expect(fn () => $attachment->stream())->toThrow(MailboxException::class, 'Graph attachment size does not match its content.');
+})->with(['short chunked content' => 'OK', 'empty incomplete content' => '']);
+
+it('shares the Graph stream response budget across metadata and file bytes', function (): void {
+    $metadata = '{"id":"attachment","size":2}';
+    $response = static fn (RequestInterface $request): Response => new Response(200, [], str_ends_with($request->getUri()->getPath(), '/$value') ? 'OK' : $metadata);
+    $history = [];
+    $attachment = attachmentReadResource('ms-graph', [$response, $response], $history)
+        ->withReadLimits(new AttachmentReadLimits(maxResponseBytes: strlen($metadata) + 1));
+
+    expect(fn () => $attachment->stream())->toThrow(ResponseLimitExceededException::class);
+    expect($history)->toHaveCount(2)->and($history[1]['response']->getBody()->isReadable())->toBeFalse();
+});
+
+it('retains Graph item MIME bytes whose length differs from the item metadata size', function (): void {
+    $history = [];
+    $attachment = attachmentReadResource('ms-graph', [
+        ['@odata.type' => '#microsoft.graph.itemAttachment', 'id' => 'attachment', 'name' => 'message.eml', 'size' => 99],
+        new Response(200, [], "MIME-Version: 1.0\r\n\r\nHello"),
+    ], $history);
+    $stream = $attachment->stream();
+
+    try {
+        expect((string) $stream)->toBe("MIME-Version: 1.0\r\n\r\nHello")->and($stream->getSize())->toBe(26);
+    } finally {
+        $stream->close();
+    }
+});
+
+it('rejects unsupported Graph reference streams before requesting file bytes', function (): void {
+    $history = [];
+    $attachment = attachmentReadResource('ms-graph', [
+        ['@odata.type' => '#microsoft.graph.referenceAttachment', 'id' => 'attachment', 'name' => 'reference', 'size' => 2],
+        new Response(200, [], 'OK'),
+    ], $history);
+
+    expect(fn () => $attachment->stream())->toThrow(MailboxException::class, 'This Graph attachment form does not provide supported file bytes.');
+    expect($history)->toHaveCount(1);
 });
 
 it('reports stored byte length while retaining the provider metadata declaration', function (string $provider, int $declared, int $observed): void {
@@ -467,22 +535,31 @@ it('rejects HTTP content encoding before reading bytes and disables transparent 
         },
     ]);
     $history = [];
-    $attachment = attachmentReadResource($provider, [new Response(200, ['Content-Encoding' => 'gzip'], $body)], $history);
+    $responses = [new Response(200, ['Content-Encoding' => 'gzip'], $body)];
+    if ($provider === 'ms-graph') {
+        array_unshift($responses, ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2]);
+    }
+    $attachment = attachmentReadResource($provider, $responses, $history);
 
     expect(fn () => $attachment->stream())->toThrow(MailboxException::class);
+    $content = $history[array_key_last($history)];
     expect($reads)->toBe(0)->and($closed)->toBeTrue()
-        ->and($history[0]['request']->getHeaderLine('Accept-Encoding'))->toBe('identity')
-        ->and($history[0]['options']['decode_content'])->toBeFalse();
+        ->and($content['request']->getHeaderLine('Accept-Encoding'))->toBe('identity')
+        ->and($content['options']['decode_content'])->toBeFalse();
+    if ($provider === 'ms-graph') {
+        expect($history)->toHaveCount(2)
+            ->and($content['request']->getUri()->getPath())->toEndWith('/$value');
+    }
 })->with(['gmail', 'ms-graph']);
 
 /**
- * @param  list<array<string, mixed>|Response|Throwable>  $responses
+ * @param  list<array<string, mixed>|Response|Throwable|Closure>  $responses
  * @param  array<int, array<string, mixed>>  $history
  */
 function attachmentReadResource(string $provider, array $responses, array &$history, string $mailbox = 'reader@example.com', string $messageId = 'message'): AttachmentResource
 {
     $stack = HandlerStack::create(new MockHandler(array_map(
-        static fn (array|Response|Throwable $response): Response|Throwable => is_array($response)
+        static fn (array|Response|Throwable|Closure $response): Response|Throwable|Closure => is_array($response)
             ? new Response(200, [], json_encode($response, JSON_THROW_ON_ERROR))
             : $response,
         $responses,

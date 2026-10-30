@@ -47,22 +47,28 @@ class MsGraphAttachmentResource implements AttachmentResource, SupportsAttachmen
     {
         $responses = new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes);
         $payload = $this->readMetadata($responses);
-        $attachment = AttachmentDto::fromMsGraph($payload);
+
+        return AttachmentStorage::store($this->resolveContent($payload, $responses), AttachmentDto::fromMsGraph($payload), $responses, 'ms-graph', $this->mailbox, $this->messageId, $this->attachmentId);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function resolveContent(array $payload, ResponseBudget $responses): StreamInterface
+    {
         $type = $payload['@odata.type'] ?? '#microsoft.graph.fileAttachment';
         if (! in_array($type, ['#microsoft.graph.fileAttachment', '#microsoft.graph.itemAttachment'], true)) {
             throw new MailboxException('This Graph attachment form does not provide supported file bytes.');
         }
         $file = $type === '#microsoft.graph.fileAttachment';
-        if ($file && $attachment->size > $this->limits->maxFileBytes) {
+        if ($file && ($payload['size'] ?? 0) > $this->limits->maxFileBytes) {
             throw new ResponseLimitExceededException('The declared attachment exceeds its file byte limit.');
         }
         $content = $this->client->streamBounded($this->attachmentEndpoint().'/$value', $responses, $this->limits->maxFileBytes, $this->mailbox);
-        if ($file && array_key_exists('size', $payload) && $content->getSize() !== $attachment->size) {
+        if ($file && array_key_exists('size', $payload) && $content->getSize() !== $payload['size']) {
             $content->close();
             throw new MailboxException('Graph attachment size does not match its content.');
         }
 
-        return AttachmentStorage::store($content, $attachment, $responses, 'ms-graph', $this->mailbox, $this->messageId, $this->attachmentId);
+        return $content;
     }
 
     /** @return array<string, mixed> */
@@ -88,7 +94,9 @@ class MsGraphAttachmentResource implements AttachmentResource, SupportsAttachmen
 
     public function stream(): StreamInterface
     {
-        return $this->client->streamBounded($this->attachmentEndpoint().'/$value', new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes), $this->limits->maxFileBytes, $this->mailbox);
+        $responses = new ResponseBudget($this->limits->maxResponseBytes, $this->limits->maxMemoryBytes);
+
+        return $this->resolveContent($this->readMetadata($responses), $responses);
     }
 
     private function attachmentEndpoint(): string
