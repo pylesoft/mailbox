@@ -14,6 +14,8 @@ The [local compatibility receipt](plans/mailbox-provider-sdk/compatibility.md) r
 
 ### Legacy OAuth Records and Reconnect
 
+Successful configured Gmail connection probes now report the resolved delegated mailbox in `authenticatedAs`. Earlier probes returned the service-account JSON or credential-file path in that public field. This intentional security correction keeps the result shape while excluding private credentials from arrays, JSON and diagnostics.
+
 Keep existing connections, mailbox/message references, configuration and OAuth rows when upgrading. The additive selected-grant migration does not reconstruct ownership, bind old credentials, merge rows or delete history.
 
 | Existing shape | Upgrade handling |
