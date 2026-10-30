@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Resolution:** closed
+**Resolution:** open
 
 **Spec:** [Specification](../spec.md)
 
@@ -30,6 +30,8 @@ Provide an optional conversation read that returns complete useful context withi
 - Test unpaged oversized Gmail threads, content-fetch interruption, inaccessible scope and optional-capability absence; assert no silently omitted context.
 
 ## Comments
+
+- 2026-10-30: Host read-contract repair claimed by `mailbox_host_read_fix` on `fix/mailbox-host-read-contracts`, based on clean `e1ad4735e1be6abb9b303b90b01f0c7f9ab6a59e`. Reopened for the confirmed bounded Graph acquisition gap: the shared initial/resumed message selection omits `replyTo` and `internetMessageHeaders`. Existing body/file/scope receipts are preserved and do not establish Reply-To/header parity. The repair will acquire and validate those provider lists, retain repeated headers, and expose compatible package-owned Reply-To/header values for Graph and Gmail using the installed incoming parser. Recipient defaults and presentation remain host policy. Public SDK/Guzzle RED cases precede implementation; shared resource checks wait for the coordinator's slot. No live account, consumer change or publication is included.
 
 - 2026-10-29: Claimed by `mailbox_ticket_15` on `feat/mailbox-sdk-15`, based on integration `3cf0d8e06004d7221040143accbe0f3a460049b7`. Scope: optional complete conversation reads through the Q13 public SDK / real Guzzle / host-port seams. No provider setup, live calls, application changes, publication, dependency changes, or file-byte download work. Existing custom-driver contracts stay unchanged. Tests/install/static checks wait for the coordinator's shared resource slot.
 - Official protocol check: [Gmail thread selection](https://developers.google.com/workspace/gmail/api/guides/threads) returns a thread when any message matches the selection query; [thread get](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads/get) accepts `format`, not a page size or cutoff. The host selects the conversation; this read preserves its older messages. [Graph message listing](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0) exposes separate mailbox/folder endpoints and opaque next links. Use a conversation equality filter without an unsupported sort combination, [double apostrophes inside string literals](https://learn.microsoft.com/en-us/graph/query-parameters#escaping-single-quotes), and page [attachment metadata](https://learn.microsoft.com/en-us/graph/api/message-list-attachments?view=graph-rest-1.0) even when `hasAttachments` is false, because that property excludes inline files. This is documentation research, not live-provider acceptance.

@@ -30,7 +30,7 @@ use Pyle\Mailbox\Support\ConversationReadBudget;
 /** @phpstan-type ConversationState array{conversationId: string, started: bool, nextLink: ?string, seenLinks: list<string>, pending: list<string>, seenIds: list<string>, files: list<array<string, mixed>>, filesStarted: bool, fileNext: ?string, fileSeen: list<string>} */
 final readonly class MsGraphConversationReader
 {
-    private const MESSAGE_SELECT = 'id,subject,bodyPreview,body,from,sender,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,importance,conversationId,internetMessageId,parentFolderId';
+    private const MESSAGE_SELECT = 'id,subject,bodyPreview,body,from,sender,toRecipients,ccRecipients,bccRecipients,replyTo,internetMessageHeaders,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,importance,conversationId,internetMessageId,parentFolderId';
 
     private const FILE_SELECT = 'id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId';
 

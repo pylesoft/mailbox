@@ -23,6 +23,8 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
      * @param  array<EmailAddressDto>  $ccRecipients
      * @param  array<EmailAddressDto>  $bccRecipients
      * @param  array<string, mixed>  $raw
+     * @param  array<EmailAddressDto>  $replyTo
+     * @param  list<array{name: string, value: string}>  $headers
      */
     public function __construct(
         public string $id,
@@ -44,6 +46,8 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
         public ?string $internetMessageId,
         public ?string $parentFolderId,
         public array $raw = [],
+        public array $replyTo = [],
+        public array $headers = [],
     ) {}
 
     /** @param array<string, mixed> $data */
@@ -75,6 +79,8 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
             internetMessageId: isset($data['internetMessageId']) ? (string) $data['internetMessageId'] : null,
             parentFolderId: isset($data['parentFolderId']) ? (string) $data['parentFolderId'] : null,
             raw: $data,
+            replyTo: self::mapAddresses(array_key_exists('replyTo', $data) ? $data['replyTo'] : []),
+            headers: self::mapHeaders(array_key_exists('internetMessageHeaders', $data) ? $data['internetMessageHeaders'] : []),
         );
     }
 
@@ -82,15 +88,7 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
     public static function fromGmail(array $data): self
     {
         $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
-        $headers = $payload['headers'] ?? [];
-        if (! is_array($headers) || ! array_is_list($headers)) {
-            throw new MailboxException('Malformed received Gmail headers.');
-        }
-        foreach ($headers as $header) {
-            if (! is_array($header) || ! is_string($header['name'] ?? null) || ! is_string($header['value'] ?? null)) {
-                throw new MailboxException('Malformed received Gmail header.');
-            }
-        }
+        $headers = self::mapHeaders(array_key_exists('headers', $payload) ? $payload['headers'] : []);
         $labelIds = array_values(array_filter((array) ($data['labelIds'] ?? []), 'is_string'));
         $subject = self::headerValue($headers, 'subject') ?? (string) ($data['subject'] ?? '');
         $fromValue = self::headerValue($headers, 'from');
@@ -116,6 +114,8 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
             internetMessageId: self::headerValue($headers, 'message-id'),
             parentFolderId: self::resolveParentFolder($labelIds),
             raw: $data,
+            replyTo: self::parseAddressHeaders($headers, 'reply-to'),
+            headers: $headers,
         );
     }
 
@@ -130,6 +130,23 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
             static fn (mixed $address): EmailAddressDto => EmailAddressDto::fromMsGraph(is_array($address) ? $address : []),
             $addresses,
         );
+    }
+
+    /** @return list<array{name: string, value: string}> */
+    private static function mapHeaders(mixed $headers): array
+    {
+        if (! is_array($headers) || ! array_is_list($headers)) {
+            throw new MailboxException('Malformed received header collection.');
+        }
+        $mapped = [];
+        foreach ($headers as $header) {
+            if (! is_array($header) || ! is_string($header['name'] ?? null) || $header['name'] === '' || ! is_string($header['value'] ?? null)) {
+                throw new MailboxException('Malformed received header.');
+            }
+            $mapped[] = ['name' => $header['name'], 'value' => $header['value']];
+        }
+
+        return $mapped;
     }
 
     private static function parseDate(mixed $value): ?CarbonImmutable
