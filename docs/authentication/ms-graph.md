@@ -324,7 +324,7 @@ $registration = $mailbox->createSubscription(
 );
 ```
 
-The request targets the mailbox in the selected grant context. The host establishes the canonical mailbox ID and tenant mapping from trusted provider or setup evidence. A callback's resource path cannot establish that mapping. Canonical mailbox IDs are opaque provider identities; the SDK does not require an organizational GUID shape. Omit `folderId` to subscribe to all messages in the selected mailbox. Only known folder aliases normalize case; opaque folder IDs remain exact. Retain `clientState` privately: JSON and debug output omit that secret.
+The request targets the mailbox in the selected grant context. The host establishes the canonical mailbox ID and tenant mapping from trusted provider or setup evidence. A callback's resource path cannot establish that mapping. Canonical mailbox IDs are opaque provider identities; the SDK does not require an organizational GUID shape. Omit `folderId` to subscribe to all messages in the selected mailbox. Email and GUID context aliases may differ in case; opaque mailbox and folder IDs remain exact. Only known folder aliases normalize case. Retain `clientState` privately: JSON and debug output omit that secret.
 
 ### Permissions and Endpoint Setup
 
@@ -339,9 +339,47 @@ $renewed = $mailbox->renewSubscription($registration, new DateTimeImmutable('+1 
 $removed = $mailbox->removeSubscription($renewed);
 ```
 
-Creation and renewal request a future expiry within the basic Outlook limit of seven days. Microsoft may normalize short requests to its minimum lifetime, so retain the returned expiry. Renewal rejects expired or removed registrations before HTTP; reconcile and create a new registration explicitly. Removal sends an empty-body `DELETE` and returns a registration whose status is `removed` after a confirmed empty `204` response. Your host owns scheduling and durable registration updates. See the [subscription lifetime reference](https://learn.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-1.0#subscription-lifetime).
+Creation and renewal request a future expiry within the basic Outlook limit of seven days. Microsoft may normalize short requests to its minimum lifetime, so retain the returned expiry. Renewal rejects expired or removed retained registrations before HTTP; use inspection to reconcile uncertain provider state before explicitly creating a replacement. Removal sends an empty-body `DELETE` and returns a registration whose status is `removed` after a confirmed empty `204` response. Your host owns scheduling and durable registration updates. See the [subscription lifetime reference](https://learn.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-1.0#subscription-lifetime).
 
 These operations make one provider attempt. An unconfirmed acknowledgement throws `ApiRequestException` with the available status and safe response headers. The SDK does not replay a possibly completed write or release the enclosing host job. Keep the original attempt and reconcile uncertain provider state before creating another subscription.
+
+### Inspect and Recover Registrations
+
+The separate optional `SupportsGraphSubscriptionInspection` capability obtains fresh provider evidence through the currently selected grant. Supply the trusted application client ID associated with that grant; neither `GrantContext` nor the configuration establishes this identity, and the SDK does not decode access tokens to infer it.
+
+```php
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptionInspection;
+use Pyle\Mailbox\DTOs\SyncBudget;
+
+if (! $mailbox instanceof SupportsGraphSubscriptionInspection) {
+    throw new RuntimeException('This provider cannot inspect Graph subscriptions.');
+}
+
+$registration = $mailbox->inspectSubscription(
+    $retainedSubscriptionId,
+    $configuration,
+    $trustedApplicationClientId,
+);
+```
+
+Inspection makes one actual `GET /subscriptions/{id}` and validates the application, subscription ID, mailbox/folder scope, private endpoints and client state, basic mode and actual future expiry. The returned registration belongs to this resource's captured context. It can reconcile a lost renewal acknowledgement even when the older retained expiry has passed. `null` means that actual GET returned `404` under this grant; it does not prove global deletion. Token acquisition, authorization failures and malformed responses remain failures, without fallback or another write. See Microsoft's [subscription GET contract](https://learn.microsoft.com/en-us/graph/api/subscription-get?view=graph-rest-1.0).
+
+If a create acknowledgement was lost before its ID was retained, look up the exact private configuration:
+
+```php
+$lookup = $mailbox->lookupSubscriptions(
+    $configuration,
+    $trustedApplicationClientId,
+    new SyncBudget(maxItems: 100, maxResponseBytes: 65_536),
+    $privateLookupContinuation,
+);
+```
+
+Each call reads at most one provider page and one request, within the supplied budget. Microsoft does not support OData query options for this endpoint. The item limit counts all returned rows; an oversized page returns `provider_item_limit` with unfinished progress, so the host may increase its budget and retry that page. A response that exceeds the actual byte limit fails. Further pages return `complete=false`, `reason=more_pages` and a private continuation. Repeated progress stays unfinished. Context, application or private configuration changes invalidate a continuation. See the [list contract and visibility rules](https://learn.microsoft.com/en-us/graph/api/subscription-list?view=graph-rest-1.0).
+
+Only exact matching registrations appear in `registrations`. A watch for the same application, resource and change types with another private configuration sets `conflict=true`, without returning its identity or secrets. JSON and debug output contain summary metadata only; retain typed registrations and continuations in private host storage. The host persists each slice before advancing, combines conflicts across slices and resolves multiple matches. An unfinished scan never establishes absence or uniqueness. Even a complete empty scan means only that no matching active watch was visible to this selected grant at that observation; it neither settles an in-flight write nor authorizes an automatic create replay.
+
+Microsoft may reject a duplicate resource/change-type registration with `409`; separate host grant IDs do not establish separate provider watches. Host coordination, independent approvals, callback routing, maintenance authority and durable recovery remain host responsibilities. When reusing an existing watch, each independently authorized context must obtain and retain its own real provider inspection evidence. Copying a registration into another context does not establish access or satisfy shared-mailbox live setup.
 
 ### Validate Raw Callbacks
 
