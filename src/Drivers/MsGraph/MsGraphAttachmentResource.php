@@ -11,7 +11,6 @@ use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\AttachmentReadLimits;
 use Pyle\Mailbox\Exceptions\MailboxException;
-use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\AttachmentStorage;
 use Pyle\Mailbox\Support\ResponseBudget;
 
@@ -58,17 +57,8 @@ class MsGraphAttachmentResource implements AttachmentResource, SupportsAttachmen
         if (! in_array($type, ['#microsoft.graph.fileAttachment', '#microsoft.graph.itemAttachment'], true)) {
             throw new MailboxException('This Graph attachment form does not provide supported file bytes.');
         }
-        $file = $type === '#microsoft.graph.fileAttachment';
-        if ($file && ($payload['size'] ?? 0) > $this->limits->maxFileBytes) {
-            throw new ResponseLimitExceededException('The declared attachment exceeds its file byte limit.');
-        }
-        $content = $this->client->streamBounded($this->attachmentEndpoint().'/$value', $responses, $this->limits->maxFileBytes, $this->mailbox);
-        if ($file && array_key_exists('size', $payload) && $content->getSize() !== $payload['size']) {
-            $content->close();
-            throw new MailboxException('Graph attachment size does not match its content.');
-        }
 
-        return $content;
+        return $this->client->streamBounded($this->attachmentEndpoint().'/$value', $responses, $this->limits->maxFileBytes, $this->mailbox);
     }
 
     /** @return array<string, mixed> */

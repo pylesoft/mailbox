@@ -16,6 +16,9 @@ use Illuminate\Contracts\Queue\Job;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Contracts\SupportsDraftAttachmentPreparation;
+use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
+use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
+use Pyle\Mailbox\Drivers\MsGraph\TokenManager;
 use Pyle\Mailbox\DTOs\AttachmentPreparation;
 use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
@@ -81,8 +84,11 @@ it('attaches a chosen small file to the acknowledged immutable draft without sen
 it('does not use an untrusted malformed or already expired Outlook session', function (string $case, PreparationOutcome $outcome): void {
     $history = [];
     $data = ['uploadUrl' => graphAttachmentUploadUrl(), 'expirationDateTime' => (new DateTimeImmutable('+1 hour'))->format(DATE_ATOM), 'nextExpectedRanges' => ['0']];
-    if ($case === 'foreign origin') {
-        $data['uploadUrl'] = str_replace('outlook.office.com', 'attacker.example', $data['uploadUrl']);
+    $untrustedHosts = ['foreign origin' => 'attacker.example',
+        'Office suffix lookalike' => 'outlook.office.com.attacker.example', 'Office foreign subdomain' => 'uploads.outlook.office.com',
+        'Office365 suffix lookalike' => 'outlook.office365.com.attacker.example', 'Office365 foreign subdomain' => 'uploads.outlook.office365.com'];
+    if (isset($untrustedHosts[$case])) {
+        $data['uploadUrl'] = str_replace('outlook.office.com', $untrustedHosts[$case], $data['uploadUrl']);
     } elseif ($case === 'expired') {
         $data['expirationDateTime'] = '2020-01-01T00:00:00Z';
     } elseif ($case === 'missing initial offset') {
@@ -103,13 +109,15 @@ it('does not use an untrusted malformed or already expired Outlook session', fun
         ->and(fn () => $mailbox->prepareAttachments($result, $message))->toThrow(InvalidArgumentException::class)
         ->and(fn () => $mailbox->submitPrepared($result, $message))->toThrow(InvalidArgumentException::class)
         ->and($history)->toHaveCount(2);
-    foreach (['private-upload-secret', 'attacker.example', 'outlook.office.com'] as $secret) {
+    foreach (['private-upload-secret', 'attacker.example', 'outlook.office.com', 'outlook.office365.com'] as $secret) {
         expect(json_encode($result, JSON_THROW_ON_ERROR).print_r($result, true))->not->toContain($secret);
     }
 })->with([
     ['foreign origin', PreparationOutcome::Uncertain], ['expired', PreparationOutcome::Expired],
     ['missing initial offset', PreparationOutcome::Uncertain], ['invalid expiry', PreparationOutcome::Uncertain],
     ['malformed JSON', PreparationOutcome::Uncertain],
+    ['Office suffix lookalike', PreparationOutcome::Uncertain], ['Office foreign subdomain', PreparationOutcome::Uncertain],
+    ['Office365 suffix lookalike', PreparationOutcome::Uncertain], ['Office365 foreign subdomain', PreparationOutcome::Uncertain],
 ]);
 
 it('requires the original captured session and authorization binding when restoring upload progress', function (string $case): void {
@@ -282,15 +290,16 @@ it('rejects a large-file source before creating a session when the caller memory
         ->and($history)->toHaveCount(1);
 });
 
-it('retains the last acknowledged prefix and distinguishes final range failures without replay or secret output', function (mixed $final, PreparationOutcome $outcome, ?int $status): void {
+it('retains the last acknowledged prefix and distinguishes final range failures without replay or secret output', function (mixed $final, PreparationOutcome $outcome, ?int $status, string $uploadHost = 'outlook.office.com'): void {
     $history = [];
+    $uploadUrl = str_replace('outlook.office.com', $uploadHost, graphAttachmentUploadUrl());
     $job = Mockery::mock(Job::class);
     $job->shouldNotReceive('release');
     app()->instance('queue.job', $job);
     $expires = (new DateTimeImmutable('+1 hour'))->format(DATE_ATOM);
     $mailbox = graphAttachmentMailbox([
         new Response(201, [], '{"id":"immutable-draft="}'),
-        new Response(201, [], json_encode(['uploadUrl' => graphAttachmentUploadUrl(), 'expirationDateTime' => $expires, 'nextExpectedRanges' => ['0-']], JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode(['uploadUrl' => $uploadUrl, 'expirationDateTime' => $expires, 'nextExpectedRanges' => ['0-']], JSON_THROW_ON_ERROR)),
         new Response(200, [], json_encode(['expirationDateTime' => $expires, 'nextExpectedRanges' => ['3000000']], JSON_THROW_ON_ERROR)), $final,
     ], $history);
     $bytes = str_repeat('a', 3_000_001);
@@ -310,7 +319,7 @@ it('retains the last acknowledged prefix and distinguishes final range failures 
         ->and(fn () => $mailbox->submitPrepared($result, $message))->toThrow(InvalidArgumentException::class)
         ->and($history)->toHaveCount(4);
     $public = json_encode($result, JSON_THROW_ON_ERROR).print_r($result, true);
-    foreach (['private-upload-secret', 'private-token', 'private-response', 'outlook.office.com'] as $secret) {
+    foreach (['private-upload-secret', 'private-token', 'private-response', 'outlook.office.com', 'outlook.office365.com'] as $secret) {
         expect($public)->not->toContain($secret);
     }
 })->with([
@@ -323,6 +332,8 @@ it('retains the last acknowledged prefix and distinguishes final range failures 
     'redirect' => [new Response(307, ['Location' => 'https://attacker.example/private-upload-secret']), PreparationOutcome::Uncertain, 307],
     'missing Location' => [new Response(201), PreparationOutcome::Uncertain, 201],
     'foreign draft Location' => [new Response(201, ['Location' => "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('another-draft')/Attachments('file=')"]), PreparationOutcome::Uncertain, 201],
+    'Office session rejects Office365 completion' => [new Response(201, ['Location' => "https://outlook.office365.com/api/v2.0/Users('provider-user')/Messages('provider-draft')/Attachments('file=')"]), PreparationOutcome::Uncertain, 201],
+    'Office365 session rejects Office completion' => [new Response(201, ['Location' => "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')/Attachments('file=')"]), PreparationOutcome::Uncertain, 201, 'outlook.office365.com'],
     'unexpected final body' => [new Response(201, ['Location' => "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')/Attachments('file=')"], '{}'), PreparationOutcome::Uncertain, 201],
     'offset without completion identity' => [new Response(200, [], '{"nextExpectedRanges":["3000001"]}'), PreparationOutcome::Uncertain, 200],
     'oversized receipt' => [new Response(201, [], str_repeat('x', 65_537)), PreparationOutcome::Uncertain, 201],
@@ -441,6 +452,8 @@ it('leaves ambiguous or mismatched attachment evidence unresolved without any du
     $draft = graphAttachmentDraft([$file]);
     if ($case === 'duplicate') {
         $draft['attachments'][] = array_replace($file, ['id' => 'duplicate=']);
+    } elseif ($case === 'invalid provider size') {
+        $draft['attachments'][0]['size'] = '5';
     } elseif ($case === 'changed CID') {
         $draft['attachments'][0]['contentId'] = 'another-cid';
     } elseif ($case === 'wrong draft') {
@@ -450,7 +463,7 @@ it('leaves ambiguous or mismatched attachment evidence unresolved without any du
     }
     $mailbox = graphAttachmentMailbox([
         new Response(201, [], '{"id":"immutable-draft="}'), new Response(503),
-        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], 'hallo'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], $case === 'different raw length' ? 'hell' : 'hallo'),
     ], $history);
     $message = graphAttachmentMessage([new PreparedFile('chosen-file', 'chosen.txt', 'text/plain', 5,
         static fn () => Utils::streamFor('hello'), hash('sha256', 'hello'))]);
@@ -462,13 +475,13 @@ it('leaves ambiguous or mismatched attachment evidence unresolved without any du
         ->and($observed->draftId)->toBe('immutable-draft=')
         ->and(fn () => $mailbox->prepareAttachments($observed, $message))->toThrow(InvalidArgumentException::class)
         ->and(fn () => $mailbox->submitPrepared($observed, $message))->toThrow(InvalidArgumentException::class)
-        ->and($history)->toHaveCount($case === 'changed bytes' ? 4 : 3);
-})->with(['changed bytes', 'duplicate', 'changed CID', 'wrong draft', 'incomplete list']);
+        ->and($history)->toHaveCount(in_array($case, ['changed bytes', 'different raw length'], true) ? 4 : 3);
+})->with(['changed bytes', 'different raw length', 'invalid provider size', 'duplicate', 'changed CID', 'wrong draft', 'incomplete list']);
 
-it('inspects the original draft and exact file bytes after a lost attachment acknowledgement without adding another copy', function (): void {
+it('inspects and sends exact original file bytes despite a different provider size hint without another upload', function (): void {
     $history = [];
     $attachment = ['@odata.type' => '#microsoft.graph.fileAttachment', 'id' => 'observed-file=',
-        'name' => 'chosen.txt', 'contentType' => 'text/plain', 'size' => 5, 'isInline' => false, 'contentId' => null];
+        'name' => 'chosen.txt', 'contentType' => 'text/plain', 'size' => 987_654, 'isInline' => false, 'contentId' => null];
     $draft = graphAttachmentDraft([$attachment]);
     $mailbox = graphAttachmentMailbox([
         new Response(201, [], '{"id":"immutable-draft="}'),
@@ -586,14 +599,214 @@ it('retains each acknowledged Outlook upload step before sending another sequent
     foreach ([$session, $prefix, $complete] as $state) {
         $public = json_encode($state, JSON_THROW_ON_ERROR).print_r($state, true);
         expect($public)->not->toContain('private-upload-secret');
-        expect($public)->not->toContain('outlook.office.com');
+        expect($public)->not->toContain('outlook.office.com')->not->toContain('outlook.office365.com');
         expect($public)->not->toContain('private-token');
     }
 })->with([
     'legacy v2.0' => "https://outlook.office.com/api/v2.0/Users('provider-user')/Messages('provider-draft')",
     'documented v1.0' => "https://outlook.office.com/api/v1.0/Users('provider-user')/Messages('provider-draft')",
     'documented gv1.0' => "https://outlook.office.com/api/gv1.0/users('provider-user')/messages('provider-draft')",
+    'issued Office365 gv1.0' => "https://outlook.office365.com/api/gv1.0/users('provider-user')/messages('provider-draft')",
 ]);
+
+it('retains a small file acknowledgement containing the posted content bytes', function (): void {
+    $history = [];
+    $bytes = str_repeat('a', 49_152);
+    $receiptBytes = 0;
+    $mailbox = graphAttachmentMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        static function (RequestInterface $request) use ($bytes, &$receiptBytes): Response {
+            $payload = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            expect(base64_decode($payload['contentBytes'], true))->toBe($bytes);
+            $receipt = json_encode(['id' => 'echoed-file=', ...$payload], JSON_THROW_ON_ERROR);
+            $receiptBytes = strlen($receipt);
+
+            return new Response(201, ['request-id' => 'echoed-attachment'], $receipt);
+        },
+    ], $history);
+    $message = graphAttachmentMessage([new PreparedFile('chosen-file', 'chosen.txt', 'text/plain', strlen($bytes),
+        static fn () => Utils::streamFor($bytes), hash('sha256', $bytes))]);
+    $draft = $mailbox->prepareSubmission($message);
+
+    $result = $mailbox->prepareAttachments($draft, $message);
+
+    expect($receiptBytes)->toBeGreaterThan(65_536);
+    expect($result->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($result->attachments[0]->attachmentId)->toBe('echoed-file=')
+        ->and($result->attachments[0]->acknowledgedBytes)->toBe(49_152)
+        ->and($result->headers)->toBe(['request-id' => ['echoed-attachment']]);
+    expect($history)->toHaveCount(2);
+});
+
+it('honors an explicit small file wire budget including escaped UTF-8 metadata above four million bytes', function (): void {
+    $history = [];
+    $bytes = str_repeat('a', 2_999_999);
+    $name = str_repeat('😀', 196).'.txt';
+    $requestBytes = 0;
+    $mailbox = graphAttachmentMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        static function (RequestInterface $request) use ($name, $bytes, &$requestBytes): Response {
+            $body = (string) $request->getBody();
+            $requestBytes = strlen($body);
+            expect($body)->toContain('\\ud83d\\ude00');
+            $payload = json_decode($body, true, flags: JSON_THROW_ON_ERROR);
+            expect($payload['name'])->toBe($name);
+            expect(hash('sha256', base64_decode($payload['contentBytes'], true)))->toBe(hash('sha256', $bytes));
+
+            return new Response(201, [], json_encode(['id' => 'boundary-file=', ...$payload], JSON_THROW_ON_ERROR));
+        },
+    ], $history);
+    $message = graphAttachmentMessage([new PreparedFile('chosen-file', $name, 'text/plain', strlen($bytes),
+        static fn () => Utils::streamFor($bytes), hash('sha256', $bytes))]);
+    $draft = $mailbox->prepareSubmission($message);
+
+    $result = $mailbox->prepareAttachments($draft, $message,
+        new SubmissionLimits(maxMemoryBytes: 16_777_216), maxRequestBytes: 4_194_304);
+
+    expect(mb_strlen($name))->toBe(200);
+    expect($requestBytes)->toBeGreaterThan(4_000_000)->toBeLessThanOrEqual(4_194_304);
+    expect($result->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($result->attachments[0]->acknowledgedBytes)->toBe(2_999_999)
+        ->and($result->attachments[0]->attachmentId)->toBe('boundary-file=');
+    expect($history)->toHaveCount(2);
+});
+
+it('retains the default and tighter small file request budgets when escaped metadata crosses the bound', function (?int $requestLimit): void {
+    $history = [];
+    $bytes = str_repeat('a', 2_999_000);
+    $name = str_repeat('😀', 196).'.txt';
+    $mailbox = graphAttachmentMailbox([new Response(201, [], '{"id":"immutable-draft="}')], $history);
+    $message = graphAttachmentMessage([new PreparedFile('chosen-file', $name, 'text/plain', strlen($bytes),
+        static fn () => Utils::streamFor($bytes), hash('sha256', $bytes))]);
+    $draft = $mailbox->prepareSubmission($message);
+
+    $attach = $requestLimit === null
+        ? fn () => $mailbox->prepareAttachments($draft, $message)
+        : fn () => $mailbox->prepareAttachments($draft, $message, maxRequestBytes: $requestLimit);
+
+    expect($attach)->toThrow(ResponseLimitExceededException::class);
+    expect($history)->toHaveCount(1);
+})->with(['unchanged default' => null, 'explicit default' => 4_000_000, 'tighter caller budget' => 3_999_999]);
+
+it('keeps an attachment error response within the original sixty four KiB receipt budget', function (): void {
+    $history = [];
+    $bytes = str_repeat('a', 49_152);
+    $read = 0;
+    $closed = false;
+    $input = Utils::streamFor(str_repeat('x', 70_000));
+    $stream = FnStream::decorate($input, [
+        'read' => static function (int $length) use ($input, &$read): string {
+            $part = $input->read($length);
+            $read += strlen($part);
+
+            return $part;
+        },
+        'close' => static function () use ($input, &$closed): void {
+            $closed = true;
+            $input->close();
+        },
+    ]);
+    $mailbox = graphAttachmentMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        new Response(429, ['request-id' => 'bounded-rejection', 'Retry-After' => '9'], $stream),
+    ], $history);
+    $message = graphAttachmentMessage([new PreparedFile('chosen-file', 'chosen.txt', 'text/plain', strlen($bytes),
+        static fn () => Utils::streamFor($bytes), hash('sha256', $bytes))]);
+    $draft = $mailbox->prepareSubmission($message);
+
+    $result = $mailbox->prepareAttachments($draft, $message);
+
+    expect($result->outcome)->toBe(PreparationOutcome::Rejected)
+        ->and($result->status)->toBe(429)
+        ->and($result->headers)->toBe(['retry-after' => ['9'], 'request-id' => ['bounded-rejection']])
+        ->and($result->attachments[0]->attachmentId)->toBeNull();
+    expect($read)->toBe(65_537);
+    expect($closed)->toBeTrue();
+    expect($history)->toHaveCount(2);
+});
+
+it('keeps an oversized successful attachment receipt uncertain within its finite response budget', function (): void {
+    $history = [];
+    $bytes = str_repeat('a', 49_152);
+    $read = 0;
+    $closed = false;
+    $input = Utils::streamFor(str_repeat('x', 180_000));
+    $stream = FnStream::decorate($input, [
+        'read' => static function (int $length) use ($input, &$read): string {
+            $part = $input->read($length);
+            $read += strlen($part);
+
+            return $part;
+        },
+        'close' => static function () use ($input, &$closed): void {
+            $closed = true;
+            $input->close();
+        },
+    ]);
+    $mailbox = graphAttachmentMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        new Response(201, ['request-id' => 'bounded-success'], $stream),
+    ], $history);
+    $message = graphAttachmentMessage([new PreparedFile('chosen-file', 'chosen.txt', 'text/plain', strlen($bytes),
+        static fn () => Utils::streamFor($bytes), hash('sha256', $bytes))]);
+    $draft = $mailbox->prepareSubmission($message);
+
+    $result = $mailbox->prepareAttachments($draft, $message);
+
+    expect($result->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($result->status)->toBe(201)
+        ->and($result->headers)->toBe(['request-id' => ['bounded-success']])
+        ->and($result->attachments[0]->attachmentId)->toBeNull();
+    expect($read)->toBeGreaterThan(65_536)->toBeLessThan(180_000);
+    expect($closed)->toBeTrue();
+    expect($history)->toHaveCount(2);
+});
+
+it('inspects original attachment bytes after a truncated echoed acknowledgement without posting the file again', function (): void {
+    $history = [];
+    $bytes = str_repeat('a', 49_152);
+    $file = ['@odata.type' => '#microsoft.graph.fileAttachment', 'id' => 'observed-file=',
+        'name' => 'chosen.txt', 'contentType' => 'text/plain', 'size' => strlen($bytes), 'isInline' => false, 'contentId' => null];
+    $mailbox = graphAttachmentMailbox([
+        new Response(201, [], '{"id":"immutable-draft="}'),
+        static function (RequestInterface $request): Response {
+            $payload = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            $body = json_encode(['id' => 'observed-file=', ...$payload], JSON_THROW_ON_ERROR);
+
+            return new Response(201, ['Content-Length' => (string) (strlen($body) + 1), 'request-id' => 'truncated-echo'], $body);
+        },
+        new Response(200, [], json_encode(graphAttachmentDraft([$file]), JSON_THROW_ON_ERROR)),
+        new Response(200, [], $bytes),
+    ], $history);
+    $message = graphAttachmentMessage([new PreparedFile('chosen-file', 'chosen.txt', 'text/plain', strlen($bytes),
+        static fn () => Utils::streamFor($bytes), hash('sha256', $bytes))]);
+    $draft = $mailbox->prepareSubmission($message);
+    $uncertain = $mailbox->prepareAttachments($draft, $message);
+    expect($uncertain->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($uncertain->attachments[0]->attachmentId)->toBeNull();
+    expect(fn () => $mailbox->prepareAttachments($uncertain, $message))->toThrow(InvalidArgumentException::class);
+
+    $observed = $mailbox->inspectAttachments(unserialize(serialize($uncertain)), $message);
+
+    expect($observed->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($observed->draftId)->toBe('immutable-draft=')
+        ->and($observed->attachments[0]->attachmentId)->toBe('observed-file=')
+        ->and($observed->attachments[0]->acknowledgedBytes)->toBe(49_152);
+    expect(array_map(static fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['POST', 'POST', 'GET', 'GET']);
+    expect($history[3]['request']->getUri()->getPath())->toEndWith('/attachments/observed-file%3D/$value');
+});
+
+it('rejects nonpositive optional successful response budgets before provider IO', function (int $limit): void {
+    $history = [];
+    $stack = HandlerStack::create(new MockHandler([]));
+    $stack->push(Middleware::history($history));
+    $client = new GraphClient([], new TokenManager([]),
+        new RateLimiter([]), new Client(['handler' => $stack]));
+
+    expect(fn () => $client->requestOnceBudgeted('POST', 'users/sender%40example.com/messages', maxSuccessResponseBytes: $limit))
+        ->toThrow(InvalidArgumentException::class);
+    expect($history)->toBe([]);
+})->with(['zero' => 0, 'negative' => -1]);
 
 /** @param list<PreparedFile> $files */
 function graphAttachmentMessage(array $files): PreparedMessage

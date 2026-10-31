@@ -31,7 +31,7 @@ final readonly class GraphUploadSession
     public function uploadUrl(): string
     {
         $url = parse_url($this->uploadUrl);
-        if (! is_array($url) || ($url['scheme'] ?? '') !== 'https' || ($url['host'] ?? '') !== 'outlook.office.com'
+        if (! is_array($url) || ($url['scheme'] ?? '') !== 'https' || ! in_array($url['host'] ?? '', ['outlook.office.com', 'outlook.office365.com'], true)
             || isset($url['user']) || isset($url['pass']) || isset($url['fragment']) || isset($url['port'])
             || ! is_string($url['query'] ?? null) || $url['query'] === ''
             || preg_match('/[\x00-\x20\x7f\\\\]/', $this->uploadUrl) === 1
@@ -53,7 +53,7 @@ final readonly class GraphUploadSession
             return null;
         }
         $parent = substr($path, 0, $separator);
-        if (! is_array($url) || ($url['scheme'] ?? '') !== 'https' || ($url['host'] ?? '') !== 'outlook.office.com'
+        if (! is_array($url) || ($url['scheme'] ?? '') !== 'https' || ($url['host'] ?? '') !== parse_url($this->uploadUrl(), PHP_URL_HOST)
             || isset($url['user']) || isset($url['pass']) || isset($url['fragment']) || isset($url['port']) || isset($url['query'])
             || ! str_starts_with($url['path'] ?? '', $parent.'/Attachments(')
             || preg_match('~\\A'.preg_quote($parent, '~')."/Attachments\\('([^']+)'\\)\\z~", $url['path'], $match) !== 1) {

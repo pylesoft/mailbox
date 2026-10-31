@@ -94,7 +94,7 @@ final readonly class MsGraphDraftSubmission
         try {
             $response = $this->client->requestOnceBudgeted('POST', $this->endpoint().'/'.rawurlencode($draftId).'/attachments', [
                 'body' => $body, 'headers' => ['Content-Type' => 'application/json', 'Prefer' => 'IdType="ImmutableId"'],
-            ], $this->context->mailbox, budget: $budget);
+            ], $this->context->mailbox, budget: $budget, maxSuccessResponseBytes: $body->getSize() + 65_536);
         } finally {
             $body->close();
         }
@@ -292,7 +292,6 @@ final readonly class MsGraphDraftSubmission
 
     private function smallFilePayload(PreparedFile $file, int $maxRequestBytes, ResponseBudget $budget): StreamInterface
     {
-        $maxRequestBytes = min($maxRequestBytes, 3_999_999);
         $budget->assertMemoryAvailable(65_536);
         $source = $file->openVerified();
         $body = null;
@@ -716,7 +715,7 @@ final readonly class MsGraphDraftSubmission
     private function attachmentMetadataMatches(\stdClass $attachment, PreparedFile $file): bool
     {
         return ($attachment->{'@odata.type'} ?? null) === '#microsoft.graph.fileAttachment'
-            && ($attachment->name ?? null) === $file->name && ($attachment->size ?? null) === $file->byteLength
+            && ($attachment->name ?? null) === $file->name && is_int($attachment->size ?? null) && $attachment->size >= 0
             && is_string($attachment->contentType ?? null) && strtolower($attachment->contentType) === strtolower($file->mediaType)
             && ($attachment->isInline ?? null) === $file->inline && ($attachment->contentId ?? null) === $file->contentId;
     }

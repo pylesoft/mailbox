@@ -425,27 +425,31 @@ it('rejects hostile attachment redirects and closes their response without expos
     expect($failure->getMessage())->not->toContain('redirect-private');
 })->with(['gmail', 'ms-graph']);
 
-it('rejects Graph file metadata that does not match the observed bytes', function (): void {
+it('preserves a Graph file size hint while storing bounded measured raw bytes', function (): void {
     Storage::fake('attachment-read-tests');
     config()->set('mailbox.attachment_disk', 'attachment-read-tests');
     $history = [];
+    $metadata = ['@odata.type' => '#microsoft.graph.fileAttachment', 'id' => 'attachment', 'name' => 'file.bin', 'size' => 99];
     $attachment = attachmentReadResource('ms-graph', [
-        ['@odata.type' => '#microsoft.graph.fileAttachment', 'id' => 'attachment', 'name' => 'file.bin', 'size' => 4],
-        new Response(200, [], 'OK'),
-    ], $history);
+        $metadata, $metadata, new Response(200, ['Content-Length' => '2'], 'OK'),
+    ], $history)->withReadLimits(new AttachmentReadLimits(maxFileBytes: 2));
 
-    expect(fn () => $attachment->download())->toThrow(MailboxException::class);
-    expect(Storage::disk('attachment-read-tests')->allFiles())->toBeEmpty();
+    expect($attachment->metadata()->size)->toBe(99);
+    $file = $attachment->download();
+
+    expect($file->size)->toBe(2);
+    expect(Storage::disk($file->disk)->get($file->path))->toBe('OK');
+    expect($history)->toHaveCount(3);
 });
 
-it('rejects incomplete Graph file streams against their declared file size', function (string $bytes): void {
+it('rejects incomplete Graph file streams against the HTTP content length', function (string $bytes): void {
     $response = static fn (RequestInterface $request): Response => str_ends_with($request->getUri()->getPath(), '/$value')
-        ? new Response(200, [], $bytes)
-        : new Response(200, [], '{"@odata.type":"#microsoft.graph.fileAttachment","id":"attachment","name":"file.bin","size":4}');
+        ? new Response(200, ['Content-Length' => '4'], $bytes)
+        : new Response(200, [], '{"@odata.type":"#microsoft.graph.fileAttachment","id":"attachment","name":"file.bin","size":99}');
     $history = [];
     $attachment = attachmentReadResource('ms-graph', [$response, $response], $history);
 
-    expect(fn () => $attachment->stream())->toThrow(MailboxException::class, 'Graph attachment size does not match its content.');
+    expect(fn () => $attachment->stream())->toThrow(MailboxException::class, 'The provider response length does not match its declaration.');
 })->with(['short chunked content' => 'OK', 'empty incomplete content' => '']);
 
 it('shares the Graph stream response budget across metadata and file bytes', function (): void {

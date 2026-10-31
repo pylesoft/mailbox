@@ -287,22 +287,22 @@ trait PerformsApiRequests
     }
 
     /** @param array<string, mixed> $options */
-    public function requestOnceBudgeted(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, int $maxResponseBytes = 65_536, ?ResponseBudget $budget = null): ProviderWriteResponse
+    public function requestOnceBudgeted(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, int $maxResponseBytes = 65_536, ?ResponseBudget $budget = null, ?int $maxSuccessResponseBytes = null): ProviderWriteResponse
     {
-        if ($maxResponseBytes < 1) {
+        if ($maxResponseBytes < 1 || ($maxSuccessResponseBytes !== null && $maxSuccessResponseBytes < 1)) {
             throw new \InvalidArgumentException('The one-attempt response byte budget must be positive.');
         }
         $target = $this->resolveTarget($endpoint, $mailbox);
         $mailboxKey = $this->mailboxKey($mailbox);
 
-        return $this->exchangeOnce($method, $target, $options, $mailboxKey, $maxResponseBytes, budget: $budget);
+        return $this->exchangeOnce($method, $target, $options, $mailboxKey, $maxResponseBytes, budget: $budget, maxSuccessResponseBytes: $maxSuccessResponseBytes);
     }
 
     /**
      * @param  array<string, mixed>  $options
      * @param  (\Closure(): void)|null  $beforeRequest
      */
-    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null, ?ResponseBudget $budget = null): ProviderWriteResponse
+    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null, ?ResponseBudget $budget = null, ?int $maxSuccessResponseBytes = null): ProviderWriteResponse
     {
         $budget?->assertMemoryAvailable(65_536);
         $attempted = false;
@@ -371,6 +371,9 @@ trait PerformsApiRequests
             if ($values !== [] && $values === $safe) {
                 $headers[$name] = array_values($values);
             }
+        }
+        if ($maxSuccessResponseBytes !== null && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
+            $maxResponseBytes = $maxSuccessResponseBytes;
         }
         $stream = $response->getBody();
         $body = '';
