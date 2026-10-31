@@ -97,6 +97,27 @@ it('keeps one attempt acknowledgement evidence when an attachment receipt exceed
         ->and($history)->toHaveCount(2);
 });
 
+it('accepts a scalar rich attachment acknowledgement within its memory budget', function (array $values): void {
+    $history = [];
+    $body = json_encode(['id' => 'file', 'values' => $values], JSON_THROW_ON_ERROR);
+    $mailbox = budgetIntegrityMailbox([new Response(201, [], '{"id":"draft"}'), new Response(201, [], $body)], $history);
+    $message = budgetIntegrityMessage(['files' => [budgetIntegrityFile()]]);
+    $preparation = $mailbox->prepareSubmission($message);
+    memory_reset_peak_usage();
+    $baseline = memory_get_usage();
+
+    $result = $mailbox->prepareAttachments($preparation, $message, new SubmissionLimits(maxMemoryBytes: 1_048_576));
+
+    expect($result->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($result->attachments[0]->attachmentId)->toBe('file')
+        ->and($result->attachments[0]->acknowledgedBytes)->toBe(1);
+    expect($history)->toHaveCount(2);
+    expect(memory_get_peak_usage() - $baseline)->toBeLessThan(1_048_576);
+})->with([
+    'numbers' => fn () => array_fill(0, 1500, 1234567890),
+    'booleans' => fn () => array_fill(0, 1500, false),
+]);
+
 it('rejects invalid UTF-8 prepared content before JSON sizing or provider IO', function (): void {
     $history = [];
     $mailbox = budgetIntegrityMailbox([], $history);

@@ -76,14 +76,14 @@ final class ResponseBudget
             }
             if ($character === '"') {
                 $inString = true;
-            } elseif (str_contains(" \t\r\n]}", $character)) {
+            } elseif (! str_contains('[{,:', $character)) {
                 continue;
             }
-            if ($reservation > PHP_INT_MAX - 2048) {
+            if ($reservation > PHP_INT_MAX - 256) {
                 throw new ResponseLimitExceededException('The provider JSON allocation estimate exceeded its limit.');
             }
             // shortcut: native allocation estimates are verified on 64-bit PHP 8.4; remeasure for other runtime guarantees.
-            $reservation += 2048;
+            $reservation += 256;
             $this->assertMemoryAvailable($reservation);
         }
     }
