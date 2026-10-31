@@ -135,23 +135,10 @@ class BatchRequest
     /** @return array<string, mixed> */
     private function retryGet(string $id, string $url): array
     {
-        $parts = parse_url($url);
-        $path = (string) ($parts['path'] ?? $url);
-        $query = [];
-
-        if (isset($parts['query']) && $parts['query'] !== '') {
-            $parsed = [];
-            parse_str($parts['query'], $parsed);
-
-            foreach ($parsed as $key => $value) {
-                $query[(string) $key] = $value;
-            }
-        }
-
         return [
             'id' => $id,
             'status' => 200,
-            'body' => $this->client->get($path, $query, $this->mailbox),
+            'body' => $this->client->get($url, [], $this->mailbox),
         ];
     }
 

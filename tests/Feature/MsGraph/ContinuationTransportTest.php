@@ -42,6 +42,28 @@ function continuationGraphClient(array $responses, array &$history): GraphClient
     ]));
 }
 
+it('preserves the original mailbox scoped batch GET URL', function (bool $absolute): void {
+    $history = [];
+    $graph = continuationGraphClient([new Response(200, [], '{"value":[]}')], $history);
+    $url = ($absolute ? 'https://graph.microsoft.com/v1.0/' : '').'users/team%40example.com/messages?$skiptoken=a%2fb&opaque=one&opaque=two';
+
+    $result = (new BatchRequest($graph, 'team@example.com'))->send([['id' => 'one', 'method' => 'GET', 'url' => $url]]);
+
+    expect($result['responses'][0]['status'])->toBe(200)
+        ->and($history)->toHaveCount(1)
+        ->and((string) $history[0]['request']->getUri())->toBe($absolute ? $url : 'https://graph.microsoft.com/v1.0/'.$url);
+})->with([false, true]);
+
+it('rejects an untrusted mailbox scoped batch GET origin before dispatch', function (): void {
+    $history = [];
+    $graph = continuationGraphClient([new Response(200, [], '{"value":[]}')], $history);
+
+    expect(fn () => (new BatchRequest($graph, 'team@example.com'))->send([
+        ['id' => 'one', 'method' => 'GET', 'url' => 'https://untrusted.example/users/team%40example.com/messages'],
+    ]))->toThrow(ApiRequestException::class)
+        ->and($history)->toBe([]);
+});
+
 it('preserves opaque next and delta queries through real graph requests', function (): void {
     $path = 'https://graph.microsoft.com/v1.0/users/team%40example.com/mailFolders/inbox/messages/delta';
     $next = $path.'?$skiptoken=a%2bb%2Fc%3D&repeat=one&repeat=two&literal=a+b';
