@@ -10,6 +10,14 @@ use Pyle\Mailbox\Support\ResponseBudget;
 
 abstract class FakeGraphClient extends GraphClient
 {
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
+    {
+        return $this->get($endpoint, $query, $mailbox);
+    }
+
     /** @param array<string, mixed> $query */
     public function getBoundedObject(string $endpoint, ResponseBudget $budget, array $query = [], ?string $mailbox = null, bool $retry = false): \stdClass
     {

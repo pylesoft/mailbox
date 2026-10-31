@@ -10,9 +10,10 @@ use Pyle\Mailbox\Drivers\MsGraph\MsGraphFolderResource;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMailboxResource;
 use Pyle\Mailbox\DTOs\DeltaResultDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Tests\Support\FakeGraphClient;
 
 it('resolves graph folder ids and builds folder resources directly', function (): void {
-    $client = new class extends GraphClient
+    $client = new class extends FakeGraphClient
     {
         public function __construct() {}
 

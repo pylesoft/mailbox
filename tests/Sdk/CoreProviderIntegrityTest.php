@@ -99,6 +99,19 @@ it('rejects malformed native Graph delta collections before completing a checkpo
         ->and($history)->toHaveCount(1);
 })->with(['{}', '{"0":{"id":"one"}}', 'null', '"invalid"']);
 
+it('rejects native folder object envelopes before listing or creating folders', function (string $collection, string $operation): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([
+        new Response(200, [], '{"value":'.$collection.'}'),
+        new Response(200, [], '{"id":"existing","displayName":"Existing"}'),
+        new Response(200, [], '{"id":"existing","displayName":"Existing"}'),
+    ], $history);
+
+    expect(fn () => $operation === 'list' ? $mailbox->folders()->get() : $mailbox->folders()->createPath('Existing'))
+        ->toThrow(MailboxException::class)
+        ->and($history)->toHaveCount(1);
+})->with(['{}', '{"0":{"id":"existing","displayName":"Existing"}}'])->with(['list', 'create']);
+
 it('preserves eager message and folder continuation queries with supplied client defaults', function (string $resource): void {
     $history = [];
     $path = 'https://graph.microsoft.com/v1.0/users/same%40example.com/'.($resource === 'messages' ? 'mailFolders/inbox/messages' : 'mailFolders');
