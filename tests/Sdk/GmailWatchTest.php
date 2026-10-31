@@ -14,6 +14,7 @@ use GuzzleHttp\Psr7\Utils;
 use Psr\Http\Message\RequestInterface;
 use Pyle\Mailbox\Contracts\GmailPushVerifier;
 use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailWatch;
+use Pyle\Mailbox\Drivers\Gmail\GmailDriver;
 use Pyle\Mailbox\DTOs\GmailWatchConfiguration;
 use Pyle\Mailbox\DTOs\GmailWatchRegistration;
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -27,13 +28,13 @@ use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
-it('registers an explicitly selected Gmail watch with host managed renewal evidence', function (): void {
+it('registers an explicitly selected Gmail watch with host managed renewal evidence', function (string $driver): void {
     $history = [];
     $stack = HandlerStack::create(new MockHandler([
         new Response(200, [], '{"historyId":"90071992547409931234","expiration":"1893456000123"}'),
     ]));
     $stack->push(Middleware::history($history));
-    $context = new GrantContext('connection', 'grant', '1', 'gmail', 'same@example.com');
+    $context = new GrantContext('connection', 'grant', '1', $driver, 'same@example.com');
     $tokens = new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => 'selected-token'],
     ]);
@@ -63,6 +64,30 @@ it('registers an explicitly selected Gmail watch with host managed renewal evide
         ->and(json_decode((string) $history[0]['request']->getBody(), true))->toBe([
             'topicName' => 'projects/project/topics/mail', 'labelIds' => ['INBOX'], 'labelFilterBehavior' => 'include',
         ]);
+})->with(['gmail', 'google-workspace']);
+
+it('rejects a Gmail registration with a non Gmail authorization context', function (): void {
+    $registration = watchRegistration();
+    $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'same@example.com');
+
+    expect(fn () => new GmailWatchRegistration($context, $registration->configuration, '100', $registration->expiresAt))
+        ->toThrow(InvalidArgumentException::class);
+});
+
+it('rejects a mismatched Gmail resource before reading a token or issuing a watch request', function (): void {
+    $history = [];
+    $stack = HandlerStack::create(new MockHandler([new Response(200, [], '{"historyId":"100","expiration":"1893456000123"}')]));
+    $stack->push(Middleware::history($history));
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => 'graph-token'],
+    ]);
+    $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'same@example.com');
+
+    expect(fn () => (new GmailDriver([]))->forGrant($context, $tokens, new Client(['handler' => $stack]))
+        ->watch(watchRegistration()->configuration))->toThrow(InvalidArgumentException::class);
+
+    expect($tokens->tokenReads)->toBe(0);
+    expect($history)->toBe([]);
 });
 
 it('verifies the raw PubSub request and returns only a grant bound reconciliation hint', function (): void {

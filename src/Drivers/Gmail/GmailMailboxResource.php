@@ -46,7 +46,11 @@ class GmailMailboxResource implements MailboxResource, SupportsConversationRead,
         private readonly ?GrantContext $grantContext = null,
         private readonly ?GrantAccessGuard $grantGuard = null,
         private readonly ?SubmissionLimits $submissionLimits = null,
-    ) {}
+    ) {
+        if ($grantContext !== null && ! in_array($grantContext->driver, ['gmail', 'google-workspace'], true)) {
+            throw new \InvalidArgumentException('A Gmail mailbox resource requires a Gmail authorization context.');
+        }
+    }
 
     /** @param list<string> $labelIds */
     public function watch(GmailWatchConfiguration $configuration, array $labelIds = []): GmailWatchRegistration

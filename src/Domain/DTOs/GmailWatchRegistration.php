@@ -18,8 +18,9 @@ final readonly class GmailWatchRegistration
         public string $status = 'active',
     ) {
         $this->provider = 'gmail';
-        if (! in_array($status, ['active', 'stopped', 'removed'], true) || preg_match('/\A[0-9]+\z/', $historyId) !== 1) {
-            throw new \InvalidArgumentException('A Gmail watch registration requires valid history evidence and lifecycle status.');
+        if (! in_array($context->driver, ['gmail', 'google-workspace'], true)
+            || ! in_array($status, ['active', 'stopped', 'removed'], true) || preg_match('/\A[0-9]+\z/', $historyId) !== 1) {
+            throw new \InvalidArgumentException('A Gmail watch registration requires a selected Gmail context, valid history evidence and lifecycle status.');
         }
     }
 
