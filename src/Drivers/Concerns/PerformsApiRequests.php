@@ -23,6 +23,7 @@ use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Support\GrantAuthorization;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
 use Pyle\Mailbox\Support\ResponseBudget;
 
@@ -764,7 +765,7 @@ trait PerformsApiRequests
         $segments = explode('/', substr((new Uri($target))->getPath(), strlen($basePath)));
 
         if ($mailbox !== null && ($segments[0] !== 'users' || ! isset($segments[1])
-            || (strcasecmp(rawurldecode($segments[1]), trim($mailbox)) !== 0 && ! ($allowMe && $segments[1] === 'me')))) {
+            || (! GrantAuthorization::mailboxMatches(rawurldecode($segments[1]), $mailbox) && ! ($allowMe && $segments[1] === 'me')))) {
             throw new ApiRequestException('The authenticated request destination does not match the selected mailbox.');
         }
     }

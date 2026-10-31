@@ -26,7 +26,7 @@ final readonly class GrantAuthorization
 
     public function accessToken(string $mailbox): string
     {
-        if (strtolower(trim($mailbox)) !== strtolower(trim($this->context->mailbox))) {
+        if (! self::mailboxMatches($mailbox, $this->context->mailbox)) {
             throw new GrantAccessDeniedException('The requested mailbox does not match the selected grant context.');
         }
 
@@ -39,5 +39,15 @@ final readonly class GrantAuthorization
         }
 
         return $token;
+    }
+
+    public static function mailboxMatches(string $target, string $selected): bool
+    {
+        $target = trim($target);
+        $selected = trim($selected);
+
+        return $target === $selected || ((filter_var($selected, FILTER_VALIDATE_EMAIL) !== false
+            || preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i', $selected) === 1)
+            && strcasecmp($target, $selected) === 0);
     }
 }

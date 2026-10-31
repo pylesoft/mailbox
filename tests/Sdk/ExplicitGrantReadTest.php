@@ -253,6 +253,39 @@ it('keeps the optional client authorization seam bound to its selected target', 
         ->and($tokens->tokenReads)->toBe(0);
 })->with(['gmail', 'ms-graph'])->with(['path', 'origin', 'argument']);
 
+it('rejects a differently cased opaque mailbox at both authorization boundaries', function (string $boundary): void {
+    $history = [];
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['OpaqueMailboxAA'], 'token' => 'selected-token'],
+    ]);
+    $authorization = new GrantAuthorization(new GrantContext('connection', 'grant', '1', 'ms-graph', 'OpaqueMailboxAA'), $tokens);
+    $client = new GraphClient([], new TokenManager([]), new RateLimiter([]), grantReadHttp('ms-graph', [new Response(200, [], '{}')], $history), $authorization);
+
+    expect(fn () => $boundary === 'token'
+        ? $authorization->accessToken('opaquemailboxaa')
+        : $client->get('users/opaquemailboxaa/messages/one', mailbox: 'OpaqueMailboxAA'))
+        ->toThrow($boundary === 'token' ? GrantAccessDeniedException::class : ApiRequestException::class)
+        ->and($tokens->tokenReads)->toBe(0)
+        ->and($history)->toBe([]);
+})->with(['token', 'path']);
+
+it('preserves typed mailbox aliases and exact opaque identities', function (string $mailbox, string $target): void {
+    $history = [];
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => [$mailbox], 'token' => 'selected-token'],
+    ]);
+    $authorization = new GrantAuthorization(new GrantContext('connection', 'grant', '1', 'ms-graph', $mailbox), $tokens);
+    $client = new GraphClient([], new TokenManager([]), new RateLimiter([]), grantReadHttp('ms-graph', [new Response(200, [], '{"id":"one"}')], $history), $authorization);
+
+    expect($client->get('users/'.rawurlencode($target).'/messages/one', mailbox: $target))->toBe(['id' => 'one'])
+        ->and($history)->toHaveCount(1)
+        ->and($tokens->tokenReads)->toBe(1);
+})->with([
+    'email alias' => ['Same@example.com', 'same@EXAMPLE.com'],
+    'GUID alias' => ['AABBCCDD-1234-5678-90AB-AABBCCDDEEFF', 'aabbccdd-1234-5678-90ab-aabbccddeeff'],
+    'exact opaque identity' => ['OpaqueMailboxAA', 'OpaqueMailboxAA'],
+]);
+
 /** @param list<Response|callable> $responses */
 function grantReadHttp(string $driver, array $responses, array &$history): Client
 {
