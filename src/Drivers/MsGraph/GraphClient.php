@@ -21,6 +21,7 @@ use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
@@ -67,6 +68,11 @@ class GraphClient
             $options['query'] = null;
         }
         $payload = $this->decodeApiResponse($this->requestRaw('GET', $endpoint, $options, $mailbox), $endpoint, $mailbox, false);
+
+        if ($payload instanceof \stdClass && property_exists($payload, 'value')
+            && (! is_array($payload->value) || ! array_is_list($payload->value))) {
+            throw new MailboxException('The provider returned an invalid collection.');
+        }
 
         return $payload instanceof \stdClass ? ConversationPayload::array($payload) : $payload;
     }

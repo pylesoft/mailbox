@@ -91,6 +91,14 @@ it('validates native recipient kinds in configured Graph message reads without c
         ->and($history)->toHaveCount(2);
 })->with(['message', 'query']);
 
+it('rejects malformed native Graph delta collections before completing a checkpoint', function (string $collection): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([new Response(200, [], '{"value":'.$collection.',"@odata.deltaLink":"https://graph.microsoft.com/v1.0/users/same%40example.com/mailFolders/inbox/messages/delta?$deltatoken=done"}')], $history);
+
+    expect(fn () => $mailbox->folder('inbox')->delta())->toThrow(MailboxException::class)
+        ->and($history)->toHaveCount(1);
+})->with(['{}', '{"0":{"id":"one"}}', 'null', '"invalid"']);
+
 it('preserves eager message and folder continuation queries with supplied client defaults', function (string $resource): void {
     $history = [];
     $path = 'https://graph.microsoft.com/v1.0/users/same%40example.com/'.($resource === 'messages' ? 'mailFolders/inbox/messages' : 'mailFolders');
