@@ -43,11 +43,14 @@ final readonly class GrantAuthorization
 
     public static function mailboxMatches(string $target, string $selected): bool
     {
+        if ($target === $selected) {
+            return true;
+        }
+        $isAlias = filter_var($selected, FILTER_VALIDATE_EMAIL) !== false
+            || preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i', $selected) === 1;
         $target = trim($target);
         $selected = trim($selected);
 
-        return $target === $selected || ((filter_var($selected, FILTER_VALIDATE_EMAIL) !== false
-            || preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i', $selected) === 1)
-            && strcasecmp($target, $selected) === 0);
+        return $isAlias && strcasecmp($target, $selected) === 0;
     }
 }

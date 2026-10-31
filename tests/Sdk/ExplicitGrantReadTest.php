@@ -253,7 +253,7 @@ it('keeps the optional client authorization seam bound to its selected target', 
         ->and($tokens->tokenReads)->toBe(0);
 })->with(['gmail', 'ms-graph'])->with(['path', 'origin', 'argument']);
 
-it('rejects a differently cased opaque mailbox at both authorization boundaries', function (string $boundary): void {
+it('rejects a changed opaque mailbox at both authorization boundaries', function (string $boundary, string $target): void {
     $history = [];
     $tokens = new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['OpaqueMailboxAA'], 'token' => 'selected-token'],
@@ -262,12 +262,12 @@ it('rejects a differently cased opaque mailbox at both authorization boundaries'
     $client = new GraphClient([], new TokenManager([]), new RateLimiter([]), grantReadHttp('ms-graph', [new Response(200, [], '{}')], $history), $authorization);
 
     expect(fn () => $boundary === 'token'
-        ? $authorization->accessToken('opaquemailboxaa')
-        : $client->get('users/opaquemailboxaa/messages/one', mailbox: 'OpaqueMailboxAA'))
+        ? $authorization->accessToken($target)
+        : $client->get('users/'.rawurlencode($target).'/messages/one', mailbox: 'OpaqueMailboxAA'))
         ->toThrow($boundary === 'token' ? GrantAccessDeniedException::class : ApiRequestException::class)
         ->and($tokens->tokenReads)->toBe(0)
         ->and($history)->toBe([]);
-})->with(['token', 'path']);
+})->with(['token', 'path'])->with(['case' => 'opaquemailboxaa', 'whitespace' => 'OpaqueMailboxAA ']);
 
 it('preserves typed mailbox aliases and exact opaque identities', function (string $mailbox, string $target): void {
     $history = [];
