@@ -1075,14 +1075,23 @@ if ($mailbox instanceof SupportsDraftAttachmentPreparation
     $next = $mailbox->prepareAttachments(
         $preparation,
         $message,
-        new SubmissionLimits(maxFileBytes: 10_485_760, maxTotalFileBytes: 20_971_520),
+        new SubmissionLimits(
+            maxFileBytes: 10_485_760,
+            maxTotalFileBytes: 20_971_520,
+            maxMemoryBytes: 16_777_216,
+        ),
+        maxRequestBytes: 4_194_304,
     );
 
     // Retain $next privately before scheduling the next host-owned step.
 }
 ```
 
-Each call performs at most one attachment write: a small-file POST, upload-session creation, or one sequential range. Files below 3,000,000 bytes use JSON/base64 POSTs that remain strictly below the 4 MB write limit. Larger files use the documented Outlook session protocol, within its 150 MB maximum, with ranges of at most 3,000,000 bytes. `maxRequestBytes` can tighten each write; files whose encoded small-file request cannot fit fail before that POST. Limits do not replace tenant message-size or mailbox-permission policy. [Microsoft documents both attachment paths](https://learn.microsoft.com/en-us/graph/outlook-large-attachments).
+Each call performs at most one attachment write: a small-file POST, upload-session creation, or one sequential range. Files below 3,000,000 bytes use JSON/base64 POSTs. The exact encoded request, including escaped metadata, must fit `maxRequestBytes`; otherwise preparation stops before that POST. Larger files use the documented Outlook session protocol, within its 150 MB maximum, with ranges of at most 3,000,000 bytes. [Microsoft documents both attachment paths](https://learn.microsoft.com/en-us/graph/outlook-large-attachments).
+
+This example chooses a 4 MiB request budget and a 16 MiB allocation budget. The public defaults remain 4,000,000 and 8,388,608 bytes respectively. A file just below 3,000,000 raw bytes can exceed the default request budget after encoding. These are caller policies; tenant message limits, permissions and provider acceptance still apply. A qualified application-mode fixture accepted a 4,000,151-byte direct request and the 3,000,000-byte session path, with exact raw readbacks. This does not establish a universal provider byte ceiling or qualify other account modes.
+
+Successful small-file responses can include the base64 file again. Their finite receipt budget is the encoded request length plus 64 KiB; error receipts retain 64 KiB. Collection and JSON decoding share the allocation budget. An oversized or incomplete acknowledgement remains uncertain and requires inspection of the original draft before another step.
 
 `SubmissionPreparation::attachments` exposes each attempted file's identity, outcome, acknowledged byte count, nullable attachment ID, status and safe headers. Upload state also retains the original source binding and fixed Outlook expiry privately. Preserve the full preparation in trusted private storage; PHP serialization retains private recovery fields, while ordinary JSON and debug output intentionally omit session URLs. Restore only SDK-issued state. Never put serialized preparation state in a public response or log.
 
@@ -1102,13 +1111,15 @@ if ($mailbox instanceof SupportsDraftAttachmentPreparation
 
 Inspection requires retained attachment progress on the acknowledged draft; it cannot recover lost draft creation or interrupted native normalization. It reads the original draft and verifies candidate raw bytes against the original SHA-256 and length. Matching names or sizes alone are insufficient. Missing, duplicated, changed or incomplete evidence leaves the original uncertainty unresolved. Inspection never creates another attachment or draft. A lost range acknowledgement without a completed attachment remains unresolved; this API does not invent an Outlook session-status GET or replay a range. Expired sessions are not silently recreated, and uploads do not extend their retained expiry.
 
-Upload PUTs use the original private preauthenticated `https://outlook.office.com` URL, with redirects and debug output disabled. They omit Graph bearer tokens, client-default authorization, cookies and query options, including raw cURL overrides of the managed target, method, headers and body. They retain the host's trusted handler, proxy authentication, TLS verification, network settings, timeouts and supported security callbacks. Injected middleware and callbacks remain the host's responsibility: they must protect private URLs and must not add credentials, replace frozen bytes or retry uncertain writes.
+Upload PUTs use the original private preauthenticated URL on exactly `outlook.office.com` or `outlook.office365.com`, with redirects and debug output disabled. They omit Graph bearer tokens, client-default authorization, cookies and query options, including raw cURL overrides of the managed target, method, headers and body. They retain the host's trusted handler, proxy authentication, TLS verification, network settings, timeouts and supported security callbacks. Injected middleware and callbacks remain the host's responsibility: they must protect private URLs and must not add credentials, replace frozen bytes or retry uncertain writes.
 
-Message upload sessions accept the provider's documented `v1.0` and `gv1.0` paths, alongside existing `v2.0` paths, with their resource-name casing. The original URL is sent unchanged; trusted-host checks and the exact parent-message check on the final attachment location still apply.
+Message upload sessions accept the provider's documented `v1.0` and `gv1.0` paths, alongside existing `v2.0` paths, with their resource-name casing. The original URL is sent unchanged; the final attachment location must use that session's exact host and parent message. An authenticated Global Graph session issued on `outlook.office365.com` passed the upload and raw readback check. Both exact hosts also appear in Microsoft's [Worldwide Exchange endpoint list](https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges?view=o365-worldwide); wildcard hosts and other URL forms remain unsupported.
 
 The 10 MiB per-file and 20 MiB aggregate examples are configurable host targets. Fixture results do not establish live support: Microsoft documents a known large-file issue for shared and delegated mailboxes. That combination, tenant limits and provider normalization remain separate live acceptance gates.
 
 The opt-in `graph-upload-wire` tests use an independent local TLS server, the original trusted Outlook HTTPS target and disk-backed sources. On the verified PHP 8.4.25, 64-bit build, cold 10 MiB and 20 MiB cases stayed within the 8 MiB payload allocation allowance above their source-bound cold control. A separate warm 20 MiB case used 263,800 bytes of direct incremental peak memory. These measurements cover the tested SDK/cURL path; source callbacks, injected middleware and different runtime/platform initialization retain their own allocation requirements. Run each wire case serially with an owned `MAILBOX_GRAPH_UPLOAD_CONTROL_PATH`; ordinary parallel runs skip them explicitly.
+
+A cold direct-attachment case measured 13,591,184 bytes of extra PHP heap under its explicit 16 MiB allocation budget, including source verification, encoding and a real echoed acknowledgement. Its request was 4,000,165 bytes and its response was 4,000,200 bytes. The measurement starts after file generation, certificate/server setup and client construction; it uses no warm-up or control subtraction. Run that case alone with an owned `MAILBOX_GRAPH_DIRECT_WIRE_RECEIPT_PATH`. This is a measured runtime result, not a process-wide or cross-platform memory guarantee.
 
 ### Inspecting Graph Submission Evidence
 
@@ -1137,7 +1148,7 @@ Keep preparation facts, the original `SubmissionResult` and later observations s
 
 This path accepts one UTF-8 text **or** HTML body, explicit recipients and custom `X-` headers, with optional explicit native reply/forward context and structured files through `SupportsDraftAttachmentPreparation`. Both body formats together, raw MIME and unsupported headers remain unsupported; the SDK does not silently discard fields. Correlation and address/header validation follow the structured prepared-message rules above. See Microsoft's [native reply](https://learn.microsoft.com/en-us/graph/api/message-createreply?view=graph-rest-1.0), [native forward](https://learn.microsoft.com/en-us/graph/api/message-createforward?view=graph-rest-1.0), [draft update](https://learn.microsoft.com/en-us/graph/api/message-update?view=graph-rest-1.0) and [attachment removal](https://learn.microsoft.com/en-us/graph/api/attachment-delete?view=graph-rest-1.0) references.
 
-`maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget and remain strictly below Graph's 4 MB write limit. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow, truncation or inconsistent unencoded Content-Length preserves observed status and safe headers without establishing successful preparation, verification or send.
+`maxRequestBytes` is a positive caller budget, defaulting to 4,000,000 bytes. The actual encoded JSON must fit that budget. Draft-body and session-metadata preparation retain their conservative local bound below 4,000,000 bytes; small-file attachment encoding uses the caller's explicit budget described above. Draft creation and verification responses are bounded to 4 MiB; send acknowledgements retain the shared 64 KiB limit. Overflow, truncation or inconsistent unencoded Content-Length preserves observed status and safe headers without establishing successful preparation, verification or send.
 
 Draft preparation checks input and escaped JSON sizes before allocating the complete encoded request. Attachment preparation and inspection share the caller's `SubmissionLimits::maxMemoryBytes` across intent reconstruction, file metadata, response collection and JSON decoding. A memory limit reached before a write prevents that write. An incomplete inspection retains the original uncertain preparation; it never authorizes another attachment write or send.
 

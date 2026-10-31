@@ -167,7 +167,9 @@ Read the returned stream incrementally and close it when finished. Calling `getC
 
 ### Graph Content Forms
 
-Graph returns file attachments as raw file bytes. Both `stream()` and `download()` fetch metadata before content and require the declared file size to match the observed bytes. Metadata and content share the operation's response and memory budgets. Item attachments use the provider's MIME representation, including vCard or iCalendar where appropriate. Item metadata `size` does not have a documented equality guarantee with the raw MIME representation length. `metadata()->size` retains the provider declaration, while `download()->size` reports the actual stored byte length, including when a declaration is omitted. Reference attachments do not support `/$value` and fail explicitly. See the [Graph attachment contract](https://learn.microsoft.com/en-us/graph/api/attachment-get?view=graph-rest-1.0).
+Graph returns file attachments as raw file bytes. Both `stream()` and `download()` fetch metadata before content, then enforce the actual byte limits and HTTP response framing. Graph's attachment `size` can differ from the raw content length: an application-mode fixture reported 3,000,181 bytes for an independently verified 2,999,999-byte file. The SDK does not use a fixed conversion or treat this report as proof of raw length.
+
+Metadata and content share the operation's response and memory budgets. `metadata()->size` preserves the provider report, while `download()->size` reports the actual stored byte length. Item attachments use the provider's MIME representation, including vCard or iCalendar where appropriate. Reference attachments do not support `/$value` and fail explicitly. See the [Graph attachment contract](https://learn.microsoft.com/en-us/graph/api/attachment-get?view=graph-rest-1.0).
 
 ## Content-Addressable Deduplication
 
