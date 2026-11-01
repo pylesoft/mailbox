@@ -704,13 +704,14 @@ it('rejects missing or malformed Graph selection metadata without normalizing aw
     'missing activity' => [['receivedDateTime' => null]],
 ]);
 
-it('bounds Graph selection metadata response bytes before decoding unexpected payloads', function (): void {
+it('bounds Graph selection metadata response bytes before decoding unexpected payloads', function (bool $declared): void {
     $history = [];
-    $resource = conversationMailbox('ms-graph', [new Response(200, [], str_repeat(' ', 8_388_609))], $history)->message('metadata-id');
+    $resource = conversationMailbox('ms-graph', [new Response(200, $declared ? ['Content-Length' => '8388609'] : [],
+        $declared ? '{}' : str_repeat(' ', 8_388_609))], $history)->message('metadata-id');
 
     expect(fn () => $resource->metadata())->toThrow(ResponseLimitExceededException::class);
     expect($history)->toHaveCount(1);
-});
+})->with(['declared oversize' => true, 'actual chunked oversize' => false]);
 
 /**
  * @param  list<array<string, mixed>|Response|Throwable>  $responses

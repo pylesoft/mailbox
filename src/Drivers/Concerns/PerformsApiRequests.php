@@ -147,6 +147,9 @@ trait PerformsApiRequests
             try {
                 $this->assertIdentityResponse($response);
                 $declared = $this->responseLength($response);
+                if ($declared !== null && $declared > $budget->remaining()) {
+                    throw new ResponseLimitExceededException('The provider response exceeded the remaining byte budget.');
+                }
                 $size = 0;
                 while (true) {
                     $budget->assertMemoryAvailable(strlen($body) + 32768);
