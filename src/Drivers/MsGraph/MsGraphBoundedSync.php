@@ -79,7 +79,7 @@ final readonly class MsGraphBoundedSync
             $endpoint = $folder['nextLink'] ?? $base;
             $remaining = $budget->maxItems - $items;
             try {
-                $payload = $this->client->getBoundedObject($endpoint, $responses, $folder['nextLink'] === null ? ['$select' => 'id', '$top' => min(1000, $remaining)] : [], $this->context->mailbox);
+                $payload = $this->client->getBoundedDeltaPage($endpoint, $responses, min(1000, $remaining), $this->context->mailbox, $folder['nextLink'] === null);
             } catch (ResponseLimitExceededException) {
                 return $this->result($identity, $state, $changes, 'response_limit');
             } catch (ApiRequestException $e) {

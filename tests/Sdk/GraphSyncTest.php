@@ -7,6 +7,7 @@ use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use Psr\Http\Message\RequestInterface;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -49,7 +50,8 @@ it('resumes Graph folder deltas through documented opaque next and delta links',
         ->and((string) $history[2]['request']->getUri())->toBe($delta)
         ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
     parse_str($history[0]['request']->getUri()->getQuery(), $query);
-    expect($query)->toBe(['$select' => 'id', '$top' => '100']);
+    expect($query)->toBe(['$select' => 'id'])
+        ->and($history[0]['request']->getHeaderLine('Prefer'))->toContain('odata.maxpagesize=100', 'IdType="ImmutableId"');
 });
 
 it('enumerates mailbox folders and retains independent progress until every covered folder finishes', function (): void {
@@ -106,6 +108,61 @@ function graphSyncLink(string $folder, string $token, bool $next = false): strin
 {
     return 'https://graph.microsoft.com/v1.0/users/same%40example.com/mailFolders/'.rawurlencode($folder).'/messages/delta?'.($next ? '$skiptoken=' : '$deltatoken=').$token;
 }
+
+it('does not turn the per-page Graph budget into a total delta collection cap', function (): void {
+    $history = [];
+    $ids = ['first', 'second', 'third'];
+    $limit = count($ids);
+    $respond = function (RequestInterface $request) use ($ids, &$limit): Response {
+        parse_str($request->getUri()->getQuery(), $query);
+        $offset = (int) ($query['$skiptoken'] ?? 0);
+        if ($offset === 0) {
+            $limit = isset($query['$top']) ? min(count($ids), (int) $query['$top']) : count($ids);
+        }
+        preg_match('/odata\.maxpagesize=(\d+)/', $request->getHeaderLine('Prefer'), $preference);
+        $size = min((int) ($preference[1] ?? 1), $limit - $offset);
+        $next = $offset + $size;
+        $body = ['value' => array_map(fn (string $id): array => ['id' => $id], array_slice($ids, $offset, $size))];
+        $body[$next < $limit ? '@odata.nextLink' : '@odata.deltaLink'] = graphSyncLink('FolderA', (string) $next, $next < $limit);
+
+        return new Response(200, [], json_encode($body, JSON_THROW_ON_ERROR));
+    };
+    $mailbox = graphSyncResource(array_fill(0, 5, $respond), $history);
+    $scope = new SyncScope('FolderA');
+    $continuation = null;
+    $received = [];
+    for ($page = 0; $page < 5; $page++) {
+        $result = $mailbox->initialSync($scope, new SyncBudget(maxPages: 1, maxItems: 2, maxRequests: 1), $continuation);
+        array_push($received, ...$result->upserts);
+        if ($result->checkpoint !== null) {
+            break;
+        }
+        $continuation = $result->continuation;
+    }
+
+    expect($received)->toBe($ids)
+        ->and($result->checkpoint)->not->toBeNull();
+    parse_str($history[0]['request']->getUri()->getQuery(), $query);
+    expect($query)->toBe(['$select' => 'id']);
+    foreach ($history as $entry) {
+        expect($entry['request']->getHeaderLine('Prefer'))->toContain('IdType="ImmutableId"', 'odata.maxpagesize=2');
+    }
+});
+
+it('bounds continuation page preferences by the remaining Graph item budget', function (): void {
+    $history = [];
+    $mailbox = graphSyncResource([
+        new Response(200, [], json_encode(['value' => [['id' => 'one'], ['id' => 'two']], '@odata.nextLink' => graphSyncLink('FolderA', 'next', true)], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(['value' => [['id' => 'three']], '@odata.deltaLink' => graphSyncLink('FolderA', 'complete')], JSON_THROW_ON_ERROR)),
+    ], $history);
+
+    $result = $mailbox->initialSync(new SyncScope('FolderA'), new SyncBudget(maxPages: 2, maxItems: 3, maxRequests: 2));
+
+    expect($result->upserts)->toBe(['one', 'two', 'three'])
+        ->and($result->checkpoint)->not->toBeNull()
+        ->and($history[0]['request']->getHeaderLine('Prefer'))->toContain('odata.maxpagesize=3', 'IdType="ImmutableId"')
+        ->and($history[1]['request']->getHeaderLine('Prefer'))->toContain('odata.maxpagesize=1', 'IdType="ImmutableId"');
+});
 
 it('requests an original-scope Graph reset for expired state without retaining provider error secrets', function (int $status, array $error): void {
     $history = [];

@@ -88,9 +88,10 @@ trait PerformsApiRequests
 
     /**
      * @param  array<string, mixed>  $query
+     * @param  array<string, string>  $headers
      * @return array<string, mixed>|\stdClass
      */
-    private function readBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $retry, bool $associative): array|\stdClass
+    private function readBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $retry, bool $associative, array $headers = []): array|\stdClass
     {
         $queueReleaseAllowed = $this->queueReleaseAllowed;
         $this->queueReleaseAllowed = false;
@@ -107,7 +108,7 @@ trait PerformsApiRequests
                 $attempt++;
                 $startedAt = microtime(true);
                 try {
-                    return $this->requestBounded($endpoint, $budget, $query, $mailbox, $associative);
+                    return $this->requestBounded($endpoint, $budget, $query, $mailbox, $associative, $headers);
                 } catch (RequestException $e) {
                     $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
                     if ($retry && $this->shouldRetryRequest($e, 'GET', $safeEndpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
@@ -130,16 +131,17 @@ trait PerformsApiRequests
 
     /**
      * @param  array<string, mixed>  $query
+     * @param  array<string, string>  $headers
      * @return array<string, mixed>|\stdClass
      */
-    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $associative): array|\stdClass
+    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $associative, array $headers = []): array|\stdClass
     {
         $budget->assertMemoryAvailable(65536);
         $options = $query === [] ? [] : ['query' => $query];
         if ($query === [] && str_contains($endpoint, '?')) {
             $options['query'] = null;
         }
-        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox, retry: false);
+        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => [...$headers, 'Accept-Encoding' => 'identity']], $mailbox, retry: false);
         $stream = $response->getBody();
         $body = '';
 

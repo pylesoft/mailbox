@@ -60,6 +60,21 @@ class GraphClient
         return 'ms-graph';
     }
 
+    public function getBoundedDeltaPage(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, int $pageSize, ?string $mailbox, bool $initial): \stdClass
+    {
+        if ($pageSize < 1 || $pageSize > 1000) {
+            throw new \InvalidArgumentException('Graph delta page size must be between 1 and 1000.');
+        }
+        // $top can cap the tracked collection rather than only the response page.
+        $preference = ($this->prefersImmutableIds() ? 'IdType="ImmutableId", ' : '').'odata.maxpagesize='.$pageSize;
+        $response = $this->readBounded($endpoint, $budget, $initial ? ['$select' => 'id'] : [], $mailbox, false, false, ['Prefer' => $preference]);
+        if (! $response instanceof \stdClass) {
+            throw new ApiRequestException('Graph returned an invalid delta page.');
+        }
+
+        return $response;
+    }
+
     /**
      * @param  array<string, mixed>  $query
      * @return array<string, mixed>
@@ -267,11 +282,16 @@ class GraphClient
             'Accept' => 'application/json',
         ];
 
-        if ((bool) ($this->config['prefer_immutable_ids'] ?? config('mailbox.prefer_immutable_ids', true))) {
+        if ($this->prefersImmutableIds()) {
             $headers['Prefer'] = 'IdType="ImmutableId"';
         }
 
         return $headers;
+    }
+
+    private function prefersImmutableIds(): bool
+    {
+        return (bool) ($this->config['prefer_immutable_ids'] ?? config('mailbox.prefer_immutable_ids', true));
     }
 
     protected function mailboxKey(?string $mailbox): string
