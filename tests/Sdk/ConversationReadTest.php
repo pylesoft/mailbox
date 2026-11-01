@@ -242,10 +242,10 @@ it('keeps a selected missing Graph collection incomplete and recovers it through
     unset($message[$field]);
     $scope = new SyncScope('FolderA');
     $first = conversationMailbox('ms-graph', [['value' => [$message]], ['value' => []]], $history)
-        ->conversation('thread', $scope, new SyncBudget(maxPages: 2));
+        ->conversation('thread', $scope, new SyncBudget(maxPages: 2, maxRequests: 1));
 
     expect($first->complete)->toBeFalse();
-    expect($first->reason)->toBe('content_incomplete');
+    expect($first->reason)->toBe($field === 'internetMessageHeaders' ? 'request_limit' : 'content_incomplete');
     expect($first->messages)->toBe([]);
     expect($first->continuation)->not->toBeNull();
     expect($history)->toHaveCount(1);
@@ -680,3 +680,154 @@ function conversationMailbox(string $provider, array $responses, array &$history
         'base_uri' => $provider === 'gmail' ? 'https://gmail.googleapis.com/gmail/v1/' : 'https://graph.microsoft.com/v1.0/',
     ]));
 }
+
+it('recovers omitted Graph internet headers from bounded MIME without downloading the message body', function (): void {
+    Http::preventStrayRequests();
+    $message = graphConversationMessage('older');
+    unset($message['internetMessageHeaders']);
+    $mime = "From: Sender <sender@example.com>\r\nTo: Reader <reader@example.com>\r\nReferences: <one@example.com>\r\n\t<two@example.com>\r\nX-Trace: first\r\nX-Trace: second\r\nContent-Type: multipart/mixed; boundary=not-read\r\n\r\n";
+    $source = Utils::streamFor($mime.str_repeat('x', 16384));
+    $bytesRead = 0;
+    $closed = false;
+    $stream = FnStream::decorate($source, [
+        'read' => function (int $length) use ($source, &$bytesRead): string {
+            $bytes = $source->read($length);
+            $bytesRead += strlen($bytes);
+
+            return $bytes;
+        },
+        'close' => function () use ($source, &$closed): void {
+            $closed = true;
+            $source->close();
+        },
+    ]);
+    $history = [];
+    $read = conversationMailbox('ms-graph', [
+        ['value' => [$message]],
+        new Response(200, ['Content-Type' => 'message/rfc822', 'Content-Length' => '104857600'], $stream),
+        ['value' => []],
+    ], $history)->conversation('thread', new SyncScope('FolderA'), new SyncBudget(maxPages: 2, maxRequests: 3),
+        limits: new BodyReadLimits(maxBodyBytes: strlen('Older context')));
+
+    expect($read->complete)->toBeTrue();
+    expect($read->messages[0]->body?->content)->toBe('Older context');
+    expect(collect($read->messages[0]->headers)->where('name', 'X-Trace')->pluck('value')->all())->toBe(['first', 'second']);
+    expect(collect($read->messages[0]->headers)->firstWhere('name', 'References')['value'])->toBe('<one@example.com> <two@example.com>');
+    expect($history)->toHaveCount(3);
+    expect($history[1]['request']->getUri()->getPath())->toEndWith('/mailFolders/FolderA/messages/older/$value');
+    expect($bytesRead)->toBeLessThanOrEqual(8192);
+    expect($closed)->toBeTrue();
+    Http::assertNothingSent();
+});
+
+it('retains recovered Graph MIME headers across the request budget before file metadata and resumed hydration', function (): void {
+    Http::preventStrayRequests();
+    $message = graphConversationMessage('older');
+    unset($message['internetMessageHeaders']);
+    $history = [];
+    $scope = new SyncScope('FolderA');
+    $first = conversationMailbox('ms-graph', [
+        ['value' => [$message]],
+        new Response(200, ['Content-Type' => 'message/rfc822'], "X-Trace: recovered\r\n\r\nBody is not required"),
+    ], $history)->conversation('thread', $scope, new SyncBudget(maxRequests: 2));
+
+    expect($first->complete)->toBeFalse();
+    expect($first->reason)->toBe('request_limit');
+    expect($first->messages)->toBe([]);
+    expect($history)->toHaveCount(2);
+    $resumedHistory = [];
+    $last = conversationMailbox('ms-graph', [$message, ['value' => []]], $resumedHistory)
+        ->conversation('thread', $scope, new SyncBudget(maxRequests: 2), unserialize(serialize($first->continuation)));
+
+    expect($last->complete)->toBeTrue();
+    expect($last->messages[0]->headers)->toBe([['name' => 'X-Trace', 'value' => 'recovered']]);
+    expect($resumedHistory)->toHaveCount(2);
+    expect($resumedHistory[0]['request']->getUri()->getPath())->toEndWith('/mailFolders/FolderA/messages/older');
+    Http::assertNothingSent();
+});
+
+it('keeps malformed or unfinished Graph MIME headers incomplete and closes their stream', function (string $mime): void {
+    Http::preventStrayRequests();
+    $message = graphConversationMessage('older');
+    unset($message['internetMessageHeaders']);
+    $history = [];
+    $source = Utils::streamFor($mime);
+    $closed = false;
+    $stream = FnStream::decorate($source, ['close' => function () use ($source, &$closed): void {
+        $closed = true;
+        $source->close();
+    }]);
+    $read = conversationMailbox('ms-graph', [['value' => [$message]], new Response(200, [], $stream)], $history)
+        ->conversation('thread', new SyncScope('FolderA'), new SyncBudget(maxPages: 2, maxRequests: 3));
+
+    expect($read->complete)->toBeFalse();
+    expect($read->reason)->toBe('content_incomplete');
+    expect($read->messages)->toBe([]);
+    expect($read->continuation)->not->toBeNull();
+    expect($closed)->toBeTrue();
+    expect($history)->toHaveCount(2);
+    Http::assertNothingSent();
+})->with([
+    'unfinished header section' => "X-Trace: unfinished\r\n",
+    'invalid field framing' => "Not a header\r\n\r\n",
+    'invalid sender syntax' => "From: Sender <sender@example.com\r\n\r\n",
+]);
+
+it('charges the Graph MIME header prefix to the existing response byte budget', function (): void {
+    Http::preventStrayRequests();
+    $message = graphConversationMessage('older');
+    unset($message['internetMessageHeaders']);
+    $page = ['value' => [$message]];
+    $history = [];
+    $read = conversationMailbox('ms-graph', [$page, new Response(200, [], 'X-Long: '.str_repeat('x', 200))], $history)
+        ->conversation('thread', new SyncScope('FolderA'), new SyncBudget(maxRequests: 3,
+            maxResponseBytes: strlen(json_encode($page, JSON_THROW_ON_ERROR)) + 32));
+
+    expect($read->complete)->toBeFalse();
+    expect($read->reason)->toBe('response_limit');
+    expect($read->messages)->toBe([]);
+    expect($read->continuation)->not->toBeNull();
+    expect($history)->toHaveCount(2);
+    Http::assertNothingSent();
+});
+
+it('keeps Graph MIME read failures scoped and closes the rejected response', function (int $status, string $reason): void {
+    Http::preventStrayRequests();
+    $message = graphConversationMessage('older');
+    unset($message['internetMessageHeaders']);
+    $history = [];
+    $closed = false;
+    $source = Utils::streamFor('denied');
+    $stream = FnStream::decorate($source, ['read' => static fn (int $length): string => throw new RuntimeException('Synthetic stream interruption'), 'close' => function () use ($source, &$closed): void {
+        $closed = true;
+        $source->close();
+    }]);
+    $read = conversationMailbox('ms-graph', [['value' => [$message]], new Response($status, [], $stream)], $history)
+        ->conversation('thread', new SyncScope('FolderA'), new SyncBudget(maxRequests: 3));
+
+    expect($read->complete)->toBeFalse();
+    expect($read->reason)->toBe($reason);
+    expect($read->messages)->toBe([]);
+    expect($closed)->toBeTrue();
+    expect($history)->toHaveCount(2);
+    Http::assertNothingSent();
+})->with(['authorization denied' => [403, 'scope_unavailable'], 'interrupted stream' => [200, 'provider_interrupted']]);
+
+it('rejects recovered MIME headers rebound to another pending Graph message before I O', function (): void {
+    Http::preventStrayRequests();
+    $message = graphConversationMessage('older');
+    unset($message['internetMessageHeaders']);
+    $history = [];
+    $scope = new SyncScope('FolderA');
+    $first = conversationMailbox('ms-graph', [['value' => [$message]], new Response(200, [], "X-Trace: recovered\r\n\r\n")], $history)
+        ->conversation('thread', $scope, new SyncBudget(maxRequests: 2));
+    $position = $first->continuation->position;
+    $position['headers']['id'] = 'different-message';
+    $tampered = new SyncContinuation($first->identity, $first->continuation->phase, $position);
+    $resumedHistory = [];
+
+    expect(fn () => conversationMailbox('ms-graph', [], $resumedHistory)
+        ->conversation('thread', $scope, new SyncBudget, $tampered))->toThrow(InvalidSyncStateException::class);
+    expect($resumedHistory)->toBe([]);
+    Http::assertNothingSent();
+});

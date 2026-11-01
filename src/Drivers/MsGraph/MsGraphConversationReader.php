@@ -26,8 +26,10 @@ use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\ConversationReadBudget;
+use Pyle\Mailbox\Support\ReceivedHeaders;
+use Pyle\Mailbox\Support\ResponseBudget;
 
-/** @phpstan-type ConversationState array{conversationId: string, started: bool, nextLink: ?string, seenLinks: list<string>, pending: list<string>, seenIds: list<string>, files: list<array<string, mixed>>, filesStarted: bool, fileNext: ?string, fileSeen: list<string>} */
+/** @phpstan-type ConversationState array{conversationId: string, started: bool, nextLink: ?string, seenLinks: list<string>, pending: list<string>, seenIds: list<string>, files: list<array<string, mixed>>, filesStarted: bool, fileNext: ?string, fileSeen: list<string>, headers?: array{id: string, values: list<array{name: string, value: string}>}} */
 final readonly class MsGraphConversationReader
 {
     private const MESSAGE_SELECT = 'id,subject,bodyPreview,body,from,sender,toRecipients,ccRecipients,bccRecipients,replyTo,internetMessageHeaders,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,importance,conversationId,internetMessageId,parentFolderId';
@@ -96,10 +98,22 @@ final readonly class MsGraphConversationReader
                     $message = ConversationPayload::array($this->client->getBoundedObject($endpoint, $work->responses, ['$select' => self::MESSAGE_SELECT], $this->context->mailbox));
                 }
                 $this->assertMessage($message, $conversationId);
-                if ($message['id'] !== $id || ! array_key_exists('replyTo', $message) || ! array_key_exists('internetMessageHeaders', $message)
+                if ($message['id'] !== $id || ! array_key_exists('replyTo', $message)
                     || ! is_array($message['body'] ?? null)
                     || ! in_array($message['body']['contentType'] ?? null, ['text', 'html'], true) || ! is_string($message['body']['content'] ?? null)) {
                     throw new MailboxException('Graph returned missing or malformed conversation content.');
+                }
+                if (! array_key_exists('internetMessageHeaders', $message)) {
+                    $headers = $state['headers'] ?? null;
+                    if ($headers === null || $headers['id'] !== $id) {
+                        $work->request(hydration: true);
+                        $block = $this->client->messageHeaderBlock($endpoint, $work->responses, $this->context->mailbox);
+                        (new ResponseBudget(strlen($block) + 1, 67_108_864))
+                            ->assertMemoryAvailable(strlen($block) * 8 + (substr_count($block, "\r\n") + 1) * 4096);
+                        $headers = ['id' => $id, 'values' => ReceivedHeaders::block($block)];
+                        $state['headers'] = $headers;
+                    }
+                    $message['internetMessageHeaders'] = $headers['values'];
                 }
                 $work->content(strlen($message['body']['content']));
                 $mapped = MessageDto::fromMsGraph($message);
@@ -128,6 +142,7 @@ final readonly class MsGraphConversationReader
                     $files[] = ['messageId' => $id, 'attachment' => $this->attachment($metadata)];
                 }
                 array_shift($state['pending']);
+                unset($state['headers']);
                 $state['files'] = $state['fileSeen'] = [];
                 $state['filesStarted'] = false;
                 $state['fileNext'] = null;
@@ -220,6 +235,14 @@ final readonly class MsGraphConversationReader
             throw new InvalidSyncStateException('The continuation does not match this Graph conversation read.');
         }
         try {
+            if (array_key_exists('headers', $state)) {
+                $headers = $state['headers'];
+                if (! is_array($headers) || ($headers['id'] ?? null) !== ($state['pending'][0] ?? null)
+                    || ! is_array($headers['values'] ?? null) || ! array_is_list($headers['values'])) {
+                    throw new MailboxException('The retained MIME headers belong to another message.');
+                }
+                MessageDto::fromMsGraph(['internetMessageHeaders' => $headers['values']]);
+            }
             foreach ($state['files'] as $file) {
                 $this->attachment($file);
             }

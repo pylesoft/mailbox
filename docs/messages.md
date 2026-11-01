@@ -399,7 +399,9 @@ Graph filters messages by `conversationId` in the requested mailbox or one reque
 
 Conversation messages expose `replyTo` as received `EmailAddressDto` values and `headers` as an ordered list of `{name, value}` records. Gmail parses every Reply-To header through the incoming address parser, including encoded names, quoted commas and repeated fields. Graph explicitly selects `replyTo` and `internetMessageHeaders` for both initial pages and resumed message hydration. Malformed lists or entries remain unfinished content.
 
-Explicit empty Graph arrays are accepted. A missing selected collection remains `content_incomplete`, with the message retained for the existing resumed hydration path. It is not evidence that no Reply-To or headers exist. Microsoft's [get-message examples](https://learn.microsoft.com/en-us/graph/api/message-get?view=graph-rest-1.0) show empty Reply-To arrays and explicitly selected header arrays; the SDK preserves that distinction without changing legacy DTO defaults for partial eager payloads.
+Explicit empty Graph arrays are accepted. If Graph omits `internetMessageHeaders`, the SDK reads the header section from the same scoped message's [MIME content](https://learn.microsoft.com/en-us/graph/api/message-get?view=graph-rest-1.0). It closes that stream when the header terminator is found, without downloading the full MIME body or attachments. Recovered headers retain their order and repeated fields; malformed framing, addresses or encoding still leave content incomplete.
+
+The recovery consumes the existing request, response-byte and hydration budgets. The body-content limit still applies to message bodies, independently of header bytes. A continuation retains recovered headers for its pending message, allowing a resumed read to finish file metadata without repeatedly fetching MIME headers. A missing `replyTo` collection, malformed explicit header collection or unfinished MIME header section remains incomplete. Legacy DTO defaults for partial eager payloads are unchanged.
 
 ```php
 foreach ($message->replyTo as $address) {

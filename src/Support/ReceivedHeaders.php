@@ -11,10 +11,42 @@ use ZBateson\MailMimeParser\Header\IHeaderPart;
 use ZBateson\MailMimeParser\Header\Part\AddressPart;
 use ZBateson\MailMimeParser\Header\Part\CommentPart;
 use ZBateson\MailMimeParser\Header\SubjectHeader;
+use ZBateson\MailMimeParser\MailMimeParser;
 use ZBateson\MbWrapper\MbWrapper;
 
 final class ReceivedHeaders
 {
+    /** @return list<array{name: string, value: string}> */
+    public static function block(string $value): array
+    {
+        $previous = false;
+        foreach (explode("\r\n", $value) as $line) {
+            if ($previous && preg_match('/^[ \t]/', $line) === 1) {
+                continue;
+            }
+            if (preg_match('/\A[\x21-\x39\x3b-\x7e]+:/', $line) !== 1) {
+                throw new MailboxException('Malformed received MIME header framing.');
+            }
+            $previous = true;
+        }
+        $parsed = (new MailMimeParser)->parse($value."\r\n\r\n", true);
+        $headers = [];
+        foreach ($parsed->getAllHeaders() as $header) {
+            if ($header->hasAnyErrors(true)) {
+                throw new MailboxException('Malformed received MIME header.');
+            }
+            $raw = preg_replace('/\r\n[ \t]+/', ' ', $header->getRawValue())
+                ?? throw new MailboxException('Malformed received MIME header folding.');
+            self::validateEncoding($raw);
+            if (in_array(strtolower($header->getName()), ['from', 'sender', 'to', 'cc', 'bcc', 'reply-to'], true)) {
+                self::addresses($raw);
+            }
+            $headers[] = ['name' => $header->getName(), 'value' => $raw];
+        }
+
+        return $headers;
+    }
+
     public static function text(string $value): string
     {
         self::validateEncoding($value);

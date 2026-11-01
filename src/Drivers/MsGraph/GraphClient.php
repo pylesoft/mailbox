@@ -7,6 +7,8 @@ namespace Pyle\Mailbox\Drivers\MsGraph;
 use DateTimeImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\Event;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
@@ -25,6 +27,7 @@ use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GrantAuthorization;
@@ -80,6 +83,53 @@ class GraphClient
     protected function providerLabel(): string
     {
         return 'Graph';
+    }
+
+    public function messageHeaderBlock(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, string $mailbox): string
+    {
+        $response = $this->requestRaw('GET', $endpoint.'/$value', ['stream' => true, 'http_errors' => false,
+            'decode_content' => false, 'headers' => ['Accept' => 'message/rfc822', 'Accept-Encoding' => 'identity'],
+            'timeout' => 20, 'read_timeout' => 20, 'connect_timeout' => 5], $mailbox, retry: false);
+        $source = $response->getBody();
+        $deadline = hrtime(true) + 20_000_000_000;
+        try {
+            if ($response->getStatusCode() >= 400) {
+                $safeEndpoint = $this->redactedEndpoint($endpoint.'/$value');
+                $error = new RequestException('Graph MIME header read failed.', new Request('GET', $safeEndpoint),
+                    new Response($response->getStatusCode(), ['Retry-After' => $response->getHeaderLine('Retry-After')]));
+                $this->throwMappedException($error, $mailbox, $this->mailboxKey($mailbox), $safeEndpoint, 1);
+            }
+            $this->assertIdentityResponse($response);
+            $declared = $this->responseLength($response);
+            if ($response->getStatusCode() !== 200) {
+                throw new ApiRequestException('Graph did not return the selected MIME content.', status: $response->getStatusCode());
+            }
+            $bytes = '';
+            while (true) {
+                if ($budget->remaining() === 0 || hrtime(true) >= $deadline) {
+                    throw new ResponseLimitExceededException('Graph MIME headers exceeded the read budget.');
+                }
+                $part = $source->read(min(8192, $budget->remaining()));
+                if ($part === '') {
+                    throw new MailboxException('Graph returned unfinished MIME headers.');
+                }
+                $budget->consume(strlen($part));
+                $bytes .= $part;
+                if ($declared !== null && strlen($bytes) > $declared) {
+                    throw new MailboxException('Graph returned inconsistent MIME response bytes.');
+                }
+                $end = strpos($bytes, "\r\n\r\n");
+                if ($end !== false) {
+                    return substr($bytes, 0, $end);
+                }
+            }
+        } catch (MailboxException $exception) {
+            throw $exception;
+        } catch (\Throwable) {
+            throw new ApiRequestException('Graph MIME headers could not be read completely.');
+        } finally {
+            $source->close();
+        }
     }
 
     public function uploadFileRange(GraphUploadSession $session, int $start, StreamInterface $range, int $length): ProviderWriteResponse
