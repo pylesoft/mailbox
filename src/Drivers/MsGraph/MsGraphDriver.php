@@ -5,16 +5,21 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
 use Carbon\CarbonImmutable;
+use GuzzleHttp\Client;
 use Illuminate\Support\Facades\Event;
+use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxResource;
+use Pyle\Mailbox\Contracts\SupportsGrantMailbox;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsRawClient;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Events\ConnectionTestCompleted;
 use Pyle\Mailbox\Events\SecretExpirationWarning;
+use Pyle\Mailbox\Support\GrantAuthorization;
 
-class MsGraphDriver implements MailboxDriver, SupportsRawClient
+class MsGraphDriver implements MailboxDriver, SupportsGrantMailbox, SupportsRawClient
 {
     private TokenManager $tokenManager;
 
@@ -40,6 +45,21 @@ class MsGraphDriver implements MailboxDriver, SupportsRawClient
     public function mailbox(string $emailAddress): MailboxResource
     {
         return new MsGraphMailboxResource($this->client, $this->batch, $this->deltaSync, $emailAddress);
+    }
+
+    public function forGrant(GrantContext $context, GrantTokenProvider $tokens, ?Client $httpClient = null): MailboxResource
+    {
+        $config = array_merge((array) config('mailbox'), $this->config, ['queue_retry_strategy' => 'sleep']);
+        $client = new GraphClient($config, $this->tokenManager, $this->rateLimiter, $httpClient, new GrantAuthorization($context, $tokens));
+
+        return new MsGraphMailboxResource(
+            client: $client,
+            batch: new BatchRequest($client, $context->mailbox),
+            deltaSync: new MsGraphDeltaSync($client),
+            emailAddress: $context->mailbox,
+            grantContext: $context,
+            grantGuard: $tokens,
+        );
     }
 
     public function testConnection(?string $emailAddress = null): ConnectionTestResult

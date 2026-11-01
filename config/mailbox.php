@@ -8,6 +8,10 @@ use Pyle\Mailbox\Drivers\MsGraph\MsGraphDriver;
 return [
     'default' => env('MAILBOX_DRIVER', 'ms-graph'),
 
+    'persistence' => [
+        'enabled' => env('MAILBOX_PERSISTENCE_ENABLED', true),
+    ],
+
     'driver_classes' => [
         'ms-graph' => MsGraphDriver::class,
         'gmail' => GmailDriver::class,
@@ -67,6 +71,7 @@ return [
                 'profile',
                 'email',
                 'offline_access',
+                'User.Read',
                 'Mail.ReadWrite',
             ],
         ],

@@ -8,6 +8,7 @@ use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\DTOs\FolderDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 
 class MsGraphFolderQuery implements FolderQueryBuilder
 {
@@ -131,17 +132,29 @@ class MsGraphFolderQuery implements FolderQueryBuilder
     {
         $folders = collect();
         $query = ['$top' => 200];
+        $scope = $endpoint;
+        $seenEndpoints = [];
 
         do {
-            $response = $this->client->get($endpoint, $query, $this->mailbox);
+            if (isset($seenEndpoints[$endpoint])) {
+                throw new ApiRequestException('The provider returned a cyclic continuation.');
+            }
+
+            $seenEndpoints[$endpoint] = true;
+            $response = $this->client->getMessagePayload($endpoint, $query, $this->mailbox);
+            if (! isset($response['value']) || ! is_array($response['value'])) {
+                throw new ApiRequestException('The provider returned a missing or malformed collection.');
+            }
 
             $folders = $folders->concat(
-                collect((array) ($response['value'] ?? []))
+                collect($response['value'])
                     ->map(fn (mixed $item): FolderDto => FolderDto::fromMsGraph(is_array($item) ? $item : []))
                     ->values(),
             );
 
-            $endpoint = isset($response['@odata.nextLink']) ? (string) $response['@odata.nextLink'] : '';
+            $endpoint = array_key_exists('@odata.nextLink', $response)
+                ? $this->client->continuationEndpoint($response['@odata.nextLink'], $scope, $this->mailbox)
+                : '';
             $query = [];
         } while ($endpoint !== '');
 

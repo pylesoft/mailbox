@@ -2,6 +2,31 @@
 
 Mailbox is designed to stay out of your way during testing. Whether you need to mock a single facade call or simulate an entire sync pipeline, the package provides first-class testing utilities so you can verify your application logic without ever hitting a live provider. This page covers the patterns you will use most often in your own test suites, plus a brief section for contributors working on the package itself.
 
+## Verifying Provider and Consumer Contracts
+
+Use facade/client mocks for your application's decisions. To verify provider authentication, request serialization, retries, limits or mapping, keep the real SDK implementation and fake external HTTP with Guzzle's `MockHandler` and request history. Laravel's `Http::preventStrayRequests()` protects a different transport and does not replace that Guzzle handler.
+
+Package `tests/Sdk` cases disable persistence and use a deliberately unavailable default database connection. Feature/persistence cases use real isolated SQLite with `RefreshDatabase`; parallel workers receive owned Testbench SQLite files. Inspect the resolved target before any migration and never run the suite against an active application's database.
+
+`HostAdapterCompatibilityTest` exercises a test host's separate private SQLite store through real Graph native reply/forward, persisted upload progress, uncertain send evidence, lifecycle invalidation and missed-notification reconciliation. Editor drafts remain local. The fixture demonstrates the adapter boundary; it is not a production host store or proof of distributed lock deployment.
+
+Actual consumer validation also needs its real application boot, factories, migrations, policies and DTO mapping. The isolated Ngest check in the [compatibility receipt](plans/mailbox-provider-sdk/compatibility.md) retains those paths without changing its active checkout. It supplements package fixtures.
+
+Run broad suites with bounded workers, then run each opt-in TLS/memory case separately:
+
+```shell
+vendor/bin/pest --parallel --processes=2
+vendor/bin/phpstan analyse --debug --no-progress
+vendor/bin/pint --dirty --format agent
+composer validate --strict
+composer check-platform-reqs
+composer audit --locked
+```
+
+The ordinary suite explicitly skips `submission-wire` and `graph-upload-wire` unless their owned control paths are supplied. Follow the [Gmail wire recipe](messages.md#limits-and-unsupported-input) and [Graph upload guidance](messages.md#preparing-graph-attachments), using fresh serial invocations and one owned helper with cleanup. Those local HTTPS tests establish protocol/buffer behavior; they do not close [live-account acceptance](plans/mailbox-provider-sdk/live-acceptance.md).
+
+Keep an explicit Laravel major in each dependency lane. PHP 8.2 supports Laravel 12; PHP 8.3/8.4 must be checked against the actual supported graph. A production runtime graph and a Testbench/Pest development graph establish different evidence. Prefer-lowest resolution also observes current Composer security policy; it does not necessarily install Laravel 12.0. The receipt records actual resolved versions and limits.
+
 ## Facade Mocking
 
 Since every Mailbox interaction flows through the `Mailbox` facade, you can mock it exactly the way you mock any other Laravel facade. Mailbox uses Mockery under the hood, so `shouldReceive` works out of the box.
@@ -44,9 +69,10 @@ Mailbox::shouldReceive('testConnection')
     ->once()
     ->andReturn(new ConnectionTestResult(
         success: true,
+        error: null,
         latencyMs: 42,
-        driver: 'ms-graph',
-        message: 'OK',
+        authenticatedAs: 'fixture-client',
+        accessibleMailboxes: ['invoices@acme.com'],
     ));
 ```
 
@@ -396,9 +422,9 @@ vendor/bin/pest
 
 The continuous integration pipeline runs three jobs:
 
-- **tests-latest** -- PHP 8.2, 8.3, 8.4 with latest locked dependencies
-- **qa-static-style** -- PHP 8.2 for PHPStan and Pint
-- **tests-lowest** -- PHP 8.2 with `--prefer-lowest --prefer-stable`
+- **tests-latest** -- PHP 8.2, 8.3 and 8.4 with Laravel 12, plus PHP 8.4 with Laravel 13, using current dependency resolution and two Pest workers
+- **qa-static-style** -- PHP 8.4 with the committed lock for PHPStan, Pint and Composer validation, platform and audit checks
+- **tests-lowest** -- PHP 8.2 with Laravel 12 and `--prefer-lowest --prefer-stable`, using two Pest workers
 
 ### Test Categories
 

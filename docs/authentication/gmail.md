@@ -345,9 +345,64 @@ The cached token may have been invalidated server-side. Mailbox automatically re
 
 ## User OAuth Alternative
 
-For scenarios where end users must grant consent through a browser (e.g. connecting personal Gmail accounts, or SaaS applications where you do not control the Workspace domain), Mailbox provides a separate user OAuth flow with redirect and callback routes. This flow stores per-user refresh tokens in your database.
+For personal Gmail accounts or Workspace users granting browser consent, use the host-owned enrollment service, guarded grant storage and explicit runtime in [User OAuth](user-oauth.md). Your application owns initiation/callback endpoints and authorization. Legacy package enrollment routes fail closed and do not attach renewable credentials automatically.
 
 See [Gmail User OAuth](user-oauth.md) for the full setup guide.
+
+## Gmail Watches and Authenticated Push
+
+Explicit-grant Gmail resources expose the optional `SupportsGmailWatch` capability. You may register or renew a watch, stop it, and validate wrapped Pub/Sub requests. Existing configured reads and delta-only use do not require push setup.
+
+### Configure Pub/Sub in Your Host
+
+Create a topic in the Google project that makes the watch request, grant publishing permission to `gmail-api-push@system.gserviceaccount.com`, and create an authenticated push subscription for that topic. Your host configures its HTTPS endpoint, audience and push-authentication service account. Keep the subscription-to-topic mapping in trusted host configuration; an incoming `topic` field does not establish that mapping. See Google's [watch reference](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users/watch) and [push setup guide](https://developers.google.com/workspace/gmail/api/guides/push).
+
+```php
+use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsGmailWatch;
+use Pyle\Mailbox\DTOs\GmailWatchConfiguration;
+use Pyle\Mailbox\Facades\Mailbox;
+
+$mailbox = Mailbox::forGrant($context, $tokens);
+
+if (! $mailbox instanceof SupportsGmailWatch) {
+    throw new RuntimeException('This provider does not support Gmail watches.');
+}
+
+$configuration = new GmailWatchConfiguration(
+    topic: 'projects/my-project/topics/mail',
+    subscription: 'projects/my-project/subscriptions/mail-push',
+    audience: 'https://app.example.com/mail/push',
+    serviceAccountEmail: 'mail-push@my-project.iam.gserviceaccount.com',
+    serviceAccountSubject: '123456789012345678901',
+);
+
+$registration = $mailbox->watch($configuration, ['INBOX']);
+```
+
+The optional label list uses Gmail's `include` behavior. Omit it to watch all changes. The registration retains the explicit grant context, configuration, history ID and expiry. Its history ID is watch evidence, not a committed synchronization checkpoint. Persist the registration through your host adapter and call `watch()` again before expiry to renew it. Google requires renewal within seven days and recommends daily renewal. Watch and stop operate on the provider's mailbox-wide watch, so hosts targeting the same mailbox must coordinate their registrations.
+
+### Verify the Raw Request
+
+Provide a trusted host implementation of `GmailPushVerifier`. Its `verify(RequestInterface $request): array` method must verify Google's JWT signature, issuer, expiry, configured audience and service-account identity before returning claims. It must throw when verification fails. Do not implement it by decoding a JWT or returning an authenticated boolean. Use the validation requirements in Google's [authenticated push documentation](https://docs.cloud.google.com/pubsub/docs/authenticate-push-subscriptions).
+
+```php
+// $request is the raw PSR-7 request; $verifier is your configured trusted adapter.
+$hint = $mailbox->notification($request, $registration, $verifier);
+```
+
+The SDK invokes that adapter on the raw request, then checks the returned issuer, audience, service-account subject/email, verified-email flag and token times. It validates the wrapped subscription and Gmail account against the trusted registration. Missing or rejected verification fails closed. Body parsing enforces an actual 64 KiB limit by default; the fourth argument may change that host limit. If your verifier consumes the request body, supply a seekable buffered body so the SDK can read it again.
+
+The result contains only the scoped reconciliation hint, Pub/Sub receipt ID and notification history ID. Your host owns durable receipt storage, acknowledgement, dispatch and scheduling. Duplicate or older history IDs remain hints: reconcile from the last committed checkpoint and retain page work before promoting synchronization progress. Notification processing neither publishes message content nor advances that checkpoint.
+
+### Renewal and Recovery
+
+Use `$registration->lifecycle()` to inspect `active`, `expired`, `stopped` or host-recorded `removed` state. `stopWatch($registration)` makes one empty-body stop request and returns a stopped registration after confirmation. Unconfirmed watch/stop operations throw `ApiRequestException` with the available HTTP status; they do not retry or release your enclosing job. Keep uncertain remote state for inspection and catch-up.
+
+After your host detects a delivery gap or knows its subscription was removed, it may call `$mailbox->watchCatchUpHint($registration)`. This makes no HTTP request and returns `missed_delivery`, `watch_expired`, `watch_stopped` or `watch_removed`, without a notification history or receipt ID. The SDK cannot infer missing receipts or a Gmail removal callback. Late verified notifications for an expired, stopped or removed registration also carry that recovery reason.
+
+All watch, stop, verification and recovery operations use the selected grant's lifecycle guard. Reconnect or disconnect invalidates captured work, including a request whose grant changes during provider I/O or verification. Restore registration state only from trusted host storage.
+
+Keep periodic reconciliation even in live mode: Gmail may delay or drop notifications. Cryptographic-verifier correctness, actual delivery and deployed renewal/recovery still need separate host/live acceptance; protocol fixtures do not prove them.
 
 ## What's Next
 

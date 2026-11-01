@@ -70,8 +70,11 @@ class GmailDeltaSync
 
     private function performInitialSync(string $mailbox, string $folderId, float $startedAt): DeltaResultDto
     {
-        $messages = (new GmailMessageQuery($this->client, $mailbox))->inFolder($folderId)->get();
         $historyId = $this->currentHistoryId($mailbox);
+        if ($historyId === null) {
+            throw new ApiRequestException('Gmail returned no safe initial history baseline.');
+        }
+        $messages = (new GmailMessageQuery($this->client, $mailbox))->inFolder($folderId)->get();
 
         Event::dispatch(new DeltaSyncCompleted(
             driver: 'gmail',
@@ -301,11 +304,7 @@ class GmailDeltaSync
                 }
 
                 try {
-                    $payload = $this->client->get(
-                        sprintf('users/%s/messages/%s', rawurlencode($mailbox), rawurlencode($messageId)),
-                        ['format' => 'full'],
-                        $mailbox,
-                    );
+                    $payload = (new GmailMessageReader($this->client, $mailbox))->get($messageId);
                 } catch (ApiRequestException|ResourceNotFoundException $e) {
                     if ($e instanceof ResourceNotFoundException || $e->status === 404) {
                         return null;

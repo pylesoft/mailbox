@@ -4,23 +4,41 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use DateTimeImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\Event;
+use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\GraphSubscriptionConfiguration;
+use Pyle\Mailbox\DTOs\GraphSubscriptionRegistration;
+use Pyle\Mailbox\DTOs\GraphUploadSession;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
+use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Support\ConversationPayload;
+use Pyle\Mailbox\Support\GrantAuthorization;
+use Pyle\Mailbox\Support\ProviderWriteResponse;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 class GraphClient
 {
-    use PerformsApiRequests;
+    use PerformsApiRequests {
+        resolveTarget as private resolveApiTarget;
+    }
 
     /** @param array<string, mixed> $config */
     public function __construct(
@@ -28,6 +46,7 @@ class GraphClient
         private readonly TokenManager $tokenManager,
         private readonly RateLimiter $rateLimiter,
         ?Client $client = null,
+        private readonly ?GrantAuthorization $grantAuthorization = null,
     ) {
         $this->bootApiClient(
             $this->config,
@@ -41,9 +60,190 @@ class GraphClient
         return 'ms-graph';
     }
 
+    /**
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>
+     */
+    public function getMessagePayload(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $query = [], ?string $mailbox = null): array
+    {
+        $options = $query === [] ? [] : ['query' => $query];
+        if ($query === [] && str_contains($endpoint, '?')) {
+            $options['query'] = null;
+        }
+        $payload = $this->decodeApiResponse($this->requestRaw('GET', $endpoint, $options, $mailbox), $endpoint, $mailbox, false);
+
+        if ($payload instanceof \stdClass && property_exists($payload, 'value')
+            && (! is_array($payload->value) || ! array_is_list($payload->value))) {
+            throw new MailboxException('The provider returned an invalid collection.');
+        }
+
+        return $payload instanceof \stdClass ? ConversationPayload::array($payload) : $payload;
+    }
+
     protected function providerLabel(): string
     {
         return 'Graph';
+    }
+
+    public function messageHeaderBlock(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, string $mailbox): string
+    {
+        $response = $this->requestRaw('GET', $endpoint.'/$value', ['stream' => true, 'http_errors' => false,
+            'decode_content' => false, 'headers' => ['Accept' => 'message/rfc822', 'Accept-Encoding' => 'identity'],
+            'timeout' => 20, 'read_timeout' => 20, 'connect_timeout' => 5], $mailbox, retry: false);
+        $source = $response->getBody();
+        $deadline = hrtime(true) + 20_000_000_000;
+        try {
+            if ($response->getStatusCode() >= 400) {
+                $safeEndpoint = $this->redactedEndpoint($endpoint.'/$value');
+                $error = new RequestException('Graph MIME header read failed.', new Request('GET', $safeEndpoint),
+                    new Response($response->getStatusCode(), ['Retry-After' => $response->getHeaderLine('Retry-After')]));
+                $this->throwMappedException($error, $mailbox, $this->mailboxKey($mailbox), $safeEndpoint, 1);
+            }
+            $this->assertIdentityResponse($response);
+            $declared = $this->responseLength($response);
+            if ($response->getStatusCode() !== 200) {
+                throw new ApiRequestException('Graph did not return the selected MIME content.', status: $response->getStatusCode());
+            }
+            $bytes = '';
+            while (true) {
+                if ($budget->remaining() === 0 || hrtime(true) >= $deadline) {
+                    throw new ResponseLimitExceededException('Graph MIME headers exceeded the read budget.');
+                }
+                $part = $source->read(min(8192, $budget->remaining()));
+                if ($part === '') {
+                    throw new MailboxException('Graph returned unfinished MIME headers.');
+                }
+                $budget->consume(strlen($part));
+                $bytes .= $part;
+                if ($declared !== null && strlen($bytes) > $declared) {
+                    throw new MailboxException('Graph returned inconsistent MIME response bytes.');
+                }
+                $end = strpos($bytes, "\r\n\r\n");
+                if ($end !== false) {
+                    return substr($bytes, 0, $end);
+                }
+            }
+        } catch (MailboxException $exception) {
+            throw $exception;
+        } catch (\Throwable) {
+            throw new ApiRequestException('Graph MIME headers could not be read completely.');
+        } finally {
+            $source->close();
+        }
+    }
+
+    public function uploadFileRange(GraphUploadSession $session, int $start, StreamInterface $range, int $length): ProviderWriteResponse
+    {
+        return $this->uploadFileRangeBudgeted($session, $start, $range, $length);
+    }
+
+    public function uploadFileRangeBudgeted(GraphUploadSession $session, int $start, StreamInterface $range, int $length, ?ResponseBudget $budget = null): ProviderWriteResponse
+    {
+        if ($this->grantAuthorization === null || $session->context->driver !== 'ms-graph') {
+            throw new UnsupportedCapabilityException('Outlook uploads require an explicit captured Graph authorization.');
+        }
+        $this->grantAuthorization->assertActive($session->context);
+        $target = $session->uploadUrl();
+        if ($session->expiresAt <= new DateTimeImmutable || $start < 0 || $length < 1 || $length >= 4_000_000
+            || $length > $session->byteLength - $start || ! $range->isReadable() || $range->getSize() !== $length) {
+            throw new \InvalidArgumentException('The Outlook upload range or session is unusable.');
+        }
+
+        return $this->exchangeOnce('PUT', $target, [
+            'body' => $range, 'headers' => ['Content-Type' => 'application/octet-stream', 'Content-Length' => (string) $length,
+                'Content-Range' => 'bytes '.$start.'-'.($start + $length - 1).'/'.$session->byteLength],
+        ], $this->mailboxKey($session->context->mailbox), 65_536, authenticated: false,
+            beforeRequest: fn () => $this->grantAuthorization->assertActive($session->context), budget: $budget);
+    }
+
+    public function createBasicSubscription(GrantContext $context, GraphSubscriptionConfiguration $configuration, DateTimeImmutable $expiresAt): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($context);
+        $this->assertSubscriptionExpiry($expiresAt);
+
+        return $this->exchangeOnce('POST', $this->resolveApiTarget('subscriptions'), ['json' => [
+            'resource' => $configuration->resource($context),
+            'notificationUrl' => $configuration->notificationUrl,
+            'lifecycleNotificationUrl' => $configuration->lifecycleNotificationUrl,
+            'changeType' => 'created,updated,deleted',
+            'clientState' => $configuration->clientState(),
+            'includeResourceData' => false,
+            'expirationDateTime' => $expiresAt->format(DATE_ATOM),
+        ]], $this->mailboxKey($context->mailbox), 65_536);
+    }
+
+    public function inspectBasicSubscription(GrantContext $context, #[\SensitiveParameter] string $subscriptionId, ?ResponseBudget $budget = null): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($context);
+        if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._=-]{0,1023}\z/', $subscriptionId) !== 1) {
+            throw new \InvalidArgumentException('Graph subscription inspection requires a valid subscription identity.');
+        }
+        if ($budget !== null && $budget->remaining() < 1) {
+            throw new \InvalidArgumentException('Graph subscription inspection requires a remaining response budget.');
+        }
+
+        return $this->exchangeOnce('GET', $this->resolveApiTarget('subscriptions/'.rawurlencode($subscriptionId)), ['query' => null],
+            $this->mailboxKey($context->mailbox), min(65_536, $budget?->remaining() ?? 65_536),
+            beforeRequest: fn () => $this->assertSubscriptionContext($context), budget: $budget);
+    }
+
+    public function listBasicSubscriptions(GrantContext $context, ResponseBudget $budget, #[\SensitiveParameter] ?string $continuation = null): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($context);
+        if ($budget->remaining() < 1) {
+            throw new \InvalidArgumentException('Graph subscription lookup requires a remaining response budget.');
+        }
+        $target = $continuation === null ? $this->resolveApiTarget('subscriptions') : $this->continuationEndpoint($continuation, 'subscriptions');
+
+        return $this->exchangeOnce('GET', $target, ['query' => null], $this->mailboxKey($context->mailbox), $budget->remaining(),
+            beforeRequest: fn () => $this->assertSubscriptionContext($context), budget: $budget);
+    }
+
+    public function renewBasicSubscription(GraphSubscriptionRegistration $registration, DateTimeImmutable $expiresAt): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($registration->context);
+        if ($registration->lifecycle() !== 'active') {
+            throw new InvalidSyncStateException('An expired or removed Graph subscription cannot be renewed; reconcile and register again explicitly.');
+        }
+        $this->assertSubscriptionExpiry($expiresAt);
+
+        return $this->exchangeOnce('PATCH', $this->resolveApiTarget('subscriptions/'.rawurlencode($registration->subscriptionId)), [
+            'json' => ['expirationDateTime' => $expiresAt->format(DATE_ATOM)],
+        ], $this->mailboxKey($registration->context->mailbox), 65_536);
+    }
+
+    public function removeBasicSubscription(GraphSubscriptionRegistration $registration): ProviderWriteResponse
+    {
+        $this->assertSubscriptionContext($registration->context);
+
+        return $this->exchangeOnce('DELETE', $this->resolveApiTarget('subscriptions/'.rawurlencode($registration->subscriptionId)), [], $this->mailboxKey($registration->context->mailbox), 65_536);
+    }
+
+    private function assertSubscriptionContext(GrantContext $context): void
+    {
+        if ($this->grantAuthorization === null) {
+            throw new UnsupportedCapabilityException('Graph subscriptions require an explicit captured grant authorization.');
+        }
+        $this->grantAuthorization->assertActive($context);
+        if ($context->driver !== 'ms-graph') {
+            throw new UnsupportedCapabilityException('Graph subscriptions require a captured Microsoft Graph provider context.');
+        }
+    }
+
+    private function assertSubscriptionExpiry(DateTimeImmutable $expiresAt): void
+    {
+        $now = new DateTimeImmutable;
+        if ($expiresAt <= $now || $expiresAt > $now->modify('+10080 minutes')) {
+            throw new \InvalidArgumentException('A basic Outlook subscription expiry must be in the future and within seven days.');
+        }
+    }
+
+    private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
+    {
+        $target = $this->resolveApiTarget($endpoint, $mailbox);
+        $this->assertMailboxTarget($target, $mailbox);
+
+        return $target;
     }
 
     /**
@@ -53,17 +253,17 @@ class GraphClient
     protected function buildRequestOptions(array $options, string $mailboxKey): array
     {
         return array_merge($options, [
-            'headers' => array_merge($this->defaultHeaders(), $options['headers'] ?? []),
-        ]);
+            'headers' => array_merge($this->defaultHeaders($mailboxKey), $options['headers'] ?? []),
+        ], $this->grantAuthorization !== null ? ['auth' => null] : []);
     }
 
     /**
      * @return array<string, string>
      */
-    private function defaultHeaders(): array
+    private function defaultHeaders(string $mailboxKey): array
     {
         $headers = [
-            'Authorization' => 'Bearer '.$this->tokenManager->getToken(),
+            'Authorization' => 'Bearer '.($this->grantAuthorization?->accessToken($mailboxKey) ?? $this->tokenManager->getToken()),
             'Accept' => 'application/json',
         ];
 
@@ -116,7 +316,7 @@ class GraphClient
         int $durationMs,
         bool &$reauthAttempted,
     ): bool {
-        if ($reauthAttempted) {
+        if ($reauthAttempted || $this->grantAuthorization !== null) {
             return false;
         }
 

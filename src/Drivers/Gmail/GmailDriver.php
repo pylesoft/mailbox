@@ -4,16 +4,21 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\Gmail;
 
+use GuzzleHttp\Client;
 use Illuminate\Support\Facades\Event;
+use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxResource;
+use Pyle\Mailbox\Contracts\SupportsGrantMailbox;
 use Pyle\Mailbox\Drivers\Gmail\Contracts\SupportsRawClient;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Events\ConnectionTestCompleted;
+use Pyle\Mailbox\Support\GrantAuthorization;
 
-class GmailDriver implements MailboxDriver, SupportsRawClient
+class GmailDriver implements MailboxDriver, SupportsGrantMailbox, SupportsRawClient
 {
     private GmailTokenManager $tokenManager;
 
@@ -40,6 +45,14 @@ class GmailDriver implements MailboxDriver, SupportsRawClient
         return new GmailMailboxResource($this->client, $this->deltaSync, $emailAddress);
     }
 
+    public function forGrant(GrantContext $context, GrantTokenProvider $tokens, ?Client $httpClient = null): MailboxResource
+    {
+        $config = array_merge((array) config('mailbox'), $this->config, ['queue_retry_strategy' => 'sleep']);
+        $client = new GmailClient($config, $this->tokenManager, $this->rateLimiter, $httpClient, new GrantAuthorization($context, $tokens));
+
+        return new GmailMailboxResource($client, new GmailDeltaSync($client), $context->mailbox, $context, grantGuard: $tokens);
+    }
+
     public function testConnection(?string $emailAddress = null): ConnectionTestResult
     {
         $start = microtime(true);
@@ -61,7 +74,7 @@ class GmailDriver implements MailboxDriver, SupportsRawClient
                 success: true,
                 error: null,
                 latencyMs: $latency,
-                authenticatedAs: (string) ($this->config['service_account_json_path'] ?? $this->config['service_account_json'] ?? null),
+                authenticatedAs: $mailbox,
                 accessibleMailboxes: [(string) $mailbox],
             );
         } catch (\Throwable $e) {

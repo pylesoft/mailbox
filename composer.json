@@ -38,7 +38,10 @@
     "illuminate/support": "^12.0||^13.0",
     "illuminate/http": "^12.0||^13.0",
     "guzzlehttp/guzzle": "^7.0",
-    "psr/http-message": "^2.0"
+    "psr/http-message": "^2.0",
+    "zbateson/mail-mime-parser": "^4.0.8",
+    "symfony/mime": "^7.4.22 || ^8.1.10",
+    "egulias/email-validator": "^4.0.4"
   },
   "require-dev": {
     "orchestra/testbench": "^10.0||^11.0",
@@ -49,6 +52,9 @@
     "pestphp/pest-plugin-arch": "^3.0||5.x-dev",
     "larastan/larastan": "^3.0",
     "laravel/pint": "^1.20"
+  },
+  "conflict": {
+    "php-di/php-di": "<6.3.0"
   },
   "scripts": {
     "test": "pest",

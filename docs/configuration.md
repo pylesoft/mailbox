@@ -10,11 +10,55 @@ After publishing the config file with `php artisan vendor:publish --tag=mailbox-
 php artisan vendor:publish --tag=mailbox-config
 ```
 
-This copies the package's config file to `config/mailbox.php`. Migrations are loaded automatically by the package, and you can still publish stubs separately:
+This copies the package's config file to `config/mailbox.php`. Migrations are loaded automatically while `mailbox.persistence.enabled` is `true`, and you can still publish stubs separately:
 
 ```bash
 php artisan vendor:publish --tag=mailbox-stubs
 ```
+
+## Using Your Own Persistence
+
+If your application stores its own connections and grants, you may disable package migration registration before the application boots:
+
+```env
+MAILBOX_PERSISTENCE_ENABLED=false
+```
+
+This sets `mailbox.persistence.enabled` to `false`. Core provider reads through [explicit grants](authentication/user-oauth.md#reading-with-an-explicit-grant) then work without package tables. The default remains `true` for existing Eloquent integrations. Package model helpers and persistence commands still require package tables. Keep the legacy OAuth routes disabled and use host-owned enrollment endpoints.
+
+### Storing Selected Grants With Eloquent
+
+If you use the package's `MailboxConnection` models, you may keep `mailbox.persistence.enabled` enabled and use `Pyle\Mailbox\Support\EloquentGrantStore` as your `GrantStore`. Apply the package's additive migrations through your application's normal migration process. The adapter uses Laravel's default database connection and encryption key; no adapter binding or model query runs during package boot.
+
+After your application authorizes enrollment, select a grant and a fresh lifecycle generation on that connection:
+
+```php
+use Illuminate\Support\Str;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\Support\EloquentGrantStore;
+
+$connection->update([
+    'selected_grant_id' => (string) Str::uuid(),
+    'lifecycle_generation' => (string) Str::uuid(),
+]);
+
+$context = new GrantContext(
+    (string) $connection->getKey(),
+    $connection->selected_grant_id,
+    $connection->lifecycle_generation,
+    $connection->driver,
+    $authorizedMailbox,
+);
+$grants = new EloquentGrantStore;
+```
+
+Pass this store to the [selected-grant enrollment and refresh services](authentication/user-oauth.md#enrolling-gmail-with-host-owned-storage). Your host still supplies its authorization guards, target-mailbox permissions, atomic OAuth state store and shared refresh lock. The adapter does not select credentials by email or provider subject, infer legacy ownership, or replace the existing browser controllers. Connections to the same external account retain separate records, and changing the permitted mailbox target does not create another grant.
+
+The connection ID must be the canonical string form of the package's integer primary key: `1` is accepted; `01` is a distinct SDK identity and is rejected by this adapter. Applications with opaque connection IDs or their own models should implement `GrantStore` directly. Grant IDs, generations and verified identity fields are compared as exact strings even when the database uses a case-insensitive collation.
+
+On reconnect or disconnect, your application must atomically advance the connection's generation and update or clear its selected grant. Never recycle a generation. Disabled or soft-deleted connections and revoked grants cannot provide credentials. Ordinary refresh retains the generation and advances the revision; the adapter checks ownership, generation and the expected identity/revision inside a transaction and in the credential write. The current generation's verified identity, including Microsoft's `object_id`, cannot change through replacement. Email and display metadata may change. This protects against stale commits even after the shared refresh-lock lease expires. It does not replace the [shared lock required before a provider refresh exchange](authentication/user-oauth.md#refreshing-host-owned-gmail-grants).
+
+Tokens, nonce fingerprints and revision history are encrypted and excluded from model JSON/debug output. This intentionally removes token values from legacy callback/model JSON too; trusted code can still read model attributes directly. Existing OAuth rows remain unselected; use the [explicit reconnect upgrade](upgrade-guide.md#legacy-oauth-records-and-reconnect) when verified ownership evidence is missing. The migration does not bind, merge or delete them. Keep revoked and superseded grant rows: deleting them also deletes the evidence needed to reject reused revisions. The hidden `LONGTEXT` history retains a SHA-256 fingerprint for each accepted revision and grows for the lifetime of the grant. It is read only for replacement, not ordinary grant loads. Plan capacity for that retained history; use a host-owned `GrantStore` if your volume requires a different durable revision ledger.
 
 ## Minimal `.env` Examples
 
@@ -287,9 +331,9 @@ Mailbox caches OAuth tokens to avoid requesting a new token on every API call. T
 
 ## OAuth
 
-Mailbox includes optional OAuth routes for user-delegated authentication flows. These are disabled by default. When enabled, Mailbox registers redirect and callback routes for both Microsoft Graph and Gmail.
+Mailbox retains optional legacy OAuth route names for compatibility. These routes no longer enroll credentials: initiation returns a setup error, and old callbacks return a safe error requiring reconnect. Use the host-owned [Gmail](authentication/user-oauth.md#enrolling-gmail-with-host-owned-storage) or [Microsoft](authentication/user-oauth.md#enrolling-and-refreshing-microsoft-with-host-owned-storage) services and keep these routes disabled. The OAuth client, scope and return-policy settings below also configure those services.
 
-### Enabling OAuth
+### Legacy Route and Enrollment Settings
 
 ```php
 'oauth' => [
@@ -304,11 +348,11 @@ Mailbox includes optional OAuth routes for user-delegated authentication flows. 
 
 | Key | Env | Default | Description |
 |---|---|---|---|
-| `oauth.enabled` | `MAILBOX_OAUTH_ENABLED` | `false` | Set to `true` to register the OAuth redirect and callback routes. When disabled, no routes are loaded. |
+| `oauth.enabled` | `MAILBOX_OAUTH_ENABLED` | `false` | Registers legacy route names when enabled. These routes now fail enrollment with a setup/reconnect error; keep disabled for host-owned endpoints. |
 | `oauth.route_prefix` | `MAILBOX_OAUTH_ROUTE_PREFIX` | `mailbox/oauth` | URL prefix for the OAuth routes. With the default, routes are registered at `/mailbox/oauth/ms-graph/redirect`, `/mailbox/oauth/ms-graph/callback`, etc. |
 | `oauth.route_middleware` | `MAILBOX_OAUTH_ROUTE_MIDDLEWARE` | `web` | Comma-separated list of middleware applied to the OAuth routes. Parsed from the env var as a comma-delimited string. |
-| `oauth.state_ttl_seconds` | -- | `600` | How long (in seconds) the OAuth state parameter remains valid in cache. The default of 10 minutes gives users plenty of time to complete the consent flow. |
-| `oauth.default_return_url` | -- | `/` | Where to redirect the user after a successful OAuth callback when no `return_to` parameter was provided on the initial redirect. |
+| `oauth.state_ttl_seconds` | -- | `600` | Lifetime of state created by the explicit enrollment services. The host adapter must expire and atomically consume it. |
+| `oauth.default_return_url` | -- | `/` | Fallback trusted return URL for explicit enrollment results and historical callback error context. |
 | `oauth.allowed_return_hosts` | `MAILBOX_OAUTH_ALLOWED_RETURN_HOSTS` | Derived from `APP_URL` | Comma-separated list of hostnames allowed as `return_to` redirect targets. Prevents open-redirect attacks by restricting post-OAuth redirects to trusted hosts. Defaults to the host parsed from your `APP_URL`. |
 
 ### Microsoft Graph OAuth
@@ -318,7 +362,7 @@ Mailbox includes optional OAuth routes for user-delegated authentication flows. 
     'ms_graph' => [
         'redirect_uri' => env('MAILBOX_OAUTH_MS_GRAPH_REDIRECT_URI'),
         'scopes'       => [
-            'openid', 'profile', 'email', 'offline_access',
+            'openid', 'profile', 'email', 'offline_access', 'User.Read',
             'Mail.ReadWrite',
         ],
     ],
@@ -328,7 +372,7 @@ Mailbox includes optional OAuth routes for user-delegated authentication flows. 
 | Key | Env | Default | Description |
 |---|---|---|---|
 | `oauth.ms_graph.redirect_uri` | `MAILBOX_OAUTH_MS_GRAPH_REDIRECT_URI` | `null` | An explicit override for the OAuth callback URL. When `null`, Mailbox generates the URL from the named route `mailbox.oauth.ms-graph.callback`. Set this when your app is behind a reverse proxy or load balancer that changes the public URL. |
-| `oauth.ms_graph.scopes` | -- | `openid`, `profile`, `email`, `offline_access`, `Mail.ReadWrite` | The delegated permission scopes requested during the OAuth consent flow. The defaults cover user identification and full mailbox read/write access. |
+| `oauth.ms_graph.scopes` | -- | `openid`, `profile`, `email`, `offline_access`, `User.Read`, `Mail.ReadWrite` | The delegated permission scopes requested during enrollment, including the Graph identity check. Actual consent and mailbox access remain prerequisites. |
 
 ### Gmail OAuth
 
@@ -362,6 +406,9 @@ Here is every environment variable Mailbox reads, collected in one place:
 ```env
 # Driver
 MAILBOX_DRIVER=ms-graph
+
+# Package migrations (disable when your host owns persistence)
+MAILBOX_PERSISTENCE_ENABLED=true
 
 # Microsoft Graph credentials
 MS365_TENANT_ID=

@@ -5,8 +5,8 @@ declare(strict_types=1);
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Storage;
 use Psr\Http\Message\StreamInterface;
-use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphAttachmentResource;
+use Pyle\Mailbox\Tests\Support\FakeGraphClient;
 
 it('downloads and dedups attachments', function (): void {
     Storage::fake('local');
@@ -14,7 +14,7 @@ it('downloads and dedups attachments', function (): void {
     config()->set('mailbox.attachment_disk', 'local');
     config()->set('mailbox.attachment_path', 'mailbox-attachments');
 
-    $client = new class extends GraphClient
+    $client = new class extends FakeGraphClient
     {
         /** @var array<int, string> */
         public array $streams = [];
@@ -62,7 +62,7 @@ it('writes a hash-suffixed path when existing path has different content', funct
     config()->set('mailbox.attachment_disk', 'local');
     config()->set('mailbox.attachment_path', 'mailbox-attachments');
 
-    $client = new class extends GraphClient
+    $client = new class extends FakeGraphClient
     {
         private int $calls = 0;
 
@@ -75,7 +75,7 @@ it('writes a hash-suffixed path when existing path has different content', funct
         {
             $this->calls++;
 
-            $payload = $this->calls === 1 ? 'first-metadata' : 'second-metadata';
+            $payload = $this->calls === 1 ? 'first-content' : 'second-content';
 
             return [
                 'id' => 'att1',
@@ -111,14 +111,22 @@ it('writes a hash-suffixed path when existing path has different content', funct
     Storage::disk('local')->assertExists($second->path);
 });
 
-it('streams file attachment bytes without reading contentBytes', function (): void {
-    $client = new class extends GraphClient
+it('streams validated file attachment bytes without reading contentBytes', function (): void {
+    $client = new class extends FakeGraphClient
     {
         public function __construct() {}
 
         public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
-            throw new RuntimeException('Metadata must not be requested while streaming.');
+            expect($query['$select'])->not->toContain('contentBytes');
+
+            return [
+                '@odata.type' => '#microsoft.graph.fileAttachment',
+                'id' => 'att1',
+                'name' => 'file.bin',
+                'size' => 14,
+                'contentBytes' => 'must-not-be-used',
+            ];
         }
 
         public function stream(string $endpoint, ?string $mailbox = null): StreamInterface
@@ -135,7 +143,7 @@ it('streams file attachment bytes without reading contentBytes', function (): vo
 });
 
 it('streams item attachments as raw MIME content', function (): void {
-    $client = new class extends GraphClient
+    $client = new class extends FakeGraphClient
     {
         public function __construct() {}
 

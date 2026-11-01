@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMessageResource;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Tests\Support\FakeGraphClient;
 
 it('performs message read and move operations', function (): void {
     $client = new class extends GraphClient
@@ -20,7 +21,7 @@ it('performs message read and move operations', function (): void {
 
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return msgraphMessageFixture();
         }
@@ -109,7 +110,7 @@ it('returns attachment metadata collection', function (): void {
 });
 
 it('requests attachment metadata without content bytes', function (): void {
-    $client = new class extends GraphClient
+    $client = new class extends FakeGraphClient
     {
         /** @var array<int, array{endpoint:string,query:array<string,mixed>}> */
         public array $requests = [];
