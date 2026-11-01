@@ -16,6 +16,7 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\SupportsConversationRead;
+use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -26,6 +27,8 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
+use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
@@ -656,6 +659,58 @@ function gmailConversationMessage(string $id, string $body = 'Context', string $
         'payload' => ['mimeType' => 'text/plain', 'body' => ['data' => rtrim(strtr(base64_encode($body), '+/', '-_'), '='), 'size' => strlen($body)]],
     ];
 }
+
+it('reads Graph selection metadata without parsing content while ordinary message reads remain strict', function (): void {
+    $payload = [...graphConversationMessage('metadata-id'), 'isDraft' => false,
+        'sender' => ['emailAddress' => ['address' => 'invalid-sender']],
+        'internetMessageHeaders' => [['name' => 'Message-ID', 'value' => 42]]];
+    $history = [];
+    $resource = conversationMailbox('ms-graph', [$payload, $payload], $history)->message('metadata-id');
+
+    $metadata = $resource->metadata();
+
+    expect($resource)->toBeInstanceOf(SupportsMessageMetadataRead::class);
+    expect($metadata->id)->toBe('metadata-id');
+    expect($metadata->conversationId)->toBe('thread');
+    expect($metadata->parentFolderId)->toBe('FolderA');
+    expect($metadata->receivedAt?->format('Y-m-d'))->toBe('2010-01-01');
+    expect($metadata->raw)->toMatchArray(['id' => 'metadata-id', 'isDraft' => false])->toHaveCount(5);
+    expect($metadata->body)->toBeNull();
+    expect($metadata->sender)->toBeNull();
+    parse_str($history[0]['request']->getUri()->getQuery(), $query);
+    expect($query)->toBe(['$select' => 'id,conversationId,parentFolderId,isDraft,receivedDateTime,sentDateTime']);
+    expect($history[0]['request']->getUri()->getPath())->toEndWith('/messages/metadata-id');
+    expect(fn () => $resource->get())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(2);
+});
+
+it('rejects missing or malformed Graph selection metadata without normalizing away its identity facts', function (array $invalid): void {
+    $payload = [...graphConversationMessage('metadata-id'), 'isDraft' => false, ...$invalid];
+    $history = [];
+    $resource = conversationMailbox('ms-graph', [$payload], $history)->message('metadata-id');
+
+    expect(fn () => $resource->metadata())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+})->with([
+    'wrong identity' => [['id' => 'another-message']],
+    'numeric identity' => [['id' => 42]],
+    'missing conversation' => [['conversationId' => null]],
+    'missing folder' => [['parentFolderId' => null]],
+    'non-string folder' => [['parentFolderId' => 42]],
+    'missing draft flag' => [['isDraft' => null]],
+    'non-boolean draft flag' => [['isDraft' => 'false']],
+    'malformed activity' => [['receivedDateTime' => 'not-a-date']],
+    'non-string activity despite valid sent time' => [['receivedDateTime' => 42, 'sentDateTime' => '2026-10-01T00:00:00Z']],
+    'missing activity' => [['receivedDateTime' => null]],
+]);
+
+it('bounds Graph selection metadata response bytes before decoding unexpected payloads', function (): void {
+    $history = [];
+    $resource = conversationMailbox('ms-graph', [new Response(200, [], str_repeat(' ', 8_388_609))], $history)->message('metadata-id');
+
+    expect(fn () => $resource->metadata())->toThrow(ResponseLimitExceededException::class);
+    expect($history)->toHaveCount(1);
+});
 
 /**
  * @param  list<array<string, mixed>|Response|Throwable>  $responses
