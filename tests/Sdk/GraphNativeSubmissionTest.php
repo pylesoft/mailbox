@@ -32,6 +32,35 @@ use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
+it('verifies native sends and sent copies after provider display name resolution', function (ReplyForwardOperation $operation): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $draft['from']['emailAddress']['name'] = 'Provider sender label';
+    $draft['toRecipients'][0]['emailAddress']['name'] = 'chosen@example.com';
+    $draft['conversationId'] = $operation === ReplyForwardOperation::Forward ? 'forward-conversation' : 'source-conversation';
+    $sent = array_replace($draft, ['isDraft' => false, 'sentDateTime' => '2026-11-02T19:00:00Z']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(202),
+        new Response(200, [], json_encode($sent, JSON_THROW_ON_ERROR)),
+    ], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext($operation, $base->context->conversation, 'source=')]);
+
+    $preparation = $mailbox->prepareSubmission($message);
+    $result = $mailbox->submitPrepared($preparation, $message);
+    $evidence = $mailbox->inspectSubmission($preparation, $message);
+
+    expect($result->outcome)->toBe(SubmissionOutcome::Accepted);
+    expect($evidence->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved);
+    expect(array_map(fn (array $entry): string => $entry['request']->getMethod(), $history))
+        ->toBe(['GET', 'POST', 'GET', 'PATCH', 'GET', 'POST', 'GET']);
+})->with([ReplyForwardOperation::Reply, ReplyForwardOperation::Forward]);
+
 it('prepares an explicit native Graph reply without inheriting recipients or changing the source', function (): void {
     $history = [];
     $draft = nativeGraphDraft();

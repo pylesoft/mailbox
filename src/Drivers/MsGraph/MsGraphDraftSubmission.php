@@ -742,7 +742,7 @@ final readonly class MsGraphDraftSubmission
         }
     }
 
-    /** @return list<array{name: string, address: string}>|null */
+    /** @return list<string>|null */
     private static function addresses(mixed $recipients): ?array
     {
         if (! is_array($recipients) || ! array_is_list($recipients)) {
@@ -760,7 +760,7 @@ final readonly class MsGraphDraftSubmission
             if ($separator === false) {
                 return null;
             }
-            $addresses[] = ['name' => $email['name'] ?? '', 'address' => substr($email['address'], 0, $separator + 1).strtolower(substr($email['address'], $separator + 1))];
+            $addresses[] = substr($email['address'], 0, $separator + 1).strtolower(substr($email['address'], $separator + 1));
         }
         sort($addresses);
 

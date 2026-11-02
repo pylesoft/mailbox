@@ -136,6 +136,8 @@ it('stops before send when the observed Graph draft differs from the explicit in
     'changed content' => [['body' => ['contentType' => 'text', 'content' => 'Different body']]],
     'malformed content' => [['body' => ['contentType' => 'text', 'content' => 1]]],
     'changed sender' => [['from' => ['emailAddress' => ['name' => 'Sender', 'address' => 'another@example.com']]]],
+    'malformed sender label' => [['from' => ['emailAddress' => ['name' => 42, 'address' => 'sender@example.com']]]],
+    'malformed recipient label' => [['toRecipients' => [['emailAddress' => ['name' => 42, 'address' => 'to@example.com']]]]],
     'removed recipient' => [['toRecipients' => []]],
     'changed Cc' => [['ccRecipients' => []]],
     'inherited Bcc' => [['bccRecipients' => [['emailAddress' => ['name' => 'Unexpected', 'address' => 'unexpected@example.com']]]]],
