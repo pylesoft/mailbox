@@ -9,7 +9,7 @@ Use the immutable candidate and local check identities in the [compatibility rec
 | Profile | Account and selected authority | Concrete missing prerequisites | Live owner |
 | --- | --- | --- | --- |
 | G1 | Personal Gmail, delegated | Designated account, OAuth client/consent, permitted mail scopes and authorized sender/recipients | 26 |
-| G2 | Workspace, user OAuth; designated sandbox user selected | Finish External testing client/consent, actual enrollment/refresh and authorized send recipients/operations | 26 |
+| G2 | Workspace, user OAuth; designated sandbox user enrolled | Content/import/file/push and identity-isolation cases, authorized send recipients/operations | 26 |
 | G3 | Workspace, service-account delegation; separate sandbox mailbox selected | Approved read/send domain delegation and signer exist; trusted keyless runtime identity/rotation, actual enrollment and authorized send recipients/operations remain | 26 |
 | M1 | Microsoft 365 own mailbox, delegated | Designated tenant/account, app registration/consent, mail scopes and authorized sender/recipients | 27 |
 | M2 | Microsoft 365 own mailbox, application | Designated tenant/mailbox, administrator consent, effective scoped read/write/send permission and authorized recipients | 27 |
@@ -26,7 +26,9 @@ All G1–G3 profiles remain required. G2 uses the designated user's own mailbox 
 
 The sandbox project has Gmail and Pub/Sub APIs enabled, an External OAuth app in testing setup, and approved `gmail.readonly` / `gmail.send` domain delegation. Service-account key creation remains prohibited; no key or policy exception was created. SDK `d392e4c` adds guarded keyless `signJwt`/token exchange with fixture coverage; the configured legacy service-account API remains intact. Production hosting is Laravel Cloud, and a trusted runtime identity with automatic short-lived credential rotation remains unresolved. A local expiring credential file is only the host acquisition boundary, not production identity proof.
 
-No Gmail live acceptance row is closed by this setup. Pub/Sub topic/subscription/principal/callback configuration, mailbox enrollment/read/refresh evidence and exact authorized send/recovery operations remain prerequisites. The existing Microsoft evidence below is preserved at its recorded source identities.
+G2 has limited live evidence through host `0f87b68` and installed SDK `d392e4c`: consent/enrollment verified the Google subject and primary mailbox address; a bounded SDK read returned 21 labels; actual refresh under the host's shared lock preserved identity, advanced the stored grant revision, and passed a second bounded label read. The Connector version and fixed cutoff stayed unchanged, and manual import remained unstarted. No messages were imported or sent. These results do not establish content synchronization, files, send/delivery, push or cross-account isolation.
+
+Pub/Sub topic/subscription/principal/callback configuration, G3 runtime identity and enrollment, G1 designation and exact authorized send/recovery operations remain prerequisites. The existing Microsoft evidence below is preserved at its recorded source identities.
 
 ### Limited M6 evidence — November 2, 2026
 
@@ -61,7 +63,7 @@ Gmail replies use the selected thread and RFC reply headers; forwards send the c
 | Profile | Authorization/token renewal and identity isolation | Initial/delta and complete scoped content | Ordinary text/HTML send | Reply/context | Forward/context | Small/inline files | One 10 MiB file | 20 MiB aggregate files |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | G1 | Blocked G1 | Blocked G1 | Blocked G1 | Blocked G1 | Blocked G1 | Blocked G1 | Blocked G1 | Blocked G1 |
-| G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 |
+| G2 | Partial: enrollment, actual guarded refresh and post-refresh label read; isolation open | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 | Blocked G2 |
 | G3 | Blocked G3 | Blocked G3 | Blocked G3 | Blocked G3 | Blocked G3 | Blocked G3 | Blocked G3 | Blocked G3 |
 | M1 | Blocked M1 | Blocked M1 | Blocked M1 | Blocked M1 | Blocked M1 | Blocked M1 | Blocked M1 | Blocked M1 |
 | M2 | Blocked M2 | Blocked M2 | Blocked M2 | Blocked M2 | Blocked M2 | Blocked M2 | Blocked M2 | Blocked M2 |
