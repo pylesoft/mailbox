@@ -221,7 +221,14 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
             }
 
             $messages = collect($response['value'])
-                ->map(fn (mixed $item): MessageDto => MessageDto::fromMsGraph(is_array($item) ? $item : []));
+                ->map(function (mixed $item): MessageDto {
+                    if (! is_array($item) || ((in_array('id', $this->selectFields, true) || array_key_exists('id', $item))
+                        && (! is_string($item['id'] ?? null) || trim($item['id']) === ''))) {
+                        throw new ApiRequestException('The provider returned a malformed message collection item.');
+                    }
+
+                    return MessageDto::fromMsGraph($item);
+                });
 
             if ($applyClientFiltersPerPage) {
                 $messages = $this->applyClientFilters($messages);

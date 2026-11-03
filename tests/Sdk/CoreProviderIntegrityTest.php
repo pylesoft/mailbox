@@ -123,6 +123,73 @@ it('preserves eager message and folder continuation queries with supplied client
     expect((string) $history[1]['request']->getUri())->toBe($next);
 })->with(['messages', 'folders']);
 
+it('rejects malformed eager Graph message rows for collection result methods', function (mixed $row, string $method): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([new Response(200, [], json_encode(['value' => [$row]], JSON_THROW_ON_ERROR))], $history);
+
+    expect(fn () => $mailbox->messages()->{$method}())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+})->with([null, 12, 'broken'])->with(['get', 'count', 'first']);
+
+it('rejects malformed selected or supplied eager Graph message identities', function (mixed $id, array $fields): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([new Response(200, [], json_encode(['value' => [['id' => $id, 'subject' => 'Projected subject']]], JSON_THROW_ON_ERROR))], $history);
+
+    expect(fn () => $mailbox->messages()->select($fields)->get())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+})->with([null, 12, '', '   '])->with([[['id', 'subject']], [['subject']]]);
+
+it('rejects an absent selected eager Graph message identity', function (): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([new Response(200, [], '{"value":[{"subject":"Projected subject"}]}')], $history);
+
+    expect(fn () => $mailbox->messages()->select(['id', 'subject'])->get())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+});
+
+it('preserves eager Graph subject projections without requiring an unselected identity', function (): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([new Response(200, [], '{"value":[{"subject":"Projected subject"}]}')], $history);
+
+    $message = $mailbox->messages()->select(['subject'])->get()->sole();
+
+    expect($message->subject)->toBe('Projected subject')->and($message->id)->toBe('');
+    parse_str($history[0]['request']->getUri()->getQuery(), $query);
+    expect($query['$select'])->toBe('subject');
+});
+
+it('rejects native list rows in eager Graph subject projections', function (string $row): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([new Response(200, [], '{"value":['.$row.']}')], $history);
+
+    expect(fn () => $mailbox->messages()->select(['subject'])->get())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+})->with(['[]', '["broken"]']);
+
+it('preserves native empty objects in eager Graph partial projections', function (): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([new Response(200, [], '{"value":[{}]}')], $history);
+
+    $message = $mailbox->messages()->select(['subject'])->get()->sole();
+
+    expect($message->subject)->toBe('')->and($message->id)->toBe('')->and($message->raw)->toBe([]);
+    expect($history)->toHaveCount(1);
+});
+
+it('rejects malformed eager Graph folder rows before returning folders or creating a path', function (mixed $row, string $operation): void {
+    $history = [];
+    $mailbox = coreIntegrityMailbox([
+        new Response(200, [], json_encode(['value' => [$row]], JSON_THROW_ON_ERROR)),
+        new Response(201, [], '{"id":"created","displayName":"Existing"}'),
+        new Response(200, [], '{"id":"created","displayName":"Existing"}'),
+    ], $history);
+
+    expect(fn () => $operation === 'get' ? $mailbox->folders()->get() : $mailbox->folders()->createPath('Existing'))
+        ->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+})->with([[null], [12], ['broken'], [['displayName' => 'Existing']], [['id' => null]], [['id' => 12]], [['id' => '']], [['id' => '   ']]])
+    ->with(['get', 'createPath']);
+
 /**
  * @param  list<mixed>  $responses
  * @param  array<int, mixed>  $history

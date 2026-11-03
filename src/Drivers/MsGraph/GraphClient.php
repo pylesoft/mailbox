@@ -87,9 +87,15 @@ class GraphClient
         }
         $payload = $this->decodeApiResponse($this->requestRaw('GET', $endpoint, $options, $mailbox), $endpoint, $mailbox, false);
 
-        if ($payload instanceof \stdClass && property_exists($payload, 'value')
-            && (! is_array($payload->value) || ! array_is_list($payload->value))) {
-            throw new MailboxException('The provider returned an invalid collection.');
+        if ($payload instanceof \stdClass && property_exists($payload, 'value')) {
+            if (! is_array($payload->value) || ! array_is_list($payload->value)) {
+                throw new MailboxException('The provider returned an invalid collection.');
+            }
+            foreach ($payload->value as $item) {
+                if (! $item instanceof \stdClass) {
+                    throw new MailboxException('The provider returned an invalid collection item.');
+                }
+            }
         }
 
         return $payload instanceof \stdClass ? ConversationPayload::array($payload) : $payload;

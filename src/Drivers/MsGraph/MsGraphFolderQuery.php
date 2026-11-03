@@ -148,7 +148,13 @@ class MsGraphFolderQuery implements FolderQueryBuilder
 
             $folders = $folders->concat(
                 collect($response['value'])
-                    ->map(fn (mixed $item): FolderDto => FolderDto::fromMsGraph(is_array($item) ? $item : []))
+                    ->map(function (mixed $item): FolderDto {
+                        if (! is_array($item) || ! is_string($item['id'] ?? null) || trim($item['id']) === '') {
+                            throw new ApiRequestException('The provider returned a malformed folder collection item.');
+                        }
+
+                        return FolderDto::fromMsGraph($item);
+                    })
                     ->values(),
             );
 
