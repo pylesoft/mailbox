@@ -171,8 +171,10 @@ final readonly class GmailServiceAccountTokenExchange
             return $data;
         } catch (GrantRefreshException $exception) {
             throw $exception;
-        } catch (Throwable) {
+        } catch (\JsonException) {
             throw new GrantRefreshException('Google '.$operation.' response is invalid.', false);
+        } catch (Throwable) {
+            throw new GrantRefreshException('Google '.$operation.' response could not be read.', true, 1);
         } finally {
             $stream->close();
         }

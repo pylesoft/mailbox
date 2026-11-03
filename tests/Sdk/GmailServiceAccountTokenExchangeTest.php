@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use GuzzleHttp\Promise\FulfilledPromise;
+use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -243,8 +246,12 @@ it('rejects bounded malformed successful provider responses', function (string $
     ]);
     $exchange = new GmailServiceAccountTokenExchange(gmailServiceAccountGuard());
 
-    expect(fn () => $exchange->exchange(gmailServiceAccountContext(), 'mailbox@sandbox.iam.gserviceaccount.com', ['gmail.scope'], fn (): string => 'runtime-token'))
-        ->toThrow(GrantRefreshException::class);
+    try {
+        $exchange->exchange(gmailServiceAccountContext(), 'mailbox@sandbox.iam.gserviceaccount.com', ['gmail.scope'], fn (): string => 'runtime-token');
+        test()->fail('Malformed provider credentials must not be accepted.');
+    } catch (GrantRefreshException $exception) {
+        expect($exception->retryable)->toBeFalse();
+    }
 
     Http::assertSentCount($phase === 'signing' ? 1 : 2);
 })->with([
@@ -285,6 +292,46 @@ it('wraps signing and exchange transport failures without retaining private exce
         expect($exception->getPrevious())->toBeNull();
         expect((string) $exception)->not->toContain('private-transport-error')->not->toContain('private-runtime-token');
     }
+})->with(['signing', 'exchange']);
+
+it('keeps interrupted successful token response streams retryable without advancing provider phases', function (string $phase): void {
+    Http::preventStrayRequests();
+    $closed = false;
+    $reads = 0;
+    $stream = new FnStream([
+        'getSize' => fn (): ?int => null,
+        'read' => function (int $length) use (&$reads): string {
+            if (++$reads === 1) {
+                return '{"private-provider-body":';
+            }
+            throw new RuntimeException('private-stream-error private-mailbox-token');
+        },
+        'close' => function () use (&$closed): void {
+            $closed = true;
+        },
+    ]);
+    Http::fake([
+        'https://iamcredentials.googleapis.com/*' => fn (Request $request) => $phase === 'signing'
+            ? new FulfilledPromise(new Response(200, [], $stream))
+            : Http::response(['signedJwt' => gmailServiceAccountSignedJwt($request['payload'])]),
+        'https://oauth2.googleapis.com/token' => new FulfilledPromise(new Response(200, [], $stream)),
+    ]);
+    $exchange = new GmailServiceAccountTokenExchange(gmailServiceAccountGuard());
+
+    try {
+        $exchange->exchange(gmailServiceAccountContext(), 'mailbox@sandbox.iam.gserviceaccount.com', ['gmail.scope'], fn (): string => 'private-runtime-token');
+        test()->fail('An interrupted response must not return credentials.');
+    } catch (GrantRefreshException $exception) {
+        expect($exception->retryable)->toBeTrue();
+        expect($exception->retryAfterSeconds)->toBe(1);
+        expect($exception->getPrevious())->toBeNull();
+        expect((string) $exception)->not->toContain('private-provider-body')->not->toContain('private-stream-error')
+            ->not->toContain('private-mailbox-token')->not->toContain('private-runtime-token');
+    }
+
+    expect($reads)->toBe(2);
+    expect($closed)->toBeTrue();
+    Http::assertSentCount($phase === 'signing' ? 1 : 2);
 })->with(['signing', 'exchange']);
 
 it('rejects different returned scopes without exposing access tokens through exception trace arguments', function (): void {
