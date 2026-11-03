@@ -59,6 +59,10 @@ The adapter rejects stale revisions, reused revisions, revoked grants, changed o
 
 `MailboxOAuthToken` now hides access tokens, refresh tokens, nonce fingerprints and revision history from JSON and debug output, including legacy callback-result JSON. This is an intentional security change. Trusted code may still read model attributes directly; applications must not depend on credential values in serialized model or callback results.
 
+`ChangePage` JSON and debug output now redact continuation and checkpoint positions. Keep the native DTO, its recovery properties or PHP serialization in trusted private storage when you need to resume synchronization. The redacted JSON representation is for presentation; it cannot restore private recovery state.
+
+Direct Microsoft Graph resources now require an `ms-graph` grant context before accessing tokens or making requests. Configured resources without an explicit context and independent custom drivers retain their existing contracts.
+
 ### Received Addresses and Headers
 
 Gmail message mapping now parses received addresses and decodes encoded names and subjects. For example, `"Doe, Jane" <jane@example.com>` produces one recipient named `Doe, Jane`, and `=?ISO-8859-1?Q?Andr=E9?=` becomes `André`. Quoted local parts, comments, groups, repeated recipient headers and Unicode addresses retain their mailbox values. Empty groups add no recipients. Graph's structured names and addresses remain separate, and its already decoded text is preserved.
@@ -66,6 +70,8 @@ Gmail message mapping now parses received addresses and decodes encoded names an
 The existing `MessageDto` and `EmailAddressDto` fields and resource interfaces remain unchanged. Recipient groups flatten into the existing recipient arrays; group names and comments remain available in the original `raw` payload. The singular `from` and `sender` fields cannot represent multiple mailboxes, so those values now fail explicitly instead of selecting or inventing an address.
 
 Built-in Graph message, query and eager delta reads use `GraphClient::getMessagePayload()` to validate native JSON collection types before converting them to arrays. Raw `get()` and `request()` retain their array results. If a custom `GraphClient` subclass overrides `get()` to intercept built-in typed message reads, update that interception for `getMessagePayload()` too. Existing custom-driver resource interfaces and raw-client mocks remain unchanged; provider contract tests should inject HTTP responses into the real client.
+
+Typed Graph collections now reject scalar, null and list-shaped entries before mapping. Folder entries require a nonempty string ID. Message queries validate IDs when selected or supplied, while a subject-only object projection may still omit the ID. The shared DTO factories keep their existing partial-input defaults.
 
 Malformed address structure, truncated delimiters or encoded words, invalid encoded bytes, unsupported header charsets, and malformed provider address/header collections throw `Pyle\Mailbox\Exceptions\MailboxException`. Missing optional fields still use the existing null or empty values. Received header text must contain valid UTF-8 bytes, with other supported charsets declared in encoded words. Parsing does not perform DNS or mailbox-deliverability checks, and the parser's token limits remain explicit failures. Body hydration and outbound serialization have separate implementation and acceptance gates.
 
