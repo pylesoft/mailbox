@@ -10,6 +10,7 @@ use GuzzleHttp\Psr7\Response;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\BatchRequest;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphDeltaCollector;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphDeltaSync;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
@@ -98,6 +99,67 @@ it('rejects malformed native Graph delta collections before completing a checkpo
     expect(fn () => $mailbox->folder('inbox')->delta())->toThrow(MailboxException::class)
         ->and($history)->toHaveCount(1);
 })->with(['{}', '{"0":{"id":"one"}}', 'null', '"invalid"']);
+
+it('rejects unusable eager Graph delta identities before returning progress', function (array $identity, bool $removed, string $progress): void {
+    $history = [];
+    $row = $removed ? [...$identity, '@removed' => (object) []] : $identity;
+    $endpoint = 'https://graph.microsoft.com/v1.0/users/same%40example.com/mailFolders/inbox/messages/delta';
+    $checkpoint = $endpoint.'?$deltatoken=retained';
+    $link = $progress === 'nextLink' ? '?$skiptoken=unconsumed' : '?$deltatoken=unusable';
+    $mailbox = coreIntegrityMailbox([
+        new Response(200, [], json_encode([
+            'value' => [(object) $row],
+            '@odata.'.$progress => $endpoint.$link,
+        ], JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode(['value' => [], '@odata.deltaLink' => $endpoint.'?$deltatoken=advanced'], JSON_THROW_ON_ERROR)),
+    ], $history);
+
+    expect(fn () => $mailbox->folder('inbox')->delta($checkpoint))->toThrow(ApiRequestException::class);
+
+    expect($history)->toHaveCount(1);
+    expect((string) $history[0]['request']->getUri())->toBe($checkpoint);
+})->with([
+    'missing ID' => [[]],
+    'null ID' => [['id' => null]],
+    'numeric ID' => [['id' => 12]],
+    'boolean ID' => [['id' => true]],
+    'empty ID' => [['id' => '']],
+    'blank ID' => [['id' => " \t"]],
+])->with([false, true])->with(['nextLink', 'deltaLink']);
+
+it('rejects non-array eager Graph delta rows from supplied clients', function (mixed $row): void {
+    $client = new class($row) extends GraphClient
+    {
+        public function __construct(private mixed $row)
+        {
+            parent::__construct([], new TokenManager([]), new RateLimiter([]));
+        }
+
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
+        {
+            return ['value' => [$this->row], '@odata.deltaLink' => '?$deltatoken=unusable'];
+        }
+    };
+
+    expect(fn () => (new MsGraphDeltaCollector($client))->collect('same@example.com', 'inbox', null))
+        ->toThrow(ApiRequestException::class);
+})->with([null, 'invalid']);
+
+it('preserves eager Graph delta messages with only an identity and minimal tombstones', function (): void {
+    $history = [];
+    $checkpoint = 'https://graph.microsoft.com/v1.0/users/same%40example.com/mailFolders/inbox/messages/delta?$deltatoken=done';
+    $mailbox = coreIntegrityMailbox([new Response(200, [], json_encode([
+        'value' => [['id' => 'created'], ['id' => 'deleted', '@removed' => (object) []]],
+        '@odata.deltaLink' => $checkpoint,
+    ], JSON_THROW_ON_ERROR))], $history);
+
+    $result = $mailbox->folder('inbox')->delta();
+
+    expect($result->created->sole()->id)->toBe('created');
+    expect($result->created->sole()->subject)->toBe('');
+    expect($result->deleted->all())->toBe(['deleted']);
+    expect($result->deltaLink)->toBe($checkpoint);
+});
 
 it('rejects native folder object envelopes before listing or creating folders', function (string $collection, string $operation): void {
     $history = [];

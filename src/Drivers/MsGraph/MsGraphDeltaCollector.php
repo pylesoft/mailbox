@@ -75,8 +75,8 @@ final class MsGraphDeltaCollector
         Collection $deleted,
     ): void {
         foreach ((array) ($response['value'] ?? []) as $item) {
-            if (! is_array($item)) {
-                continue;
+            if (! is_array($item) || ! is_string($item['id'] ?? null) || trim($item['id']) === '') {
+                throw new ApiRequestException('Graph returned a delta entry without a valid message ID.');
             }
 
             if (isset($item['@removed'])) {
