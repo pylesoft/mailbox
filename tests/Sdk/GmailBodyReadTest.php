@@ -13,6 +13,7 @@ use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Queue\Job;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
@@ -20,6 +21,45 @@ use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
+
+it('reads Gmail selection metadata once without hydrating or exposing supplied body content', function (): void {
+    $history = [];
+    $metadata = ['id' => 'message', 'threadId' => 'thread', 'labelIds' => ['INBOX'], 'internalDate' => '1793044800000'];
+    $resource = gmailBodyResource([$metadata + ['payload' => ['mimeType' => 'text/plain',
+        'body' => ['attachmentId' => 'external-body', 'size' => 12]]]], $history);
+    expect($resource)->toBeInstanceOf(SupportsMessageMetadataRead::class);
+
+    $message = $resource->metadata();
+
+    expect($message->raw)->toBe($metadata)
+        ->and($message->body)->toBeNull()
+        ->and($message->conversationId)->toBe('thread');
+    expect($history)->toHaveCount(1);
+    parse_str($history[0]['request']->getUri()->getQuery(), $query);
+    expect($query)->toBe(['format' => 'metadata', 'fields' => 'id,threadId,labelIds,internalDate']);
+});
+
+it('rejects incomplete Gmail selection metadata without hydrating bodies', function (array $changes): void {
+    $history = [];
+    $resource = gmailBodyResource([array_replace(['id' => 'message', 'threadId' => 'thread',
+        'labelIds' => ['INBOX'], 'internalDate' => '1793044800000'], $changes)], $history);
+
+    expect(fn () => $resource->metadata())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+})->with([
+    'wrong message' => [['id' => 'another']],
+    'missing thread' => [['threadId' => null]],
+    'invalid labels' => [['labelIds' => [12]]],
+    'missing activity' => [['internalDate' => null]],
+]);
+
+it('bounds Gmail selection metadata to one request on a transient provider failure', function (): void {
+    $history = [];
+    $resource = gmailBodyResource([new Response(503, [], '{}')], $history);
+
+    expect(fn () => $resource->metadata())->toThrow(MailboxException::class);
+    expect($history)->toHaveCount(1);
+});
 
 it('reads externalized Gmail text as body without advertising it as a file', function (): void {
     $history = [];

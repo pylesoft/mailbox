@@ -7,6 +7,7 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\AttachmentResource;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
@@ -18,7 +19,7 @@ use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ResponseBudget;
 
-class GmailMessageResource implements MessageResource
+class GmailMessageResource implements MessageResource, SupportsMessageMetadataRead
 {
     public function __construct(
         private readonly GmailClient $client,
@@ -31,6 +32,24 @@ class GmailMessageResource implements MessageResource
         $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($this->messageId, $limits);
 
         return MessageDto::fromGmail($payload);
+    }
+
+    public function metadata(): MessageDto
+    {
+        $payload = $this->client->getBoundedObject($this->messageEndpoint(), new ResponseBudget(8_388_608, 67_108_864),
+            ['format' => 'metadata', 'fields' => 'id,threadId,labelIds,internalDate'], $this->mailbox, retry: false);
+        if (($payload->id ?? null) !== $this->messageId || ! is_string($payload->threadId ?? null) || trim($payload->threadId) === ''
+            || ! is_array($payload->labelIds ?? null) || ! array_is_list($payload->labelIds) || ! is_numeric($payload->internalDate ?? null)) {
+            throw new MailboxException('Gmail returned missing or malformed message selection metadata.');
+        }
+        foreach ($payload->labelIds as $label) {
+            if (! is_string($label) || trim($label) === '') {
+                throw new MailboxException('Gmail returned malformed message selection labels.');
+            }
+        }
+
+        return MessageDto::fromGmail(array_intersect_key(ConversationPayload::array($payload),
+            array_flip(['id', 'threadId', 'labelIds', 'internalDate'])));
     }
 
     public function body(?BodyReadLimits $limits = null): BodyDto
