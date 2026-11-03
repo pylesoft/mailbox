@@ -53,7 +53,11 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         private readonly string $emailAddress,
         private readonly ?GrantContext $grantContext = null,
         private readonly ?GrantAccessGuard $grantGuard = null,
-    ) {}
+    ) {
+        if ($grantContext !== null && $grantContext->driver !== 'ms-graph') {
+            throw new \InvalidArgumentException('A Microsoft Graph mailbox resource requires a Microsoft Graph authorization context.');
+        }
+    }
 
     /** @return array{provider: string, mailbox: string} */
     public function __debugInfo(): array

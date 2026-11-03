@@ -10,7 +10,10 @@ use GuzzleHttp\Psr7\Response;
 use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Drivers\Gmail\GmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailTokenManager;
+use Pyle\Mailbox\Drivers\MsGraph\BatchRequest;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphDeltaSync;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphDriver;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\Drivers\MsGraph\TokenManager;
@@ -53,6 +56,23 @@ it('reads a message using an explicit grant without package persistence', functi
         ->and(array_map('realpath', app('migrator')->paths()))->not->toContain(realpath(__DIR__.'/../../database/migrations'))
         ->and(config('database.default'))->toBe('sdk-forbidden');
 });
+
+it('rejects non Microsoft authority at direct Graph entry points before token access or HTTP', function (string $driver, string $entry): void {
+    $history = [];
+    $http = grantReadHttp('ms-graph', [new Response(200, [], '{"id":"one"}')], $history);
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => 'google-token'],
+    ]);
+    $context = new GrantContext('connection', 'grant', '1', $driver, 'same@example.com');
+    $client = new GraphClient([], new TokenManager([]), new RateLimiter([]), $http, new GrantAuthorization($context, $tokens));
+
+    expect(fn () => ($entry === 'driver'
+        ? (new MsGraphDriver([]))->forGrant($context, $tokens, $http)
+        : new MsGraphMailboxResource($client, new BatchRequest($client, $context->mailbox), new MsGraphDeltaSync($client), $context->mailbox, $context, $tokens))
+        ->message('one')->get())->toThrow(InvalidArgumentException::class);
+    expect($tokens->tokenReads)->toBe(0);
+    expect($history)->toBe([]);
+})->with(['gmail', 'google-workspace'])->with(['driver', 'resource']);
 
 it('isolates grants for two host contexts accessing the same account', function (string $driver): void {
     $history = [];
