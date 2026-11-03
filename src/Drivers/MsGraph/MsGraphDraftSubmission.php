@@ -28,6 +28,7 @@ use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Support\MsGraphHtmlIntent;
 use Pyle\Mailbox\Support\PreparedMessageMime;
 use Pyle\Mailbox\Support\ProviderWriteResponse;
 use Pyle\Mailbox\Support\ResponseBudget;
@@ -662,7 +663,8 @@ final readonly class MsGraphDraftSubmission
         if (! $body instanceof \stdClass || ! is_string($body->contentType ?? null)
             || strtolower($body->contentType) !== ($message->htmlBody === null ? 'text' : 'html')
             || ! is_string($body->content ?? null)
-            || str_replace("\r\n", "\n", $body->content) !== str_replace("\r\n", "\n", $message->htmlBody ?? $message->textBody ?? '')) {
+            || ($message->htmlBody !== null ? ! MsGraphHtmlIntent::matches($message->htmlBody, $body->content)
+                : str_replace("\r\n", "\n", $body->content) !== str_replace("\r\n", "\n", $message->textBody ?? ''))) {
             return false;
         }
         if (! is_array($draft['internetMessageHeaders'] ?? null) || ! array_is_list($draft['internetMessageHeaders'])) {

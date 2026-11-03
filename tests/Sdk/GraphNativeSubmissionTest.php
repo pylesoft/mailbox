@@ -511,6 +511,49 @@ it('requires the retained native provider conversation when reconstructing a pre
         ->and($history)->toHaveCount(4);
 })->with(['submitPrepared', 'inspectSubmission']);
 
+it('verifies the observed Graph HTML wrapper without accepting changed message content', function (string $change): void {
+    $history = [];
+    $html = '<p>Résumé é à ç</p><table><tr><td>Chosen</td></tr></table><p><a href="https://example.com/chosen">Details</a><img src="cid:chosen@example.com" alt="Chosen"></p>';
+    $observed = '<html><head>'."\r\n".'<meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body><p>Résumé é à ç</p><table><tbody><tr><td>Chosen</td></tr></tbody></table><p><a href="https://example.com/chosen">Details</a><img alt="Chosen" data-outlook-trace="F:0|T:1" src="cid:chosen@example.com"></p></body></html>';
+    $observed = match ($change) {
+        'text' => str_replace('<td>Chosen</td>', '<td>Changed</td>', $observed),
+        'link' => str_replace('https://example.com/chosen', 'https://example.com/changed', $observed),
+        'inline identity' => str_replace('cid:chosen@example.com', 'cid:changed@example.com', $observed),
+        'image label' => str_replace('alt="Chosen"', 'alt="Changed"', $observed),
+        'style' => str_replace('<td>', '<td style="display:none">', $observed),
+        'extra markup' => str_replace('</body>', '<p>Extra</p></body>', $observed),
+        'unexpected attribute' => str_replace('F:0|T:1', 'F:9|T:9', $observed),
+        'table grouping' => str_replace('</tbody>', '</tbody><tbody><tr><td></td></tr></tbody>', $observed),
+        'table attributes' => str_replace('<tbody>', '<tbody style="display:none">', $observed),
+        'malformed HTML' => str_replace('<img alt="Chosen"', '<img alt="Chosen" alt="Changed"', $observed),
+        'external declaration' => '<!DOCTYPE html SYSTEM "https://example.com/unapproved.dtd">'.$observed,
+        'excessive normalization' => str_replace('</body>', str_repeat(' ', 262144).'</body>', $observed),
+        default => $observed,
+    };
+    $message = nativeGraphMessage(['textBody' => null, 'htmlBody' => $html]);
+    $draft = array_replace(nativeGraphDraft(), ['body' => ['contentType' => 'html', 'content' => $observed]]);
+    $sent = array_replace($draft, ['isDraft' => false, 'sentDateTime' => '2026-11-02T23:57:00Z']);
+    $responses = [new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR))];
+    if ($change === 'wrapper') {
+        $responses[] = new Response(202);
+    }
+    $responses[] = new Response(200, [], json_encode($sent, JSON_THROW_ON_ERROR));
+    $mailbox = nativeGraphMailbox($responses, $history);
+    $preparation = $mailbox->prepareSubmission($message);
+
+    if ($change === 'wrapper') {
+        expect($mailbox->submitPrepared($preparation, $message)->outcome)->toBe(SubmissionOutcome::Accepted);
+        expect($mailbox->inspectSubmission($preparation, $message)->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved);
+    } else {
+        expect(fn () => $mailbox->submitPrepared($preparation, $message))->toThrow(ApiRequestException::class);
+        expect($mailbox->inspectSubmission($preparation, $message)->outcome)->toBe(SubmissionEvidenceOutcome::Inconclusive);
+    }
+    expect(collect($history)->filter(fn ($entry) => str_ends_with($entry['request']->getUri()->getPath(), '/send')))->toHaveCount($change === 'wrapper' ? 1 : 0);
+})->with(['wrapper', 'text', 'link', 'inline identity', 'image label', 'style', 'extra markup', 'unexpected attribute',
+    'table grouping', 'table attributes', 'malformed HTML', 'external declaration', 'excessive normalization']);
+
 it('retains the same native intent when a reconstructed scope uses an equivalent cutoff timezone', function (): void {
     $history = [];
     $draft = nativeGraphDraft();
