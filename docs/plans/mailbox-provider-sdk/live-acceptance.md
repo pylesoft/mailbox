@@ -40,6 +40,8 @@ A subsequent real inbound TEST reply matched four provider-originated callback r
 
 The installed candidate then blocked a native HTML/inline-image forward before any send: Graph added an HTML document wrapper, a table body and an image trace attribute. Its 69-byte PNG had already passed raw checksum verification, and the acknowledged unsent draft is preserved. A local, uninstalled comparison fix handles those observed transformations while retaining content and resource identity checks. Normalization is limited to valid UTF-8 HTML up to 256 KiB and uses PHP DOM when installed; exact-body comparison still works without DOM. Unsupported forms remain fail-closed. This prepared repair does not count as a passed live HTML/inline case until installed and reverified.
 
+After explicit approval, AI Clerk installed SDK `5ad0459`, including the reviewed HTML comparison fix. The same retained preparation passed verification and sent exactly once, then matched its immutable sent copy. Independent recipient observation found one HTML forward with the table, intact accents and the original 69-byte inline PNG under the chosen Content-ID. The full SDK suite passes 1,723 tests and 8,618 assertions with nine opt-in wire cases skipped; PHPStan and Pint pass. This qualifies the designated native HTML/inline case. Other HTML transformations and account profiles remain separate cases; the host composer still submits its existing text body and file selections.
+
 ## Reads, Submission and Files
 
 `Blocked G1` means that case is blocked by the exact G1 prerequisites above and the absent authorization for that live operation. Each cell is a separate outstanding acceptance case. Reply/forward cases must inspect chosen recipients/content/files, unchanged originals and conversation correlation; provider normalization must be recorded rather than assumed byte-identical.
@@ -56,7 +58,7 @@ Gmail replies use the selected thread and RFC reply headers; forwards send the c
 | M3 | Blocked M3 | Blocked M3 | Blocked M3 | Blocked M3 | Blocked M3 | Blocked M3 | Blocked M3 | Blocked M3 |
 | M4 | Blocked M4 | Blocked M4 | Blocked M4 | Blocked M4 | Blocked M4 | Blocked M4 | Blocked M4 + L | Blocked M4 + L |
 | M5 | Blocked M5 | Blocked M5 | Blocked M5 | Blocked M5 | Blocked M5 | Blocked M5 | Blocked M5 + L | Blocked M5 + L |
-| M6 | Partial: scoped shared reads/submission | Partial: recorded snapshot only | Ordinary HTML open | Partial: native TEST with verified files | Partial: native TEST with boundary files | Small-file/session boundary passed; inline open | Passed: designated native reply + L | Passed: designated native reply + L |
+| M6 | Partial: scoped shared reads/submission | Partial: recorded snapshot only | Designated native HTML forward passed | Partial: native TEST with verified files | Partial: native TEST with boundary and inline files | Small-file/session boundary and designated inline PNG passed | Passed: designated native reply + L | Passed: designated native reply + L |
 
 **L:** Microsoft documents a known [large-attachment issue for shared/delegated mailboxes](https://learn.microsoft.com/en-us/graph/outlook-large-attachments). Upload-session fixture/TLS success does not resolve it. Record actual provider/account results; do not lower the file target or replace files with links to manufacture parity. The 10 MiB and 20 MiB cases are host acceptance targets, not universal package defaults.
 
