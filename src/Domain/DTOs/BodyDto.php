@@ -9,6 +9,7 @@ use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use ZBateson\MailMimeParser\Header\ParameterHeader;
+use ZBateson\MailMimeParser\Header\Part\NameValuePart;
 use ZBateson\MbWrapper\MbWrapper;
 
 /** @implements Arrayable<string, mixed> */
@@ -43,10 +44,11 @@ final readonly class BodyDto implements Arrayable, JsonSerializable
             throw new MailboxException('Malformed Gmail body data.');
         }
         $content = self::decodeBase64Url($body['data'] ?? '');
-        if (array_key_exists('size', $body) && (! is_int($body['size']) || $body['size'] < 0 || $body['size'] !== strlen($content))) {
+        if (array_key_exists('size', $body) && (! is_int($body['size']) || $body['size'] < 0)) {
             throw new MailboxException('Gmail body size does not match its content.');
         }
         $charset = 'UTF-8';
+        $charsets = [];
         foreach ((array) ($data['headers'] ?? []) as $header) {
             if (is_array($header) && strtolower((string) ($header['name'] ?? '')) === 'content-type') {
                 $parsed = new ParameterHeader('Content-Type', (string) ($header['value'] ?? ''));
@@ -54,7 +56,30 @@ final readonly class BodyDto implements Arrayable, JsonSerializable
                     throw new MailboxException('Malformed Gmail body content type.');
                 }
                 $charset = $parsed->getValueFor('charset') ?? 'UTF-8';
+                $charsets[strtolower($charset)] = true;
+                foreach ($parsed->getParts() as $parameter) {
+                    if ($parameter instanceof NameValuePart && strtolower($parameter->getName()) === 'charset') {
+                        $charsets[strtolower($parameter->getValue())] = true;
+                    }
+                }
             }
+        }
+        if (array_key_exists('size', $body) && $body['size'] !== strlen($content)) {
+            // Gmail may return UTF-8 data while retaining the original charset's byte count.
+            try {
+                $converter = new MbWrapper;
+                $original = count($charsets) === 1 && $converter->checkEncoding($content, 'UTF-8')
+                    ? $converter->convert($content, 'UTF-8', $charset) : null;
+                $matches = $original !== null && strlen($original) === $body['size']
+                    && $converter->convert($original, $charset, 'UTF-8') === $content;
+            } catch (\Throwable) {
+                $matches = false;
+            }
+            if (! $matches) {
+                throw new MailboxException('Gmail body size does not match its content.');
+            }
+
+            return new self(contentType: $normalizedContentType, content: $content);
         }
         try {
             $converter = new MbWrapper;

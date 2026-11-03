@@ -115,6 +115,55 @@ it('rejects unsupported charsets and invalid text rather than replacing bytes', 
     expect(fn () => $resource->get())->toThrow(MailboxException::class);
 })->with([['unknown-charset', 'SGVsbG8'], ['utf-8', '_w']]);
 
+it('preserves Gmail UTF-8 text when its size describes the original charset bytes', function (bool $external): void {
+    $history = [];
+    $body = $external ? ['attachmentId' => 'body', 'size' => 4] : ['data' => 'Y2Fmw6k', 'size' => 4];
+    $responses = [['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'headers' => [
+        ['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1'],
+        ['name' => 'Content-Transfer-Encoding', 'value' => 'quoted-printable'],
+    ], 'body' => $body]]];
+    if ($external) {
+        $responses[] = ['data' => 'Y2Fmw6k', 'size' => 4];
+    }
+    $resource = gmailBodyResource($responses, $history);
+
+    expect($resource->body()->content)->toBe('café')
+        ->and($history)->toHaveCount($external ? 2 : 1);
+})->with([false, true]);
+
+it('rejects unexplained Gmail text size or charset normalization', function (array $headers, string $encoded, mixed $size): void {
+    $history = [];
+    $resource = gmailBodyResource([['id' => 'message', 'payload' => [
+        'mimeType' => 'text/plain', 'headers' => $headers, 'body' => ['data' => $encoded, 'size' => $size],
+    ]]], $history);
+
+    expect(fn () => $resource->body())->toThrow(MailboxException::class)
+        ->and($history)->toHaveCount(1);
+})->with([
+    'missing charset' => [[], 'Y2Fmw6k', 4],
+    'unsupported charset' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=unknown-charset']], 'Y2Fmw6k', 4],
+    'conflicting charsets' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=UTF-8'],
+        ['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1']], 'Y2Fmw6k', 4],
+    'conflicting charset parameters' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=UTF-8; charset=iso-8859-1']], 'Y2Fmw6k', 4],
+    'invalid UTF-8 mismatch' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1']], '_w', 2],
+    'lossy roundtrip' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1']], '8J-YgA', 1],
+    'incorrect reencoded size' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1']], 'Y2Fmw6k', 3],
+    'noninteger size' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1']], 'Y2Fmw6k', '4'],
+    'negative size' => [[['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1']], 'Y2Fmw6k', -1],
+]);
+
+it('charges the actual Gmail UTF-8 bytes against the body budget after normalization', function (): void {
+    $history = [];
+    $resource = gmailBodyResource([['id' => 'message', 'payload' => [
+        'mimeType' => 'text/plain',
+        'headers' => [['name' => 'Content-Type', 'value' => 'text/plain; charset=iso-8859-1']],
+        'body' => ['data' => 'w6k', 'size' => 1],
+    ]]], $history);
+
+    expect(fn () => $resource->body(new BodyReadLimits(maxBodyBytes: 1)))->toThrow(ResponseLimitExceededException::class)
+        ->and($history)->toHaveCount(1);
+});
+
 it('does not complete when an external body response is absent or inconsistent', function (array $external): void {
     $history = [];
     $resource = gmailBodyResource([
