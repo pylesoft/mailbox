@@ -40,4 +40,10 @@ Validate the candidate SDK against designated personal Gmail and Workspace sandb
 
 ## Integration notes
 
+On November 3, the host selected separate Workspace user OAuth (G2) and Workspace service-account delegation (G3) sandboxes. Personal Gmail (G1) remains in scope and still needs a designated account. The dedicated project and restricted read/send domain delegation are prepared; service-account key creation remains prohibited. No live Gmail authorization, refresh, mailbox read, send or Pub/Sub case has passed yet.
+
+SDK `d392e4c1aa68f907eeeeb4acf2a0b913ee859944` adds `GmailServiceAccountTokenExchange`. The host supplies the current `GrantContext`, authority guard and trusted short-lived IAM credential. The SDK signs fixed mailbox/scopes claims through IAM `signJwt` and exchanges the assertion at Google's OAuth endpoint. It rechecks authority around provider phases and returns an expiring credential without persisting it. Existing configured service-account access remains unchanged. Fixture coverage and green package CI do not qualify deployed runtime identity or domain delegation.
+
+The host will run on Laravel Cloud; its production runtime identity and automatic credential rotation remain prerequisites. No static service-account key, organization-policy exception, personal production credential or unsupported delegate-OAuth assumption is used to bypass that requirement. Authorized test recipients and live send/recovery operations remain unselected.
+
 Status remains needs-info and Resolution remains open until these prerequisites are supplied. Completion of ticket 25 alone does not make this ticket available. If the candidate changes in a relevant way, rerun only the affected live cases and retain their source identity.

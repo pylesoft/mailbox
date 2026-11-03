@@ -9,8 +9,8 @@ Use the immutable candidate and local check identities in the [compatibility rec
 | Profile | Account and selected authority | Concrete missing prerequisites | Live owner |
 | --- | --- | --- | --- |
 | G1 | Personal Gmail, delegated | Designated account, OAuth client/consent, permitted mail scopes and authorized sender/recipients | 26 |
-| G2 | Workspace, delegated | Designated Workspace account, client/consent/domain policy, permitted mail scopes and authorized sender/recipients | 26 |
-| G3 | Workspace, service-account delegation | Designated domain/mailbox, scoped domain delegation, service account and authorized sender/recipients | 26 |
+| G2 | Workspace, user OAuth; designated sandbox user selected | Finish External testing client/consent, actual enrollment/refresh and authorized send recipients/operations | 26 |
+| G3 | Workspace, service-account delegation; separate sandbox mailbox selected | Approved read/send domain delegation and signer exist; trusted keyless runtime identity/rotation, actual enrollment and authorized send recipients/operations remain | 26 |
 | M1 | Microsoft 365 own mailbox, delegated | Designated tenant/account, app registration/consent, mail scopes and authorized sender/recipients | 27 |
 | M2 | Microsoft 365 own mailbox, application | Designated tenant/mailbox, administrator consent, effective scoped read/write/send permission and authorized recipients | 27 |
 | M3 | Outlook.com/Hotmail, delegated | Designated personal account, suitable app registration/consent, verified identity behavior and authorized sender/recipients | 27 |
@@ -19,6 +19,14 @@ Use the immutable candidate and local check identities in the [compatibility rec
 | M6 | Microsoft shared mailbox, required live mode | Existing approved scoped application and two designated targets; complete remaining controls, stable callbacks, renewal, file-send limits and controlled recovery | 27 |
 
 M6 uses the two approved AI Clerk shared mailboxes, with sending restricted to the dedicated TEST conversation and Ian's authorized recipient. Other profiles still require designated accounts and recipients. Token acquisition alone cannot establish effective permissions. M4 is not promoted to required live mode or combined with a broader application grant.
+
+### Gmail setup — November 3, 2026
+
+All G1–G3 profiles remain required. G2 uses the designated user's own mailbox through standard OAuth; G3 uses a different Workspace user mailbox through explicit domain delegation. Gmail web delegation does not qualify the delegate's OAuth grant for that shared mailbox. G1 still needs its own personal account.
+
+The sandbox project has Gmail and Pub/Sub APIs enabled, an External OAuth app in testing setup, and approved `gmail.readonly` / `gmail.send` domain delegation. Service-account key creation remains prohibited; no key or policy exception was created. SDK `d392e4c` adds guarded keyless `signJwt`/token exchange with fixture coverage; the configured legacy service-account API remains intact. Production hosting is Laravel Cloud, and a trusted runtime identity with automatic short-lived credential rotation remains unresolved. A local expiring credential file is only the host acquisition boundary, not production identity proof.
+
+No Gmail live acceptance row is closed by this setup. Pub/Sub topic/subscription/principal/callback configuration, mailbox enrollment/read/refresh evidence and exact authorized send/recovery operations remain prerequisites. The existing Microsoft evidence below is preserved at its recorded source identities.
 
 ### Limited M6 evidence — November 2, 2026
 
