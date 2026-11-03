@@ -7,6 +7,7 @@ use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
@@ -16,6 +17,31 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
+
+it('redacts change page recovery positions while preserving trusted native persistence', function (string $outcome): void {
+    $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'same@example.com');
+    $identity = new SyncIdentity('ms-graph', $context, new SyncScope('FolderA'));
+    $position = ['nextLink' => 'https://graph.microsoft.com/v1.0/users/same%40example.com/mailFolders/FolderA/messages/delta?$skiptoken=private-page-token'];
+    $checkpoint = 'https://graph.microsoft.com/v1.0/users/same%40example.com/mailFolders/FolderA/messages/delta?$deltatoken=private-checkpoint-token';
+    $page = new ChangePage(upserts: ['changed'], removals: ['removed'],
+        continuation: $outcome === 'continuation' ? new SyncContinuation($identity, 'ms-graph.delta', $position) : null,
+        checkpoint: $outcome === 'checkpoint' ? new SyncCheckpoint($identity, $checkpoint) : null,
+        resetRequired: $outcome === 'reset', reason: $outcome === 'reset' ? 'delta_expired' : null,
+        folderChanges: [['folderId' => 'FolderA', 'upserts' => ['changed'], 'removals' => ['removed']]], coveredFolders: ['FolderA']);
+
+    $json = json_encode($page, JSON_THROW_ON_ERROR);
+    expect($json)->not->toContain('private-page-token');
+    expect($json)->not->toContain('private-checkpoint-token');
+    expect(json_decode($json, true, flags: JSON_THROW_ON_ERROR))->toMatchArray([
+        'upserts' => ['changed'], 'removals' => ['removed'], 'resetRequired' => $outcome === 'reset',
+        'reason' => $page->reason, 'folderChanges' => $page->folderChanges, 'coveredFolders' => ['FolderA'],
+    ]);
+    expect($page->__debugInfo())->toBe($page->jsonSerialize());
+    $restored = unserialize(serialize($page));
+    expect($restored)->toEqual($page)
+        ->and($restored->continuation?->position)->toBe($page->continuation?->position)
+        ->and($restored->checkpoint?->position)->toBe($page->checkpoint?->position);
+})->with(['continuation', 'checkpoint', 'reset']);
 
 it('redacts private sync state and malformed envelopes from rejecting SDK traces', function (string $provider, string $mode): void {
     $history = [];
