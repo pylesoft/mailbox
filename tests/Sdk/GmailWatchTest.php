@@ -126,6 +126,49 @@ it('verifies the raw PubSub request and returns only a grant bound reconciliatio
         ->and($history)->toBe([]);
 });
 
+it('normalizes JSON integer notification history IDs without losing decimal precision', function (string $position, string $expected): void {
+    $history = [];
+    $registration = watchRegistration();
+    $request = watchRequest();
+    $envelope = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $envelope['message']['data'] = base64_encode('{"emailAddress":"same@example.com","historyId":'.$position.'}');
+    $request = $request->withBody(Utils::streamFor(json_encode($envelope, JSON_THROW_ON_ERROR)));
+
+    $hint = watchResource([], $history)->notification($request, $registration, watchVerifier());
+
+    expect($hint->historyId)->toBe($expected);
+    expect($registration->historyId)->toBe('100');
+    expect($history)->toBe([]);
+})->with([
+    'Google numeric payload' => ['35438', '35438'],
+    'signed integer boundary' => ['9223372036854775807', '9223372036854775807'],
+    'unsigned integer boundary' => ['18446744073709551615', '18446744073709551615'],
+    'larger decimal literal' => ['900719925474099312345678901234', '900719925474099312345678901234'],
+    'numeric zero preserves decimal-string contract' => ['0', '0'],
+    'string zero remains supported' => ['"0"', '0'],
+]);
+
+it('rejects noninteger notification positions without coercing JSON values', function (string $position): void {
+    $history = [];
+    $request = watchRequest();
+    $envelope = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $envelope['message']['data'] = base64_encode('{"emailAddress":"same@example.com","historyId":'.$position.'}');
+    $request = $request->withBody(Utils::streamFor(json_encode($envelope, JSON_THROW_ON_ERROR)));
+
+    expect(fn () => watchResource([], $history)->notification($request, watchRegistration(), watchVerifier()))
+        ->toThrow(InvalidChangeNotificationException::class);
+    expect($history)->toBe([]);
+})->with([
+    'integral float' => ['1.0'],
+    'exponent' => ['1e3'],
+    'negative integer' => ['-1'],
+    'negative big integer' => ['-9223372036854775809'],
+    'boolean' => ['true'],
+    'null' => ['null'],
+    'list' => ['[]'],
+    'object' => ['{}'],
+]);
+
 it('stops a watch once and surfaces a late verified notification as catch up work', function (): void {
     $history = [];
     $mailbox = watchResource([new Response(200, [], '{}')], $history);
@@ -251,7 +294,7 @@ it('rejects malformed or misrouted PubSub envelopes without returning provider c
             $payload['emailAddress'] = 'other@example.com';
             break;
         case 'history':
-            $payload['historyId'] = 110;
+            $payload['historyId'] = 110.5;
             break;
         case 'position':
             $payload['historyId'] = 'not-a-history-id';

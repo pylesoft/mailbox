@@ -127,20 +127,24 @@ final readonly class GmailWatch
             throw new InvalidChangeNotificationException('The Gmail notification data is not valid base64.');
         }
         try {
-            $data = json_decode($decoded, flags: JSON_THROW_ON_ERROR, depth: 8);
+            $data = json_decode($decoded, flags: JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING, depth: 8);
         } catch (\JsonException) {
             throw new InvalidChangeNotificationException('The Gmail notification data is not a valid JSON object.');
         }
+        $historyId = $data instanceof \stdClass ? ($data->historyId ?? null) : null;
+        if (is_int($historyId)) {
+            $historyId = (string) $historyId;
+        }
         if (! $data instanceof \stdClass || ! is_string($data->emailAddress ?? null)
             || strcasecmp($data->emailAddress, $this->context->mailbox) !== 0
-            || ! is_string($data->historyId ?? null) || preg_match('/\A[0-9]+\z/', $data->historyId) !== 1) {
+            || ! is_string($historyId) || preg_match('/\A[0-9]+\z/', $historyId) !== 1) {
             throw new InvalidChangeNotificationException('The Gmail notification account or history position does not match the selected mailbox.');
         }
         $this->guard->assertActive($this->context);
 
         $reason = $registration->lifecycle() === 'active' ? 'mailbox_changed' : 'watch_'.$registration->lifecycle();
 
-        return new GmailChangeHint($registration->context, $configuration->topic, $configuration->subscription, $envelope->message->messageId, $data->historyId, $reason);
+        return new GmailChangeHint($registration->context, $configuration->topic, $configuration->subscription, $envelope->message->messageId, $historyId, $reason);
     }
 
     public function catchUpHint(GmailWatchRegistration $registration): GmailChangeHint
