@@ -302,6 +302,48 @@ it('identifies missing messages only through native exact reads', function (stri
     }
 })->with(['ms-graph', 'gmail'])->with(['get', 'getExact']);
 
+it('classifies malformed root headers on exact reads after validating identity', function (string $driver, array $headers): void {
+    $history = [];
+    $mailbox = queryResultMailbox($driver, [['id' => 'bad', ...$headers]], $history);
+
+    expect(fn () => $mailbox->message('bad')->getExact())->toThrow(InvalidReceivedHeaderException::class);
+})->with([
+    'Graph recipient collection' => ['ms-graph', ['ccRecipients' => (object) []]],
+    'Graph header collection' => ['ms-graph', ['internetMessageHeaders' => (object) []]],
+    'Graph recipient entry' => ['ms-graph', ['ccRecipients' => [12]]],
+    'Graph header entry' => ['ms-graph', ['internetMessageHeaders' => [12]]],
+    'Gmail header collection' => ['gmail', ['payload' => ['headers' => (object) []]]],
+    'Gmail header entry' => ['gmail', ['payload' => ['headers' => [12]]]],
+]);
+
+it('rejects exact-read identity mismatches before classifying root headers', function (string $driver): void {
+    $history = [];
+    $headers = $driver === 'gmail' ? ['payload' => ['headers' => (object) []]] : ['ccRecipients' => (object) []];
+    $mailbox = queryResultMailbox($driver, [['id' => 'different', ...$headers]], $history);
+
+    try {
+        $mailbox->message('expected')->getExact();
+        test()->fail('A mismatched provider identity must fail.');
+    } catch (MailboxException $exception) {
+        expect($exception)->not->toBeInstanceOf(InvalidReceivedHeaderException::class);
+        expect($exception->getMessage())->toContain('mismatched');
+    }
+})->with(['ms-graph', 'gmail']);
+
+it('keeps malformed nested Gmail MIME fatal on exact reads', function (string $field): void {
+    $history = [];
+    $mailbox = queryResultMailbox('gmail', [
+        ['id' => 'bad', 'payload' => ['headers' => [], 'parts' => [[$field => (object) []]]]],
+    ], $history);
+
+    try {
+        $mailbox->message('bad')->getExact();
+        test()->fail('Malformed nested MIME must fail.');
+    } catch (MailboxException $exception) {
+        expect($exception)->not->toBeInstanceOf(InvalidReceivedHeaderException::class);
+    }
+})->with(['parts', 'headers']);
+
 it('rejects invalid exact-read identities before requesting a provider', function (string $driver): void {
     $history = [];
     $mailbox = queryResultMailbox($driver, [new Response(404, [], '{}')], $history);

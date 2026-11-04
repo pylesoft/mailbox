@@ -80,7 +80,7 @@ final class GmailMessageReader
         if (($isolateHeaders || $exactRead) && ($payload->id ?? null) !== $messageId) {
             throw new ApiRequestException('Gmail returned a mismatched message identity.');
         }
-        $message = $isolateHeaders ? ConversationPayload::receivedMessage($payload) : ConversationPayload::array($payload);
+        $message = ($isolateHeaders || $exactRead) ? ConversationPayload::receivedMessage($payload) : ConversationPayload::array($payload);
 
         return $this->hydrateMessage($message, $messageId);
     }

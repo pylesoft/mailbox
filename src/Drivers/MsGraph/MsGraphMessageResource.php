@@ -13,10 +13,12 @@ use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\ProviderMessageId;
 use Pyle\Mailbox\Support\ResponseBudget;
 
@@ -48,16 +50,20 @@ class MsGraphMessageResource implements MessageResource, SupportsExactMessageRea
             throw new MailboxException('A valid provider message identity is required.');
         }
         try {
-            $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
+            if ($verifyIdentity) {
+                $raw = $this->client->getBoundedObject($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), mailbox: $this->mailbox, retry: true);
+                if (($raw->id ?? null) !== $this->messageId) {
+                    throw new MailboxException('Graph returned a mismatched message identity.');
+                }
+                $payload = ConversationPayload::receivedMessage($raw);
+            } else {
+                $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
+            }
         } catch (ResourceNotFoundException $exception) {
             if (! $verifyIdentity) {
                 throw $exception;
             }
             throw new ResourceNotFoundException('message', $this->messageId, 'The requested message was not found.', $exception->getCode(), $exception);
-        }
-
-        if ($verifyIdentity && ($payload['id'] ?? null) !== $this->messageId) {
-            throw new MailboxException('Graph returned a mismatched message identity.');
         }
 
         return MessageDto::fromMsGraph($payload);
