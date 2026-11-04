@@ -330,6 +330,21 @@ it('rejects exact-read identity mismatches before classifying root headers', fun
     }
 })->with(['ms-graph', 'gmail']);
 
+it('keeps non-object Gmail payloads fatal in isolated queries and exact reads', function (mixed $payload, string $entrypoint): void {
+    $history = [];
+    $message = ['id' => 'bad', 'labelIds' => ['INBOX'], 'payload' => $payload];
+    $responses = $entrypoint === 'getResult' ? [['messages' => [['id' => 'bad']]], $message] : [$message];
+    $mailbox = queryResultMailbox('gmail', $responses, $history);
+
+    expect(fn () => $entrypoint === 'getResult' ? $mailbox->messages()->getResult() : $mailbox->message('bad')->getExact())
+        ->toThrow(MailboxException::class, 'invalid message payload');
+    expect($history)->toHaveCount($entrypoint === 'getResult' ? 2 : 1);
+})->with([
+    'scalar' => ['broken'],
+    'list' => [[['mimeType' => 'text/plain']]],
+    'null' => [null],
+])->with(['getResult', 'getExact']);
+
 it('keeps malformed nested Gmail MIME fatal on exact reads', function (string $field): void {
     $history = [];
     $mailbox = queryResultMailbox('gmail', [

@@ -13,6 +13,9 @@ final class ConversationPayload
     /** @return array<string, mixed> */
     public static function receivedMessage(#[\SensitiveParameter] stdClass $payload): array
     {
+        if (property_exists($payload, 'payload') && ! $payload->payload instanceof stdClass) {
+            throw new MailboxException('The provider returned an invalid message payload.');
+        }
         foreach (['toRecipients', 'ccRecipients', 'bccRecipients', 'replyTo', 'internetMessageHeaders'] as $field) {
             if (property_exists($payload, $field)) {
                 self::receivedHeaderCollection($payload->{$field});
