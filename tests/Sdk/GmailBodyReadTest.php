@@ -11,6 +11,7 @@ use GuzzleHttp\Psr7\FnStream;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Queue\Job;
+use Illuminate\Support\Facades\Storage;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
@@ -143,6 +144,68 @@ it('selects nested HTML body while retaining named text and inline image metadat
         ->and($files[1]->contentId)->toBe('<logo>')
         ->and($history)->toHaveCount(3);
 });
+
+it('streams listed Gmail files when their download handles change', function (string $partId): void {
+    $history = [];
+    $part = ['partId' => $partId, 'mimeType' => 'text/plain', 'filename' => 'notes.txt',
+        'body' => ['attachmentId' => 'old-handle', 'size' => 2]];
+    $resource = gmailBodyResource([
+        ['id' => 'message', 'payload' => ['mimeType' => 'multipart/mixed', 'parts' => [$part]]],
+        ['id' => 'message', 'payload' => ['mimeType' => 'multipart/mixed', 'parts' => [
+            [...$part, 'body' => ['attachmentId' => 'new-handle', 'size' => 2]],
+        ]]],
+        ['data' => 'T0s', 'size' => 2],
+    ], $history);
+
+    $attachment = $resource->attachments()->sole();
+    $stream = $resource->attachment($attachment->id)->stream();
+
+    try {
+        expect($attachment->id)->toBe($partId);
+        expect((string) $stream)->toBe('OK');
+        expect($history)->toHaveCount(3);
+        expect($history[2]['request']->getUri()->getPath())->toBe('/gmail/v1/users/reader%40example.com/messages/message/attachments/new-handle');
+    } finally {
+        $stream->close();
+    }
+})->with(['nested part' => '1', 'zero part' => '0']);
+
+it('downloads listed Gmail files in bulk after their handles change', function (): void {
+    Storage::fake('gmail-body-tests');
+    config()->set('mailbox.attachment_disk', 'gmail-body-tests');
+    $history = [];
+    $part = ['partId' => '0', 'mimeType' => 'text/plain', 'filename' => 'notes.txt',
+        'body' => ['attachmentId' => 'old-handle', 'size' => 2]];
+    $resource = gmailBodyResource([
+        ['id' => 'message', 'payload' => $part],
+        ['id' => 'message', 'payload' => [...$part, 'body' => ['attachmentId' => 'new-handle', 'size' => 2]]],
+        ['data' => 'T0s', 'size' => 2],
+    ], $history);
+
+    $file = $resource->downloadAttachments()->sole();
+
+    Storage::disk('gmail-body-tests')->assertExists($file->path);
+    expect(Storage::disk('gmail-body-tests')->get($file->path))->toBe('OK');
+    expect($history)->toHaveCount(3);
+    expect($history[2]['request']->getUri()->getPath())->toBe('/gmail/v1/users/reader%40example.com/messages/message/attachments/new-handle');
+});
+
+it('keeps Gmail download handles usable when a part identity is missing or empty', function (array $identity): void {
+    $history = [];
+    $message = ['id' => 'message', 'payload' => [...$identity, 'mimeType' => 'text/plain', 'filename' => 'notes.txt',
+        'body' => ['attachmentId' => 'legacy-handle', 'size' => 2]]];
+    $resource = gmailBodyResource([$message, $message, ['data' => 'T0s', 'size' => 2]], $history);
+
+    $attachment = $resource->attachments()->sole();
+    $stream = $resource->attachment($attachment->id)->stream();
+
+    try {
+        expect($attachment->id)->toBe('legacy-handle');
+        expect((string) $stream)->toBe('OK');
+    } finally {
+        $stream->close();
+    }
+})->with(['missing part' => [[]], 'empty part' => [['partId' => '']]]);
 
 it('rejects unsupported charsets and invalid text rather than replacing bytes', function (string $charset, string $data): void {
     $history = [];

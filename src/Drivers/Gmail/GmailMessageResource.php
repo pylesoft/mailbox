@@ -119,7 +119,18 @@ class GmailMessageResource implements MessageResource, SupportsMessageMetadataRe
         $parts = GmailMime::files((array) ($message['payload'] ?? []));
 
         return collect($parts)
-            ->map(fn (array $part): AttachmentDto => AttachmentDto::fromGmail($part))
+            ->map(function (array $part): AttachmentDto {
+                $attachment = AttachmentDto::fromGmail($part);
+
+                return new AttachmentDto(
+                    id: is_string($part['partId'] ?? null) && $part['partId'] !== '' ? $part['partId'] : $attachment->id,
+                    name: $attachment->name,
+                    contentType: $attachment->contentType,
+                    size: $attachment->size,
+                    isInline: $attachment->isInline,
+                    contentId: $attachment->contentId,
+                );
+            })
             ->filter(fn (AttachmentDto $attachment): bool => $attachment->id !== '')
             ->values();
     }

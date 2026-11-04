@@ -27,6 +27,10 @@ foreach ($attachments as $attachment) {
 
 This returns a collection of `AttachmentDto` instances with lightweight metadata. No file content is transferred -- only names, types, sizes, and inline flags. Use this when you need to present a list of attachments to the user or decide which files are worth downloading.
 
+For Gmail, pass the listed `id` back to the same message's `attachment()` method. When available, this locator is the immutable MIME part ID, so a later read can resolve a changed download handle. Missing or empty part IDs retain the provider-handle fallback. Metadata and download DTOs still expose their mapped provider IDs; do not assume those IDs equal the listed locator.
+
+If you use the optional message persister, the next sync can replace attachment rows previously keyed by download handles with rows keyed by MIME parts. Their local row IDs can change. Existing handles remain usable only while Gmail still returns them.
+
 ## Downloading a Single Attachment
 
 When you know exactly which attachment you need, use the `attachment()` method to get an `AttachmentResource`, then call `download()`:
