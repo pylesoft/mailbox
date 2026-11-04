@@ -18,6 +18,7 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
 use Pyle\Mailbox\Support\ConversationPayload;
+use Pyle\Mailbox\Support\ProviderMessageId;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryResults, SupportsMessageSyncRulePushdown
@@ -246,7 +247,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
                         throw new ApiRequestException('The provider returned a malformed message collection item.');
                     }
                 }
-                $response = ConversationPayload::array($payload);
+                $response = get_object_vars($payload);
             } else {
                 $response = $this->client->getMessagePayload($endpoint, $query, $this->mailbox);
             }
@@ -256,12 +257,19 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
 
             $messages = collect($response['value'])
                 ->map(function (mixed $item) use ($isolateHeaders, $rejections, &$seenRejectedIds): ?MessageDto {
+                    if ($isolateHeaders) {
+                        $item = get_object_vars($item);
+                    }
                     if (! is_array($item) || (($isolateHeaders || in_array('id', $this->selectFields, true) || array_key_exists('id', $item))
-                        && (! is_string($item['id'] ?? null) || trim($item['id']) === ''))) {
+                        && (! is_string($item['id'] ?? null) || trim($item['id']) === '' || ($isolateHeaders && ! ProviderMessageId::isValid($item['id']))))) {
                         throw new ApiRequestException('The provider returned a malformed message collection item.');
                     }
 
                     try {
+                        if ($isolateHeaders) {
+                            $item = ConversationPayload::receivedMessage((object) $item);
+                        }
+
                         return MessageDto::fromMsGraph($item);
                     } catch (InvalidReceivedHeaderException $exception) {
                         if (! $isolateHeaders) {

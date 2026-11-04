@@ -7,11 +7,13 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 use Closure;
 use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GmailMime;
+use Pyle\Mailbox\Support\ProviderMessageId;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 final class GmailMessageReader
@@ -42,11 +44,43 @@ final class GmailMessageReader
     /** @return array<string, mixed> */
     public function get(string $messageId, ?BodyReadLimits $limits = null, ?ResponseBudget $responses = null): array
     {
+        return $this->read($messageId, $limits, $responses, false);
+    }
+
+    /** @return array<string, mixed> */
+    public function getForQueryResult(string $messageId): array
+    {
+        return $this->read($messageId, null, null, true);
+    }
+
+    /** @return array<string, mixed> */
+    public function getExact(string $messageId): array
+    {
+        return $this->read($messageId, null, null, false, true);
+    }
+
+    /** @return array<string, mixed> */
+    private function read(string $messageId, ?BodyReadLimits $limits, ?ResponseBudget $responses, bool $isolateHeaders, bool $exactRead = false): array
+    {
+        if (($exactRead || $isolateHeaders) && ! ProviderMessageId::isValid($messageId)) {
+            throw new MailboxException('A valid provider message identity is required.');
+        }
         $this->limits = $limits ?? new BodyReadLimits;
         $this->responses = $responses ?? new ResponseBudget($this->limits->maxResponseBytes);
         $this->parts = $this->hydrations = $this->bodyBytes = 0;
         $endpoint = sprintf('users/%s/messages/%s', rawurlencode($this->mailbox), rawurlencode($messageId));
-        $message = ConversationPayload::array($this->client->getBoundedObject($endpoint, $this->responses, ['format' => 'full'], $this->mailbox, retry: $this->retry));
+        try {
+            $payload = $this->client->getBoundedObject($endpoint, $this->responses, ['format' => 'full'], $this->mailbox, retry: $this->retry);
+        } catch (ResourceNotFoundException $exception) {
+            if (! $exactRead) {
+                throw $exception;
+            }
+            throw new ResourceNotFoundException('message', $messageId, 'The requested message was not found.', $exception->getCode(), $exception);
+        }
+        if (($isolateHeaders || $exactRead) && ($payload->id ?? null) !== $messageId) {
+            throw new ApiRequestException('Gmail returned a mismatched message identity.');
+        }
+        $message = $isolateHeaders ? ConversationPayload::receivedMessage($payload) : ConversationPayload::array($payload);
 
         return $this->hydrateMessage($message, $messageId);
     }

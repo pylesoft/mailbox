@@ -14,6 +14,7 @@ use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Services\Persistence\MessageSyncService;
@@ -98,7 +99,7 @@ it('fences every local write and performs attachment downloads outside the fence
     };
 
     try {
-        $messages = (new MessageSyncService)->syncMailbox($mailbox, [], $guard);
+        $messages = (new MessageSyncService)->syncMailboxResult($mailbox, [], $guard)->messages;
     } finally {
         $observing = false;
     }
@@ -141,7 +142,7 @@ it('stops each later attachment write, stale-row delete and timestamp when the f
     expectMailboxFacadeForMailbox($mailbox, $resource);
     $writes = 0;
 
-    expect(fn () => (new MessageSyncService)->syncMailbox($mailbox, [], function (Closure $write) use (&$writes, $stopAt): mixed {
+    expect(fn () => (new MessageSyncService)->syncMailboxResult($mailbox, [], function (Closure $write) use (&$writes, $stopAt): mixed {
         if (++$writes === $stopAt) {
             throw new RuntimeException('Claim expired');
         }
@@ -212,6 +213,24 @@ it('requires exact-read support for targeted recovery on custom resources', func
         ->toThrow(UnsupportedCapabilityException::class);
 });
 
+it('preserves operational folder and attachment not-found failures during targeted recovery', function (string $failure): void {
+    $mailbox = createTestMailbox('Operational recovery', 'reader@example.com', 'Reader');
+    $responses = [['id' => 'expected', 'receivedDateTime' => '2024-01-01T12:00:00Z', 'hasAttachments' => $failure !== 'folder']];
+    if ($failure === 'stream') {
+        $responses[] = ['value' => [['id' => 'file', 'name' => 'invoice.pdf', 'contentType' => 'application/pdf', 'size' => 4]]];
+    }
+    $responses[] = new Response(404, [], '{}');
+    expectMailboxFacadeForMailbox($mailbox, syncResultResource('ms-graph', $responses));
+
+    try {
+        (new MessageSyncService)->syncMailboxMessage($mailbox, 'expected', $failure === 'folder' ? ['folder' => 'gone'] : []);
+        test()->fail('The operational failure must propagate.');
+    } catch (ResourceNotFoundException $exception) {
+        expect($exception->resourceType)->toBe('resource')
+            ->and($exception->resourceId)->not->toBe('expected');
+    }
+})->with(['folder', 'metadata', 'stream']);
+
 it('preserves stored attachment bytes when authority changes during a replacement download', function (): void {
     $mailbox = createTestMailbox('Download fence', 'reader@example.com', 'Reader');
     $message = testMailboxMessageDto('guarded', null, 'inbox', true);
@@ -233,7 +252,7 @@ it('preserves stored attachment bytes when authority changes during a replacemen
     $syncedAt = $mailbox->fresh()->last_synced_at;
 
     expect(function () use ($service, $mailbox, &$allowed): void {
-        $service->syncMailbox($mailbox, [], function (Closure $write) use (&$allowed): mixed {
+        $service->syncMailboxResult($mailbox, [], function (Closure $write) use (&$allowed): mixed {
             if (! $allowed) {
                 throw new RuntimeException('Binding changed during download');
             }

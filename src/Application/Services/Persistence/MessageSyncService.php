@@ -23,6 +23,7 @@ use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Support\MessageMatcher;
+use Pyle\Mailbox\Support\ProviderMessageId;
 use RuntimeException;
 
 class MessageSyncService
@@ -34,12 +35,11 @@ class MessageSyncService
 
     /**
      * @param  array<string, mixed>  $options
-     * @param  Closure(Closure(): mixed): mixed|null  $guardedWrite
      * @return Collection<int, MailboxMessage>
      */
-    public function syncMailbox(Mailbox $mailbox, array $options = [], ?Closure $guardedWrite = null): Collection
+    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
-        return $this->sync($mailbox, $options, false, $guardedWrite)->messages;
+        return $this->sync($mailbox, $options, false, null)->messages;
     }
 
     /**
@@ -84,7 +84,7 @@ class MessageSyncService
      */
     public function syncMailboxMessage(Mailbox $mailbox, string $providerMessageId, array $options = [], ?Closure $guardedWrite = null): ?MailboxMessage
     {
-        if (trim($providerMessageId) === '' || preg_match('/[\x00-\x1F\x7F]/', $providerMessageId)) {
+        if (! ProviderMessageId::isValid($providerMessageId)) {
             throw new MailboxException('A valid provider message identity is required.');
         }
         $request = MessageSyncRequest::from($options, $this->ruleTree);

@@ -40,7 +40,8 @@ class GmailMessageResource implements MessageResource, SupportsExactMessageRead,
 
     private function read(?BodyReadLimits $limits, bool $verifyIdentity): MessageDto
     {
-        $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($this->messageId, $limits);
+        $reader = new GmailMessageReader($this->client, $this->mailbox);
+        $payload = $verifyIdentity ? $reader->getExact($this->messageId) : $reader->get($this->messageId, $limits);
 
         if ($verifyIdentity && ($payload['id'] ?? null) !== $this->messageId) {
             throw new MailboxException('Gmail returned a mismatched message identity.');

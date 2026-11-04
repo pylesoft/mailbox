@@ -113,6 +113,7 @@ it('keeps array-based sync signatures for backward compatibility', function (): 
 
     expect(reflectionParameterTypeName($managerMethod->getParameters()[1]))->toBe('array');
     expect(reflectionParameterTypeName($serviceMethod->getParameters()[1]))->toBe('array');
+    expect($serviceMethod->getParameters())->toHaveCount(2);
 });
 
 function reflectionParameterTypeName(ReflectionParameter $parameter): string
@@ -139,7 +140,7 @@ final class RecordingMessageSyncService extends MessageSyncService
     ) {}
 
     /** @param array<string, mixed> $options */
-    public function syncMailbox(Mailbox $mailbox, array $options = [], ?Closure $guardedWrite = null): Collection
+    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
         $this->calls[] = [
             'mailbox' => $mailbox,

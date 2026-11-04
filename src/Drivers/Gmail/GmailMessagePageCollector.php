@@ -12,6 +12,7 @@ use Pyle\Mailbox\DTOs\MessageQueryResult;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
 use Pyle\Mailbox\Support\ConversationPayload;
+use Pyle\Mailbox\Support\ProviderMessageId;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 final class GmailMessagePageCollector
@@ -141,7 +142,7 @@ final class GmailMessagePageCollector
      */
     private function hydrateSummary(mixed $summary, array &$seenMessageIds, bool $isolateHeaders, Collection $rejections): ?MessageDto
     {
-        if ($isolateHeaders && (! is_array($summary) || ! is_string($summary['id'] ?? null) || trim($summary['id']) === '')) {
+        if ($isolateHeaders && (! is_array($summary) || ! ProviderMessageId::isValid($summary['id'] ?? null))) {
             throw new ApiRequestException('Gmail returned a malformed listed message identity.');
         }
         if (! is_array($summary)) {
@@ -156,12 +157,10 @@ final class GmailMessagePageCollector
 
         $seenMessageIds[$id] = true;
 
-        $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($id);
-        if ($isolateHeaders && (! is_string($payload['id'] ?? null) || $payload['id'] !== $id)) {
-            throw new ApiRequestException('Gmail returned a mismatched message identity.');
-        }
-
         try {
+            $reader = new GmailMessageReader($this->client, $this->mailbox);
+            $payload = $isolateHeaders ? $reader->getForQueryResult($id) : $reader->get($id);
+
             return MessageDto::fromGmail($payload);
         } catch (InvalidReceivedHeaderException $exception) {
             if (! $isolateHeaders) {

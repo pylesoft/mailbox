@@ -16,6 +16,8 @@ use Pyle\Mailbox\DTOs\BodyDto;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Support\ProviderMessageId;
 use Pyle\Mailbox\Support\ResponseBudget;
 
 class MsGraphMessageResource implements MessageResource, SupportsExactMessageRead, SupportsMessageMetadataRead
@@ -42,7 +44,17 @@ class MsGraphMessageResource implements MessageResource, SupportsExactMessageRea
 
     private function read(bool $verifyIdentity): MessageDto
     {
-        $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
+        if ($verifyIdentity && ! ProviderMessageId::isValid($this->messageId)) {
+            throw new MailboxException('A valid provider message identity is required.');
+        }
+        try {
+            $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
+        } catch (ResourceNotFoundException $exception) {
+            if (! $verifyIdentity) {
+                throw $exception;
+            }
+            throw new ResourceNotFoundException('message', $this->messageId, 'The requested message was not found.', $exception->getCode(), $exception);
+        }
 
         if ($verifyIdentity && ($payload['id'] ?? null) !== $this->messageId) {
             throw new MailboxException('Graph returned a mismatched message identity.');

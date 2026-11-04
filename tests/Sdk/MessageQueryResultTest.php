@@ -15,6 +15,7 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
@@ -63,6 +64,59 @@ it('retains Gmail header rejections while reading valid messages across pages', 
     expect($history)->toHaveCount(5);
 });
 
+it('isolates malformed Graph received header collections within a page', function (string $field): void {
+    $history = [];
+    $mailbox = queryResultMailbox('ms-graph', [['value' => [
+        ['id' => 'a'], ['id' => 'bad', $field => (object) ['broken' => true]], ['id' => 'c'],
+    ]]], $history);
+
+    $result = $mailbox->messages()->orderBy('subject', 'asc')->getResult();
+
+    expect($result->messages->pluck('id')->all())->toBe(['a', 'c'])
+        ->and($result->rejections->pluck('providerMessageId')->all())->toBe(['bad']);
+})->with(['toRecipients', 'ccRecipients', 'bccRecipients', 'replyTo', 'internetMessageHeaders']);
+
+it('isolates a malformed Gmail root header collection within a page', function (mixed $headers): void {
+    $history = [];
+    $mailbox = queryResultMailbox('gmail', [
+        ['messages' => [['id' => 'a'], ['id' => 'bad'], ['id' => 'c']]],
+        queryResultGmailMessage('a'),
+        ['id' => 'bad', 'payload' => ['headers' => $headers, 'parts' => []]],
+        queryResultGmailMessage('c'),
+    ], $history);
+
+    $result = $mailbox->messages()->orderBy('subject', 'asc')->getResult();
+
+    expect($result->messages->pluck('id')->all())->toBe(['a', 'c'])
+        ->and($result->rejections->pluck('providerMessageId')->all())->toBe(['bad']);
+})->with([
+    'object collection' => [(object) ['broken' => true]],
+    'scalar header' => [[12]],
+    'missing value' => [[['name' => 'Cc']]],
+    'non-string name' => [[['name' => 12, 'value' => 'value']]],
+]);
+
+it('validates Gmail raw identity before malformed header conversion or hydration', function (): void {
+    $history = [];
+    $mailbox = queryResultMailbox('gmail', [
+        ['messages' => [['id' => 'expected']]],
+        ['id' => 'different', 'payload' => ['headers' => (object) [], 'mimeType' => 'text/plain', 'body' => ['attachmentId' => 'body']]],
+    ], $history);
+
+    expect(fn () => $mailbox->messages()->getResult())->toThrow(ApiRequestException::class, 'mismatched');
+    expect($history)->toHaveCount(2);
+});
+
+it('keeps malformed nested Gmail MIME collections fatal', function (string $field): void {
+    $history = [];
+    $mailbox = queryResultMailbox('gmail', [
+        ['messages' => [['id' => 'bad']]],
+        ['id' => 'bad', 'payload' => ['headers' => [], 'parts' => [[$field => (object) []]]]],
+    ], $history);
+
+    expect(fn () => $mailbox->messages()->getResult())->toThrow(MailboxException::class);
+})->with(['parts', 'headers']);
+
 it('keeps malformed received headers strict through existing query and single reads', function (string $driver, string $entrypoint): void {
     $history = [];
     $bad = $driver === 'gmail'
@@ -82,7 +136,7 @@ it('rejects invalid provider identities instead of retaining a header rejection'
 
     expect(fn () => $mailbox->messages()->getResult())->toThrow(ApiRequestException::class);
     expect($history)->toHaveCount(1);
-})->with(['ms-graph', 'gmail'])->with([[null], [12], [''], ['  ']]);
+})->with(['ms-graph', 'gmail'])->with([[null], [12], [''], ['  '], ["bad\0id"], ["bad\nid"], ["bad\x7fid"]]);
 
 it('rejects Gmail listed read identity mismatches before retaining a bad header', function (): void {
     $history = [];
@@ -218,6 +272,43 @@ it('rejects cyclic listing continuations', function (string $driver): void {
     expect(fn () => $mailbox->messages()->getResult())->toThrow(ApiRequestException::class);
     expect($history)->toHaveCount(2);
 })->with(['ms-graph', 'gmail']);
+
+it('identifies missing messages only through native exact reads', function (string $driver, string $method): void {
+    $history = [];
+    $mailbox = queryResultMailbox($driver, [new Response(404, [], '{}')], $history);
+
+    try {
+        $mailbox->message('missing')->{$method}();
+        test()->fail('A missing provider message must fail.');
+    } catch (ResourceNotFoundException $exception) {
+        expect($exception->resourceType)->toBe($method === 'getExact' ? 'message' : 'resource')
+            ->and($exception->resourceId)->toBe($method === 'getExact' ? 'missing' : 'users/reader%40example.com/messages/missing');
+    }
+})->with(['ms-graph', 'gmail'])->with(['get', 'getExact']);
+
+it('rejects invalid exact-read identities before requesting a provider', function (string $driver): void {
+    $history = [];
+    $mailbox = queryResultMailbox($driver, [new Response(404, [], '{}')], $history);
+
+    expect(fn () => $mailbox->message("bad\0id")->getExact())->toThrow(MailboxException::class, 'valid provider message identity');
+    expect($history)->toBeEmpty();
+})->with(['ms-graph', 'gmail']);
+
+it('keeps a missing Gmail external body operational during an exact read', function (): void {
+    $history = [];
+    $mailbox = queryResultMailbox('gmail', [
+        ['id' => 'expected', 'payload' => ['mimeType' => 'text/plain', 'body' => ['attachmentId' => 'body']]],
+        new Response(404, [], '{}'),
+    ], $history);
+
+    try {
+        $mailbox->message('expected')->getExact();
+        test()->fail('A missing external body must fail.');
+    } catch (MailboxException $exception) {
+        expect($exception)->not->toBeInstanceOf(ResourceNotFoundException::class);
+        expect($exception->getMessage())->toBe('External Gmail body content was not available.');
+    }
+});
 
 /** @param list<array{name: string, value: string}> $headers
  * @return array<string, mixed>

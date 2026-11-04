@@ -84,7 +84,9 @@ $message = $service->syncMailboxMessage($mailbox, $providerMessageId, [
 
 The method performs a strict read through the optional `SupportsExactMessageRead::getExact()` capability, verifying identity before parsing received headers. Microsoft and Gmail provide this capability; custom resources without it throw `UnsupportedCapabilityException`. Ordinary `get()` remains unchanged. Recovery resolves the current folder independently, comparing Graph's parent folder or all Gmail labels, and checks the current filters and rule tree. Only the derived rolling lookback is bypassed; explicit dates remain enforced. It returns `null` for an excluded candidate and does not advance `last_synced_at`. Header validation, unavailable messages, provider failures and persistence errors remain exceptions.
 
-Applications remain responsible for ownership, current authorization, retained rejections and durable capture. Both sync methods, strict `syncMailbox()`, and `MailboxMessagePersister::upsert()` accept a trailing optional `guardedWrite` closure. It receives the actual local database-write closure and must execute and return that closure's result under the application's fresh-authority transaction fence:
+Native exact reads report a missing top-level message with `ResourceNotFoundException` whose `resourceType` is `message` and `resourceId` is the requested provider ID. Folder, attachment and external-body failures remain operational exceptions; applications must not interpret every not-found exception as a missing message.
+
+Applications remain responsible for ownership, current authorization, retained rejections and durable capture. `syncMailboxResult()`, `syncMailboxMessage()` and `MailboxMessagePersister::upsert()` accept a trailing optional `guardedWrite` closure. Strict `syncMailbox()` retains its original two-argument signature. The wrapper receives the actual local database-write closure and must execute and return that closure's result under the application's fresh-authority transaction fence:
 
 ```php
 $message = $service->syncMailboxMessage(
