@@ -4,6 +4,12 @@ Required live acceptance remains **open**. G2, G3 and M6 have limited authorized
 
 Use the immutable candidate and local check identities in the [compatibility receipt](compatibility.md). Before any live execution, record the exact candidate, designated sender/recipient, account/grant/target, scoped permissions, authorized operations and cleanup boundary. A later relevant source or setup change invalidates the affected rows. No account identity, credential or message content is invented here.
 
+## Consumer Storage Qualification — November 4, 2026
+
+The separately approved AI Clerk local PostgreSQL conversion completed at host `cc07543` with installed SDK `a71ad7e`. Workers and the scheduler were paused, the queue was empty, and a fresh database backup passed its archive catalogue check before the guarded migration ran. Before/after fingerprints matched across 28 application tables, excluding volatile cache/locks and the new migration-history row. The check preserved 2,691 messages, 15,325 attachment records, 1,799 conversations, four watches, seven subscriptions, 571 receipts and six shared-access requests. All five approved seals and the retained receipt bindings verified; the original uncertain send remained unchanged. Superseded provider tables and columns were removed.
+
+The site returned HTTP 200 and its first resumed maintenance cycle completed without new failed jobs. This is host storage evidence, not SDK live-provider parity. No email was sent, no provider permission changed, and no production deployment or fresh complete file-byte audit was performed. The installed SDK runtime and its public contracts remain unchanged. Reversal requires the database backup and matching host application version. All G1–G3/M1–M6 profiles and the open production identity, callback, isolation and pilot gates below remain in scope.
+
 ## Account and Permission Prerequisites
 
 | Profile | Account and selected authority                                                                               | Concrete missing prerequisites                                                                                                                                    | Live owner |
