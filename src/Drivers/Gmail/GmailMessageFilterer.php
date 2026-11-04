@@ -122,7 +122,7 @@ final class GmailMessageFilterer
     private function compare(string $operator, mixed $actual, mixed $expected): bool
     {
         if ($expected instanceof \DateTimeInterface) {
-            $expected = CarbonImmutable::instance($expected)->toIso8601String();
+            $expected = CarbonImmutable::instance($expected)->utc()->toIso8601String();
         }
 
         return match (strtolower($operator)) {

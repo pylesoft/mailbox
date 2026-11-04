@@ -64,6 +64,22 @@ it('retains Gmail header rejections while reading valid messages across pages', 
     expect($history)->toHaveCount(5);
 });
 
+it('compares Gmail received dates against the instant of a non-UTC DateTime operand', function (string $method): void {
+    $history = [];
+    $mailbox = queryResultMailbox('gmail', [
+        ['messages' => [['id' => 'before'], ['id' => 'after']]],
+        [...queryResultGmailMessage('before'), 'internalDate' => '1704099600000'],
+        [...queryResultGmailMessage('after'), 'internalDate' => '1704103200000'],
+    ], $history);
+
+    $result = $mailbox->messages()
+        ->where('receivedAt', 'ge', new DateTimeImmutable('2024-01-01T11:30:00+02:00'))
+        ->{$method}();
+    $messages = $method === 'get' ? $result : $result->messages;
+
+    expect($messages->pluck('id')->all())->toBe(['after']);
+})->with(['get', 'getResult']);
+
 it('isolates malformed Graph received header collections within a page', function (string $field): void {
     $history = [];
     $mailbox = queryResultMailbox('ms-graph', [['value' => [
