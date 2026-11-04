@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Services\Persistence;
 
+use Closure;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageResource;
@@ -16,6 +17,7 @@ final class MailboxMessagePersister
 {
     /**
      * @param  Collection<int, AttachmentDto>|null  $prefetchedAttachments
+     * @param  Closure(Closure(): mixed): mixed|null  $guardedWrite
      */
     public function upsert(
         MailboxResource $mailboxResource,
@@ -24,8 +26,9 @@ final class MailboxMessagePersister
         ?MessageResource $resource = null,
         ?Collection $prefetchedAttachments = null,
         bool $persistAttachments = true,
+        ?Closure $guardedWrite = null,
     ): MailboxMessage {
-        $mailboxMessage = MailboxMessage::query()->updateOrCreate(
+        $write = fn (): MailboxMessage => MailboxMessage::query()->updateOrCreate(
             [
                 'mailbox_id' => $mailboxId,
                 'canonical_message_key' => $this->canonicalMessageKey($message),
@@ -53,12 +56,15 @@ final class MailboxMessagePersister
             ],
         );
 
+        $mailboxMessage = $guardedWrite === null ? $write() : $guardedWrite($write);
+
         if (! $persistAttachments) {
             return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;
         }
 
         if (! $message->hasAttachments) {
-            $mailboxMessage->attachments()->delete();
+            $write = fn () => $mailboxMessage->attachments()->delete();
+            $guardedWrite === null ? $write() : $guardedWrite($write);
 
             return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;
         }
@@ -73,7 +79,8 @@ final class MailboxMessagePersister
             }
 
             $persistedAttachmentIds[] = $attachment->id;
-            $mailboxMessage->attachments()->updateOrCreate(
+            $contentBytes = base64_encode((string) $resource->attachment($attachment->id)->stream());
+            $write = fn () => $mailboxMessage->attachments()->updateOrCreate(
                 [
                     'mailbox_message_id' => $mailboxMessage->id,
                     'provider_attachment_id' => $attachment->id,
@@ -84,17 +91,20 @@ final class MailboxMessagePersister
                     'size' => $attachment->size,
                     'is_inline' => $attachment->isInline,
                     'content_id' => $attachment->contentId,
-                    'content_bytes' => base64_encode((string) $resource->attachment($attachment->id)->stream()),
+                    'content_bytes' => $contentBytes,
                 ],
             );
+            $guardedWrite === null ? $write() : $guardedWrite($write);
         }
 
         if ($persistedAttachmentIds === []) {
-            $mailboxMessage->attachments()->delete();
+            $write = fn () => $mailboxMessage->attachments()->delete();
+            $guardedWrite === null ? $write() : $guardedWrite($write);
         } else {
-            $mailboxMessage->attachments()
+            $write = fn () => $mailboxMessage->attachments()
                 ->whereNotIn('provider_attachment_id', array_values(array_unique($persistedAttachmentIds)))
                 ->delete();
+            $guardedWrite === null ? $write() : $guardedWrite($write);
         }
 
         return $mailboxMessage->fresh(['attachments']) ?? $mailboxMessage;

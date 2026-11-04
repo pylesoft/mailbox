@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\Gmail;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\DTOs\MessageDto;
 
@@ -120,6 +121,10 @@ final class GmailMessageFilterer
 
     private function compare(string $operator, mixed $actual, mixed $expected): bool
     {
+        if ($expected instanceof \DateTimeInterface) {
+            $expected = CarbonImmutable::instance($expected)->toIso8601String();
+        }
+
         return match (strtolower($operator)) {
             '=', 'eq' => $actual == $expected,
             '!=', 'ne' => $actual != $expected,

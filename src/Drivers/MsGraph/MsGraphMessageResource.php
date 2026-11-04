@@ -8,6 +8,7 @@ use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\AttachmentResource;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsExactMessageRead;
 use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
@@ -17,7 +18,7 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Support\ResponseBudget;
 
-class MsGraphMessageResource implements MessageResource, SupportsMessageMetadataRead
+class MsGraphMessageResource implements MessageResource, SupportsExactMessageRead, SupportsMessageMetadataRead
 {
     private const METADATA_FIELDS = ['id', 'conversationId', 'parentFolderId', 'isDraft', 'receivedDateTime', 'sentDateTime'];
 
@@ -31,7 +32,21 @@ class MsGraphMessageResource implements MessageResource, SupportsMessageMetadata
 
     public function get(): MessageDto
     {
+        return $this->read(false);
+    }
+
+    public function getExact(): MessageDto
+    {
+        return $this->read(true);
+    }
+
+    private function read(bool $verifyIdentity): MessageDto
+    {
         $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
+
+        if ($verifyIdentity && ($payload['id'] ?? null) !== $this->messageId) {
+            throw new MailboxException('Graph returned a mismatched message identity.');
+        }
 
         return MessageDto::fromMsGraph($payload);
     }

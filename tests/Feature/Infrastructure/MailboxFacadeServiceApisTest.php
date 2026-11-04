@@ -139,7 +139,7 @@ final class RecordingMessageSyncService extends MessageSyncService
     ) {}
 
     /** @param array<string, mixed> $options */
-    public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
+    public function syncMailbox(Mailbox $mailbox, array $options = [], ?Closure $guardedWrite = null): Collection
     {
         $this->calls[] = [
             'mailbox' => $mailbox,
