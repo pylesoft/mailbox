@@ -73,6 +73,40 @@ it('resumes a bounded folder catalogue independently of message delta with canon
     }
 });
 
+it('retains catalogue progress and the retry delay when a child read is rate limited', function (): void {
+    Http::preventStrayRequests();
+    $history = [];
+    $aliases = [WellKnownFolder::DRAFTS];
+    $read = catalogueMailbox([
+        ['id' => 'draft-id'],
+        ['value' => [catalogueFolder('A', 'Projects', 'root', children: 1)]],
+        new Response(429, ['Retry-After' => '83'], '{"error":"rate limited"}'),
+    ], $history)->folderCatalogue(new SyncBudget(maxPages: 3), wellKnownFolders: $aliases);
+
+    expect($read->complete)->toBeFalse();
+    expect($read->reason)->toBe('provider_interrupted');
+    expect($read->retryAfter)->toBe(83);
+    expect($read->jsonSerialize()['retryAfter'])->toBe(83);
+    expect(array_column($read->folders, 'id'))->toBe(['A']);
+    expect($read->rootFolderIds)->toBe(['A']);
+    expect($read->wellKnownFolderIds)->toBe(['drafts' => 'draft-id']);
+    expect($read->continuation->position['enumeration'][0]['folderId'])->toBe('A');
+    expect($history)->toHaveCount(3);
+
+    $resumedHistory = [];
+    $last = catalogueMailbox([['value' => [catalogueFolder('B', 'Child', 'A')]]], $resumedHistory)
+        ->folderCatalogue(new SyncBudget, unserialize(serialize($read->continuation)), $aliases);
+
+    expect($last->complete)->toBeTrue();
+    expect(array_column($last->folders, 'id'))->toBe(['B']);
+    expect($last->rootFolderIds)->toBe(['A']);
+    expect($last->wellKnownFolderIds)->toBe(['drafts' => 'draft-id']);
+    expect($last->retryAfter)->toBeNull();
+    expect($last->jsonSerialize())->not->toHaveKey('retryAfter');
+    expect($resumedHistory)->toHaveCount(1);
+    expect($resumedHistory[0]['request']->getUri()->getPath())->toEndWith('/mailFolders/A/childFolders');
+});
+
 it('retains explicit root observations across catalogue restarts without guessing an unknown parent', function (): void {
     Http::preventStrayRequests();
     $history = [];

@@ -51,6 +51,7 @@ final readonly class MsGraphConversationReader
         $files = [];
         $available = [];
         $reason = null;
+        $retryAfter = null;
         try {
             $work->content(parts: count($state['files']));
             while (true) {
@@ -153,14 +154,17 @@ final readonly class MsGraphConversationReader
             $reason = $work->reason ?? 'response_limit';
         } catch (MailboxAccessDeniedException|ResourceNotFoundException) {
             $reason = 'scope_unavailable';
-        } catch (ApiRequestException|ProviderServerException|RateLimitException) {
+        } catch (RateLimitException $exception) {
+            $reason = 'provider_interrupted';
+            $retryAfter = $exception->retryAfter;
+        } catch (ApiRequestException|ProviderServerException) {
             $reason = 'provider_interrupted';
         } catch (MailboxException) {
             $reason = 'content_incomplete';
         }
 
         return new ConversationRead($identity, $conversationId, $messages, $files, complete: $reason === null,
-            continuation: $reason === null ? null : new SyncContinuation($identity, 'ms-graph.conversation', $state), reason: $reason);
+            continuation: $reason === null ? null : new SyncContinuation($identity, 'ms-graph.conversation', $state), reason: $reason, retryAfter: $retryAfter);
     }
 
     /**

@@ -46,6 +46,7 @@ final readonly class GmailConversationReader
         $files = [];
         $available = [];
         $reason = null;
+        $retryAfter = null;
         try {
             if ($state['pending'] === null) {
                 $work->request(page: true);
@@ -102,14 +103,17 @@ final readonly class GmailConversationReader
             $reason = $work->reason ?? ($work->responses->remaining() === 0 ? 'response_limit' : 'content_limit');
         } catch (MailboxAccessDeniedException|ResourceNotFoundException) {
             $reason = 'scope_unavailable';
-        } catch (ApiRequestException|ProviderServerException|RateLimitException) {
+        } catch (RateLimitException $exception) {
+            $reason = 'provider_interrupted';
+            $retryAfter = $exception->retryAfter;
+        } catch (ApiRequestException|ProviderServerException) {
             $reason = 'provider_interrupted';
         } catch (MailboxException) {
             $reason = 'content_incomplete';
         }
 
         return new ConversationRead($identity, $conversationId, $messages, $files, complete: $reason === null,
-            continuation: $reason === null ? null : new SyncContinuation($identity, 'gmail.conversation', $state), reason: $reason);
+            continuation: $reason === null ? null : new SyncContinuation($identity, 'gmail.conversation', $state), reason: $reason, retryAfter: $retryAfter);
     }
 
     /** @return array{conversationId: string, pending: ?list<string>} */

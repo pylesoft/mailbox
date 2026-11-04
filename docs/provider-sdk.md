@@ -54,6 +54,8 @@ The host also owns exclusive send scheduling and durable receipts. An uncertain 
 
 Use the [bounded synchronization](delta-sync.md) and [conversation](messages.md#reading-a-complete-conversation) APIs for resumable imports. Persist work before promoting progress. A continuation is unfinished work; a notification history ID is not a completed checkpoint. Folder removals do not authorize deleting retained local conversation history.
 
+Interrupted conversation reads and Graph folder catalogues expose an optional `retryAfter` delay in seconds when the provider rate limits a request. Retain returned partial content and its continuation before pausing shared mailbox work for that delay. The SDK does not retry that bounded request internally; ordinary JSON omits `retryAfter` when no delay is reported.
+
 Received addresses and headers use an internal MIME parser. Malformed or incomplete body/file bytes fail explicitly. Download limits cover actual transport/decoding; the host retains sanitization, private storage, type allowlists and file authorization. See [attachments](attachments.md) for read limits.
 
 Outbound files carry the original expected SHA-256 and exact length. Reopen the same immutable bytes after every restart. A matching filename, path or size is insufficient. Graph verifies the selected remote files before send and can inspect ambiguous attachment completion without blindly uploading a duplicate.

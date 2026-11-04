@@ -22,6 +22,7 @@ final readonly class FolderCatalogue implements JsonSerializable
         #[\SensitiveParameter] public ?SyncContinuation $continuation = null,
         public ?string $reason = null,
         public array $rootFolderIds = [],
+        public ?int $retryAfter = null,
     ) {
         if ($complete === ($continuation !== null)) {
             throw new InvalidArgumentException('A folder catalogue requires either completion or an unfinished continuation.');
@@ -31,7 +32,12 @@ final readonly class FolderCatalogue implements JsonSerializable
     /** @return array<string, mixed> */
     public function jsonSerialize(): array
     {
-        return [...get_object_vars($this), 'continuation' => $this->continuation?->__debugInfo()];
+        $values = [...get_object_vars($this), 'continuation' => $this->continuation?->__debugInfo()];
+        if ($this->retryAfter === null) {
+            unset($values['retryAfter']);
+        }
+
+        return $values;
     }
 
     /** @return array<string, mixed> */

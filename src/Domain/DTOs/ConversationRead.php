@@ -21,6 +21,7 @@ final readonly class ConversationRead implements JsonSerializable
         public bool $complete = false,
         public ?SyncContinuation $continuation = null,
         public ?string $reason = null,
+        public ?int $retryAfter = null,
     ) {
         if ($complete === ($continuation !== null)) {
             throw new InvalidArgumentException('A conversation read requires either complete content or an unfinished continuation.');
@@ -30,7 +31,12 @@ final readonly class ConversationRead implements JsonSerializable
     /** @return array<string, mixed> */
     public function jsonSerialize(): array
     {
-        return [...get_object_vars($this), 'continuation' => $this->continuation?->__debugInfo()];
+        $values = [...get_object_vars($this), 'continuation' => $this->continuation?->__debugInfo()];
+        if ($this->retryAfter === null) {
+            unset($values['retryAfter']);
+        }
+
+        return $values;
     }
 
     /** @return array<string, mixed> */

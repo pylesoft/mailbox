@@ -46,6 +46,7 @@ final readonly class MsGraphFolderCatalogue
         $folders = [];
         $items = 0;
         $reason = null;
+        $retryAfter = null;
 
         try {
             for ($requests = 0; ; $requests++) {
@@ -132,7 +133,10 @@ final readonly class MsGraphFolderCatalogue
             $reason = 'response_limit';
         } catch (MailboxAccessDeniedException|ResourceNotFoundException) {
             $reason = 'scope_unavailable';
-        } catch (ApiRequestException|ProviderServerException|RateLimitException) {
+        } catch (RateLimitException $exception) {
+            $reason = 'provider_interrupted';
+            $retryAfter = $exception->retryAfter;
+        } catch (ApiRequestException|ProviderServerException) {
             $reason = 'provider_interrupted';
         } catch (MailboxException) {
             $reason = 'content_incomplete';
@@ -146,7 +150,7 @@ final readonly class MsGraphFolderCatalogue
         }
 
         return new FolderCatalogue($identity, $folders, $state['canonical'], complete: $reason === null,
-            continuation: $reason === null ? null : new SyncContinuation($identity, 'ms-graph.folder-catalogue', $state), reason: $reason, rootFolderIds: $roots);
+            continuation: $reason === null ? null : new SyncContinuation($identity, 'ms-graph.folder-catalogue', $state), reason: $reason, rootFolderIds: $roots, retryAfter: $retryAfter);
     }
 
     /**

@@ -384,12 +384,12 @@ it('bounds an unpaged Gmail thread by actual response bytes and can restart it w
         ->and($resumedHistory)->toHaveCount(1);
 });
 
-it('retains earlier Graph messages when a later metadata fetch is interrupted without hidden retries', function (): void {
+it('retains earlier Graph messages when a later metadata fetch is interrupted without hidden retries', function (int $status, ?int $retryAfter): void {
     $history = [];
     $mailbox = conversationMailbox('ms-graph', [
         ['value' => [graphConversationMessage('older'), graphConversationMessage('recent')]],
         ['value' => []],
-        new Response(503, [], '{"error":"private-provider-detail"}'),
+        new Response($status, $retryAfter === null ? [] : ['Retry-After' => (string) $retryAfter], '{"error":"private-provider-detail"}'),
     ], $history);
     $scope = new SyncScope('FolderA');
 
@@ -397,11 +397,17 @@ it('retains earlier Graph messages when a later metadata fetch is interrupted wi
 
     expect($first->complete)->toBeFalse()
         ->and($first->reason)->toBe('provider_interrupted')
+        ->and($first->retryAfter)->toBe($retryAfter)
         ->and(array_column($first->messages, 'id'))->toBe(['older'])
         ->and($first->continuation)->not->toBeNull()
         ->and($history)->toHaveCount(3);
     expect(json_encode($first))->not->toContain('private-provider-detail');
     expect(json_encode($first))->not->toContain('selected-token');
+    if ($retryAfter === null) {
+        expect($first->jsonSerialize())->not->toHaveKey('retryAfter');
+    } else {
+        expect($first->jsonSerialize()['retryAfter'])->toBe($retryAfter);
+    }
 
     $resumedHistory = [];
     $last = conversationMailbox('ms-graph', [graphConversationMessage('recent'), ['value' => []]], $resumedHistory)
@@ -409,6 +415,38 @@ it('retains earlier Graph messages when a later metadata fetch is interrupted wi
 
     expect($last->complete)->toBeTrue()
         ->and(array_column($last->messages, 'id'))->toBe(['recent'])
+        ->and($last->retryAfter)->toBeNull()
+        ->and($resumedHistory)->toHaveCount(2);
+})->with(['unavailable' => [503, null], 'rate limited' => [429, 73]]);
+
+it('retains completed Gmail content and the retry delay when later body hydration is rate limited', function (): void {
+    Http::preventStrayRequests();
+    $history = [];
+    $external = ['id' => 'recent', 'threadId' => 'thread', 'payload' => [
+        'mimeType' => 'text/plain', 'body' => ['attachmentId' => 'external-body', 'size' => 3],
+    ]];
+    $read = conversationMailbox('gmail', [
+        ['id' => 'thread', 'messages' => [gmailConversationMessage('older'), $external]],
+        new Response(429, ['Retry-After' => '91'], '{"error":"rate limited"}'),
+    ], $history)->conversation('thread', new SyncScope, new SyncBudget);
+
+    expect($read->complete)->toBeFalse()
+        ->and($read->reason)->toBe('provider_interrupted')
+        ->and($read->retryAfter)->toBe(91)
+        ->and(array_column($read->messages, 'id'))->toBe(['older'])
+        ->and($read->continuation->position['pending'])->toBe(['recent'])
+        ->and($read->jsonSerialize()['retryAfter'])->toBe(91)
+        ->and($history)->toHaveCount(2);
+
+    $resumedHistory = [];
+    $last = conversationMailbox('gmail', [$external, ['data' => 'WWVz', 'size' => 3]], $resumedHistory)
+        ->conversation('thread', new SyncScope, new SyncBudget, unserialize(serialize($read->continuation)));
+
+    expect($last->complete)->toBeTrue()
+        ->and(array_column($last->messages, 'id'))->toBe(['recent'])
+        ->and($last->messages[0]->body?->content)->toBe('Yes')
+        ->and($last->retryAfter)->toBeNull()
+        ->and($last->jsonSerialize())->not->toHaveKey('retryAfter')
         ->and($resumedHistory)->toHaveCount(2);
 });
 
