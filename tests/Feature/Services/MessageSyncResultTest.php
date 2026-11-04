@@ -68,6 +68,60 @@ it('recovers an old explicit message while retaining current folder and explicit
     'importance filter' => [['filters' => ['importance' => 'high']], false],
 ]);
 
+it('excludes Gmail Spam and Trash from exact recovery under ordinary list scope', function (string $driver, array $labels, array $options): void {
+    $mailbox = createTestMailbox('Gmail scope', 'reader@example.com', 'Reader', $driver);
+    expectMailboxFacadeForMailbox($mailbox, syncResultResource('gmail', [
+        ['id' => 'old', 'internalDate' => '1704110400000', 'labelIds' => $labels, 'payload' => ['headers' => [], 'parts' => []]],
+        ['id' => 'Label_custom'],
+    ]));
+
+    $message = (new MessageSyncService)->syncMailboxMessage($mailbox, 'old', $options);
+
+    expect($message)->toBeNull();
+    $this->assertDatabaseCount('mailbox_messages', 0);
+    expect($mailbox->fresh()->last_synced_at)->toBeNull();
+})->with(['gmail', 'google-workspace'])->with([
+    'Spam without a folder' => [['SPAM'], []],
+    'Trash without a folder' => [['TRASH'], []],
+    'Spam retaining a custom label' => [['SPAM', 'Label_custom'], ['folder' => 'custom']],
+    'Trash retaining a custom label' => [['TRASH', 'Label_custom'], ['folder' => 'custom']],
+]);
+
+it('requires valid Gmail label evidence for exact recovery even without a folder', function (array $membership): void {
+    $mailbox = createTestMailbox('Gmail label evidence', 'reader@example.com', 'Reader', 'gmail');
+    expectMailboxFacadeForMailbox($mailbox, syncResultResource('gmail', [
+        ['id' => 'old', 'internalDate' => '1704110400000', ...$membership, 'payload' => ['headers' => [], 'parts' => []]],
+    ]));
+
+    expect(fn () => (new MessageSyncService)->syncMailboxMessage($mailbox, 'old'))
+        ->toThrow(MailboxException::class);
+    $this->assertDatabaseCount('mailbox_messages', 0);
+})->with([
+    'missing labels' => [[]],
+    'non-list labels' => [['labelIds' => ['label' => 'INBOX']]],
+    'non-string label after Spam' => [['labelIds' => ['SPAM', 42]]],
+    'blank label' => [['labelIds' => [' ']]],
+]);
+
+it('recovers visible Gmail messages within their current folder scope', function (string $driver, array $labels, array $options, string $folderId): void {
+    $mailbox = createTestMailbox('Visible Gmail recovery', 'reader@example.com', 'Reader', $driver);
+    expectMailboxFacadeForMailbox($mailbox, syncResultResource('gmail', [
+        ['id' => 'old', 'internalDate' => '1704110400000', 'labelIds' => $labels, 'payload' => ['headers' => [], 'parts' => []]],
+        ['id' => $folderId],
+    ]));
+
+    $message = (new MessageSyncService)->syncMailboxMessage($mailbox, 'old', $options);
+
+    expect($message?->provider_message_id)->toBe('old');
+    $this->assertDatabaseCount('mailbox_messages', 1);
+    expect($mailbox->fresh()->last_synced_at)->toBeNull();
+})->with(['gmail', 'google-workspace'])->with([
+    'Inbox without a folder' => [['INBOX'], [], 'INBOX'],
+    'unlabelled without a folder' => [[], [], 'INBOX'],
+    'explicit Inbox' => [['INBOX'], ['folder' => 'inbox'], 'INBOX'],
+    'secondary custom label' => [['INBOX', 'Label_custom'], ['folder' => 'custom'], 'Label_custom'],
+]);
+
 it('fences every local write and performs attachment downloads outside the fence', function (bool $hasAttachments): void {
     $mailbox = createTestMailbox('Guarded', 'reader@example.com', 'Reader');
     $message = testMailboxMessageDto('guarded', null, 'inbox', $hasAttachments);

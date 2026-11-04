@@ -136,12 +136,12 @@ class MessageSyncService
     private function matchesFolder(MailboxResource $resource, MessageSyncPlan $plan, MessageDto $message, string $driver): bool
     {
         $folder = $plan->folderReference();
-        if ($folder === null) {
-            return true;
-        }
-        $folderId = $resource->folder($folder)->get()->id;
-        if (trim($folderId) === '') {
-            throw new MailboxException('Provider returned an invalid folder identity.');
+        $folderId = null;
+        if ($folder !== null) {
+            $folderId = $resource->folder($folder)->get()->id;
+            if (trim($folderId) === '') {
+                throw new MailboxException('Provider returned an invalid folder identity.');
+            }
         }
         if (in_array($driver, ['gmail', 'google-workspace'], true)) {
             $labels = $message->raw['labelIds'] ?? null;
@@ -154,7 +154,14 @@ class MessageSyncService
                 }
             }
 
-            return in_array($folderId, $labels, true);
+            if (in_array('SPAM', $labels, true) || in_array('TRASH', $labels, true)) {
+                return false;
+            }
+
+            return $folder === null || in_array($folderId, $labels, true);
+        }
+        if ($folder === null) {
+            return true;
         }
         if ($message->parentFolderId === null || trim($message->parentFolderId) === '') {
             throw new MailboxException('Provider returned invalid folder membership.');
