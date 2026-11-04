@@ -43,4 +43,12 @@ Validate the candidate SDK against designated Microsoft organizational, personal
 
 ## Integration notes
 
+### Completed designated M6 controls — November 3, 2026
+
+Host `d2d1b71cd7e36f3b4365da2afaa19987f89ebe4b` with installed SDK `5ad04592180ec99c3116fc2c7232565c0ed58eda` completed provider scope denial, interrupted preparation/upload and a controlled Orders disconnect/reapproval/reconnect. The allowed folder-ID read returned 200 and the designated excluded target returned `403 ErrorAccessDenied`, without requesting message content. One lost draft-creation acknowledgement stayed held with zero sends and no replay. A fresh process resumed the same 6,000,000-byte upload, resolved its lost final acknowledgement by original-file inspection, sent once and matched a sent copy plus one recipient delivery.
+
+Reconnect used fresh independent approval, rejected old authority and preserved retained messages/files/manifests, collaboration state and cutoff. Its watch required one explicit operator recovery after a verified empty provider lookup, so unattended repair remains unqualified. New receipts processed without new failures, but generation 4 full reconciliation was still pending. The later temporary hostname change does not establish current Microsoft callback reachability.
+
+These completed cases supersede stale pending entries only for the designated M6 setup. See the [reconciled live ledger](../live-acceptance.md#completed-m6-scope-and-recovery-controls--november-3-2026) and the [host acceptance record](https://github.com/pylesoft/ai-clerk/blob/feat/mailbox-integration/docs/plans/mailbox-integration/tickets/18-validate-microsoft-through-designated-live-accounts.md). Private original receipts remain under `C:/Users/hello/.codex/scratch/mailbox-live-setup`; no new live action is performed by this documentation update. Other Microsoft profiles, fresh post-recovery reconciliation, production latency, stable callbacks and broader coordination/recovery cases remain open.
+
 Status remains needs-info and Resolution remains open until these prerequisites are supplied. This live gate is independent of Gmail after ticket 25. Relevant candidate changes invalidate only the affected live evidence.
