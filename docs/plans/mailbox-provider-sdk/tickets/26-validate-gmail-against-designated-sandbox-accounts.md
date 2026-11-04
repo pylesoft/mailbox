@@ -1,5 +1,7 @@
 # 26: Validate Gmail against designated sandbox accounts
 
+**Current phase — November 4:** Ian deferred personal-account testing: personal Gmail G1 and Outlook.com/Hotmail M3 remain unqualified future coverage. Do not request or enroll those accounts, or treat their missing live evidence as a current-phase blocker. Workspace/organizational and shared-mailbox profiles, recovery, isolation and production gates remain in scope. Historical all-profile requirements below describe the earlier plan; this deferral changes neither supported contracts nor a case to passed.
+
 **What to build:** Record authorized personal/Workspace lifecycle, send/files, watch and recovery acceptance separately from mocks.
 
 **Blocked by:** [25: Verify consumer upgrades and package compatibility](25-verify-consumer-upgrades-and-package-compatibility.md)
@@ -17,7 +19,7 @@ Validate the candidate SDK against designated personal Gmail and Workspace sandb
 ## Acceptance criteria
 
 - [ ] Record the immutable package candidate, account/authentication matrix, authorized sender/recipient identities and exact scoped live operations before execution; do not expose credentials or message content unnecessarily.
-- [ ] Validate personal Gmail delegated authorization, Workspace delegated authorization and preserved Workspace service-account access, including actual refresh and identity isolation where testable.
+- [ ] Validate Workspace delegated authorization and preserved Workspace service-account access (personal Gmail G1 is deferred), including actual refresh and identity isolation where testable.
 - [ ] Exercise initial/incremental synchronization, selected-conversation content, files and missed-notification catch-up with the host's explicit scope and retention policy.
 - [ ] Send designated text/HTML messages, replies, forwards, inline files and the 10 MiB-per-file/20 MiB aggregate parity cases; inspect recipient/content/thread and acceptance evidence without treating acceptance as delivery proof.
 - [ ] Verify real watch registration, authenticated Pub/Sub delivery, renewal/stop and host receipt-to-reconciliation behavior using a verified public callback setup.

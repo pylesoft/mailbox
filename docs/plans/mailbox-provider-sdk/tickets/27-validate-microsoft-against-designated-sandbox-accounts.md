@@ -1,5 +1,7 @@
 # 27: Validate Microsoft against designated sandbox accounts
 
+**Current phase — November 4:** Ian deferred personal-account testing: personal Gmail G1 and Outlook.com/Hotmail M3 remain unqualified future coverage. Do not request or enroll those accounts, or treat their missing live evidence as a current-phase blocker. Workspace/organizational and shared-mailbox profiles, recovery, isolation and production gates remain in scope. Historical all-profile requirements below describe the earlier plan; this deferral changes neither supported contracts nor a case to passed.
+
 **What to build:** Record authorized Microsoft own/personal/shared acceptance, including 10 MiB files and known provider limitations.
 
 **Blocked by:** [25: Verify consumer upgrades and package compatibility](25-verify-consumer-upgrades-and-package-compatibility.md)
@@ -17,7 +19,7 @@ Validate the candidate SDK against designated Microsoft organizational, personal
 ## Acceptance criteria
 
 - [ ] Record the immutable package candidate, account/grant/target matrix, scoped permissions, designated senders/recipients and authorized live operations before execution.
-- [ ] Validate work/school and Outlook.com/Hotmail delegated enrollment/refresh, preserved application access, authorized delegated shared delta-only access and identity/lifecycle isolation.
+- [ ] Validate work/school delegated enrollment/refresh, preserved application access (personal Outlook.com/Hotmail M3 is deferred), authorized delegated shared delta-only access and identity/lifecycle isolation.
 - [ ] Verify required shared live mode uses one explicit scoped application grant for actual read/send/watch. Missing push or consent must fail clearly without mixed-grant elevation.
 - [ ] Exercise per-folder initial/delta reads, conversation content, removals, expiry/reset and missed-notification catch-up without deleting retained history.
 - [ ] Send ordinary messages and native own/shared replies/forwards; inspect normalized recipients, content, selected files, unchanged originals and immutable submission identities.
