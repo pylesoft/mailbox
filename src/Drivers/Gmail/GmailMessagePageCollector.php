@@ -5,8 +5,14 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\Gmail;
 
 use Illuminate\Support\Collection;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\DTOs\MessageQueryRejection;
+use Pyle\Mailbox\DTOs\MessageQueryResult;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
+use Pyle\Mailbox\Support\ConversationPayload;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 final class GmailMessagePageCollector
 {
@@ -25,8 +31,26 @@ final class GmailMessagePageCollector
         ?int $limit = null,
         ?GmailMessageFilterer $filterer = null,
     ): Collection {
+        return $this->execute($query, $maxPages, $limit, $filterer, false)->messages;
+    }
+
+    /** @param array<string, mixed> $query */
+    public function collectResult(
+        array $query,
+        int $maxPages,
+        ?int $limit = null,
+        ?GmailMessageFilterer $filterer = null,
+    ): MessageQueryResult {
+        return $this->execute($query, $maxPages, $limit, $filterer, true);
+    }
+
+    /** @param array<string, mixed> $query */
+    private function execute(array $query, int $maxPages, ?int $limit, ?GmailMessageFilterer $filterer, bool $isolateHeaders): MessageQueryResult
+    {
         $endpoint = sprintf('users/%s/messages', rawurlencode($this->mailbox));
         $collected = collect();
+        $rejections = collect();
+        $budget = new ResponseBudget((new BodyReadLimits)->maxResponseBytes);
         $nextPageToken = null;
         $seenPageTokens = [];
         $seenMessageIds = [];
@@ -42,8 +66,11 @@ final class GmailMessagePageCollector
             $seenPageTokens[$tokenSignature] = true;
             $pageCount++;
 
-            $response = $this->client->get($endpoint, $this->queryForPage($query, $nextPageToken), $this->mailbox);
-            $messages = $this->hydrateMessages((array) ($response['messages'] ?? []), $seenMessageIds);
+            $pageQuery = $this->queryForPage($query, $nextPageToken);
+            $response = $isolateHeaders
+                ? ConversationPayload::array($this->client->getBoundedObject($endpoint, $budget, $pageQuery, $this->mailbox, retry: true))
+                : $this->client->get($endpoint, $pageQuery, $this->mailbox);
+            $messages = $this->hydrateMessages((array) ($response['messages'] ?? []), $seenMessageIds, $isolateHeaders, $rejections);
 
             if ($filterer !== null) {
                 $messages = $filterer->apply($messages);
@@ -52,13 +79,19 @@ final class GmailMessagePageCollector
             $collected = $collected->concat($messages);
 
             if ($limit !== null && $collected->count() >= $limit) {
-                return $collected->take($limit)->values();
+                $next = $isolateHeaders ? $this->nextPageToken($response) : null;
+                if ($isolateHeaders && $next !== null && isset($seenPageTokens[$next])) {
+                    throw new ApiRequestException('Gmail returned a repeated listing continuation.');
+                }
+
+                return new MessageQueryResult($collected->take($limit)->values(), $rejections,
+                    $collected->count() === $limit && ! array_key_exists('nextPageToken', $response));
             }
 
             $nextPageToken = $this->nextPageToken($response);
         } while ($nextPageToken !== null);
 
-        return $collected->values();
+        return new MessageQueryResult($collected->values(), $rejections, true);
     }
 
     /**
@@ -89,13 +122,14 @@ final class GmailMessagePageCollector
     /**
      * @param  array<int, mixed>  $summaries
      * @param  array<string, bool>  $seenMessageIds
+     * @param  Collection<int, MessageQueryRejection>  $rejections
      * @return Collection<int, MessageDto>
      */
-    private function hydrateMessages(array $summaries, array &$seenMessageIds): Collection
+    private function hydrateMessages(array $summaries, array &$seenMessageIds, bool $isolateHeaders, Collection $rejections): Collection
     {
         return collect($summaries)
-            ->map(function (mixed $summary) use (&$seenMessageIds): ?MessageDto {
-                return $this->hydrateSummary($summary, $seenMessageIds);
+            ->map(function (mixed $summary) use (&$seenMessageIds, $isolateHeaders, $rejections): ?MessageDto {
+                return $this->hydrateSummary($summary, $seenMessageIds, $isolateHeaders, $rejections);
             })
             ->filter(fn (?MessageDto $message): bool => $message instanceof MessageDto)
             ->values();
@@ -103,9 +137,13 @@ final class GmailMessagePageCollector
 
     /**
      * @param  array<string, bool>  $seenMessageIds
+     * @param  Collection<int, MessageQueryRejection>  $rejections
      */
-    private function hydrateSummary(mixed $summary, array &$seenMessageIds): ?MessageDto
+    private function hydrateSummary(mixed $summary, array &$seenMessageIds, bool $isolateHeaders, Collection $rejections): ?MessageDto
     {
+        if ($isolateHeaders && (! is_array($summary) || ! is_string($summary['id'] ?? null) || trim($summary['id']) === '')) {
+            throw new ApiRequestException('Gmail returned a malformed listed message identity.');
+        }
         if (! is_array($summary)) {
             return null;
         }
@@ -119,8 +157,20 @@ final class GmailMessagePageCollector
         $seenMessageIds[$id] = true;
 
         $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($id);
+        if ($isolateHeaders && (! is_string($payload['id'] ?? null) || $payload['id'] !== $id)) {
+            throw new ApiRequestException('Gmail returned a mismatched message identity.');
+        }
 
-        return MessageDto::fromGmail($payload);
+        try {
+            return MessageDto::fromGmail($payload);
+        } catch (InvalidReceivedHeaderException $exception) {
+            if (! $isolateHeaders) {
+                throw $exception;
+            }
+            $rejections->push(new MessageQueryRejection($id));
+
+            return null;
+        }
     }
 
     /**

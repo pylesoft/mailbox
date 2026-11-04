@@ -18,6 +18,36 @@ $messages = Mailbox::mailbox('invoices@acme.com')
 
 By default, Mailbox fetches messages from the inbox sorted by `receivedAt` descending (newest first). Each item in the returned collection is a `MessageDto` instance containing the message metadata.
 
+### Retaining Received-Header Rejections
+
+Microsoft and Gmail queries implement the optional `SupportsMessageQueryResults` capability. You may use `getResult()` when your application needs to process valid messages while retaining malformed received-address or header failures:
+
+```php
+use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
+
+$query = Mailbox::mailbox('invoices@acme.com')->messages()->take(50);
+
+if ($query instanceof SupportsMessageQueryResults) {
+    $result = $query->getResult();
+
+    foreach ($result->messages as $message) {
+        // Process the validated MessageDto.
+    }
+
+    foreach ($result->rejections as $rejection) {
+        // Retain providerMessageId privately and the safe reason for operator recovery.
+    }
+}
+```
+
+Each rejection contains a validated `providerMessageId` and the reason `invalid_received_header`. A rejected candidate has unknown filter eligibility and does not count toward `take()`. The result retains every rejection encountered on the fetched pages, including those before valid matches. Folder scope, filters, ordering and duplicate handling follow the existing query behavior. Graph adds `id` to projections for this capability.
+
+`$result->exhausted` is `true` when the query exhausted its provider results. It is `false` when the configured valid-message limit stopped the query. Page limits, repeated or unusable continuations, and response byte limits still throw. The optional path bounds combined listing responses to 8 MiB; Gmail message hydration retains its separate body and response limits.
+
+`get()`, `first()` and single-message reads remain strict and throw `InvalidReceivedHeaderException`, which extends `MailboxException`. Identity, envelope, MIME/body, authentication, authorization, throttling and transport failures also remain exceptions. Custom drivers need no new method unless they implement the optional capability.
+
+Result array/JSON serialization and debug output expose counts and completion only. Rejection output exposes the safe reason only. Read the properties explicitly when retaining private provider references. Applications own durable rejection storage and retry policy; this capability requires no Mailbox database tables.
+
 ### Scoping to a Folder
 
 Use `inFolder()` to query a specific folder. You can pass a `WellKnownFolder` enum value or a raw provider folder ID:

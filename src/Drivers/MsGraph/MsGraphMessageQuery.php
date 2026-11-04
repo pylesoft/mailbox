@@ -6,14 +6,21 @@ namespace Pyle\Mailbox\Drivers\MsGraph;
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
 use Pyle\Mailbox\Contracts\SupportsMessageSyncRulePushdown;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\DTOs\MessageQueryRejection;
+use Pyle\Mailbox\DTOs\MessageQueryResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
+use Pyle\Mailbox\Support\ConversationPayload;
+use Pyle\Mailbox\Support\ResponseBudget;
 
-class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRulePushdown
+class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryResults, SupportsMessageSyncRulePushdown
 {
     private const MAX_PAGES = 100;
 
@@ -172,13 +179,23 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
     /** @return Collection<int, MessageDto> */
     public function get(): Collection
     {
+        return $this->execute(false)->messages;
+    }
+
+    public function getResult(): MessageQueryResult
+    {
+        return $this->execute(true);
+    }
+
+    private function execute(bool $isolateHeaders): MessageQueryResult
+    {
         $pageSize = $this->pageSizeOverride ?? (int) config('mailbox.default_page_size', 50);
         $applyClientFiltersPerPage = $this->searchQuery !== null
             && $this->searchQuery !== ''
             && $this->filters !== [];
 
         $query = [
-            '$select' => implode(',', $this->selectFields),
+            '$select' => implode(',', $isolateHeaders ? array_unique([...$this->selectFields, 'id']) : $this->selectFields),
             '$orderby' => sprintf('%s %s', $this->toProviderField($this->orderByField), $this->orderDirection),
             '$top' => $this->limit !== null ? min($this->limit, $pageSize) : $pageSize,
         ];
@@ -198,6 +215,10 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
         $scope = $endpoint;
 
         $collected = collect();
+        $budget = new ResponseBudget((new BodyReadLimits)->maxResponseBytes);
+        $rejections = collect();
+        $seenRejectedIds = [];
+        $exhausted = true;
         $seenPageSignatures = [];
         $seenMessageIds = [];
         $pageCount = 0;
@@ -215,20 +236,45 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
             $seenPageSignatures[$pageSignature] = true;
             $pageCount++;
 
-            $response = $this->client->getMessagePayload($endpoint, $query, $this->mailbox);
-            if (! isset($response['value']) || ! is_array($response['value'])) {
+            if ($isolateHeaders) {
+                $payload = $this->client->getBoundedObject($endpoint, $budget, $query, $this->mailbox, retry: true);
+                if (! is_array($payload->value ?? null) || ! array_is_list($payload->value)) {
+                    throw new ApiRequestException('The provider returned a missing or malformed collection.');
+                }
+                foreach ($payload->value as $item) {
+                    if (! $item instanceof \stdClass) {
+                        throw new ApiRequestException('The provider returned a malformed message collection item.');
+                    }
+                }
+                $response = ConversationPayload::array($payload);
+            } else {
+                $response = $this->client->getMessagePayload($endpoint, $query, $this->mailbox);
+            }
+            if (! isset($response['value']) || ! is_array($response['value']) || ! array_is_list($response['value'])) {
                 throw new ApiRequestException('The provider returned a missing or malformed collection.');
             }
 
             $messages = collect($response['value'])
-                ->map(function (mixed $item): MessageDto {
-                    if (! is_array($item) || ((in_array('id', $this->selectFields, true) || array_key_exists('id', $item))
+                ->map(function (mixed $item) use ($isolateHeaders, $rejections, &$seenRejectedIds): ?MessageDto {
+                    if (! is_array($item) || (($isolateHeaders || in_array('id', $this->selectFields, true) || array_key_exists('id', $item))
                         && (! is_string($item['id'] ?? null) || trim($item['id']) === ''))) {
                         throw new ApiRequestException('The provider returned a malformed message collection item.');
                     }
 
-                    return MessageDto::fromMsGraph($item);
-                });
+                    try {
+                        return MessageDto::fromMsGraph($item);
+                    } catch (InvalidReceivedHeaderException $exception) {
+                        if (! $isolateHeaders) {
+                            throw $exception;
+                        }
+                        if (! isset($seenRejectedIds[$item['id']])) {
+                            $rejections->push(new MessageQueryRejection($item['id']));
+                            $seenRejectedIds[$item['id']] = true;
+                        }
+
+                        return null;
+                    }
+                })->filter()->values();
 
             if ($applyClientFiltersPerPage) {
                 $messages = $this->applyClientFilters($messages);
@@ -253,6 +299,13 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
             $collected = $collected->concat($messages);
 
             if ($this->limit !== null && $collected->count() >= $this->limit) {
+                $exhausted = $collected->count() === $this->limit && ! array_key_exists('@odata.nextLink', $response);
+                if ($isolateHeaders && array_key_exists('@odata.nextLink', $response)) {
+                    $next = $this->client->continuationEndpoint($response['@odata.nextLink'], $scope, $this->mailbox);
+                    if (isset($seenPageSignatures[$next.'|'])) {
+                        throw new ApiRequestException('The provider returned a cyclic continuation.');
+                    }
+                }
                 $collected = $collected->take($this->limit);
                 break;
             }
@@ -263,7 +316,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRul
             $query = [];
         } while ($endpoint !== '');
 
-        return $collected->values();
+        return new MessageQueryResult($collected->values(), $rejections, $exhausted);
     }
 
     public function count(): int
