@@ -12,6 +12,7 @@ use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Http;
 use Pyle\Mailbox\Contracts\FolderQueryBuilder;
 use Pyle\Mailbox\Contracts\FolderResource;
+use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\MessageResource;
@@ -26,6 +27,7 @@ use Pyle\Mailbox\DTOs\SyncIdentity;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
@@ -498,6 +500,27 @@ it('rejects conversation continuations bound to a different operation before pro
         ->and($deniedHistory)->toBe([]);
 })->with(['gmail', 'ms-graph'])->with(['connection', 'grant', 'generation', 'driver', 'mailbox', 'provider', 'folder', 'cutoff', 'version', 'phase', 'conversation']);
 
+it('preserves credential refresh failures during conversation reads', function (string $provider, bool $retryable): void {
+    $history = [];
+    $failure = new GrantRefreshException('The runtime credential needs renewal.', $retryable, $retryable ? 60 : null);
+    $tokens = new class($failure) implements GrantTokenProvider
+    {
+        public function __construct(private GrantRefreshException $failure) {}
+
+        public function assertActive(GrantContext $context): void {}
+
+        public function accessToken(GrantContext $context): string
+        {
+            throw $this->failure;
+        }
+    };
+    $mailbox = conversationMailbox($provider, [], $history, tokens: $tokens);
+
+    expect(fn () => $mailbox->conversation('thread', new SyncScope, new SyncBudget))
+        ->toThrow(fn (GrantRefreshException $exception) => expect($exception)->toBe($failure));
+    expect($history)->toBe([]);
+})->with(['gmail', 'ms-graph'])->with([true, false]);
+
 it('rejects a retained conversation reader after the host invalidates its generation', function (string $provider): void {
     $history = [];
     $tokens = new TestGrantTokenProvider(['grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['reader@example.com'], 'token' => 'selected-token']]);
@@ -755,7 +778,7 @@ it('bounds Graph selection metadata response bytes before decoding unexpected pa
  * @param  list<array<string, mixed>|Response|Throwable>  $responses
  * @param  array<int, array<string, mixed>>  $history
  */
-function conversationMailbox(string $provider, array $responses, array &$history, ?GrantContext $context = null, ?TestGrantTokenProvider $tokens = null): MailboxResource
+function conversationMailbox(string $provider, array $responses, array &$history, ?GrantContext $context = null, ?GrantTokenProvider $tokens = null): MailboxResource
 {
     $stack = HandlerStack::create(new MockHandler(array_map(
         static fn (array|Response|Throwable $response): Response|Throwable => is_array($response)

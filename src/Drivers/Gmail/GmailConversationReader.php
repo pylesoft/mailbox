@@ -17,6 +17,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\MailboxException;
@@ -97,7 +98,7 @@ final readonly class GmailConversationReader
                 array_push($files, ...$messageFiles);
                 array_shift($state['pending']);
             }
-        } catch (AuthenticationException|GrantAccessDeniedException $exception) {
+        } catch (AuthenticationException|GrantAccessDeniedException|GrantRefreshException $exception) {
             throw $exception;
         } catch (ResponseLimitExceededException) {
             $reason = $work->reason ?? ($work->responses->remaining() === 0 ? 'response_limit' : 'content_limit');

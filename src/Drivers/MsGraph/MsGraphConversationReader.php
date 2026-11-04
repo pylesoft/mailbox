@@ -17,6 +17,7 @@ use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\GrantRefreshException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\MailboxException;
@@ -148,7 +149,7 @@ final readonly class MsGraphConversationReader
                 $state['filesStarted'] = false;
                 $state['fileNext'] = null;
             }
-        } catch (AuthenticationException|GrantAccessDeniedException $exception) {
+        } catch (AuthenticationException|GrantAccessDeniedException|GrantRefreshException $exception) {
             throw $exception;
         } catch (ResponseLimitExceededException) {
             $reason = $work->reason ?? 'response_limit';
