@@ -202,10 +202,50 @@ it('inspects the same immutable sent artifact without changing prior acceptance 
     }
 });
 
+it('recovers a lost Graph send acknowledgement from the same immutable artifact in its final conversation', function (): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $copy = array_replace($draft, ['isDraft' => false, 'conversationId' => 'final-conversation', 'sentDateTime' => '2026-10-29T12:30:00Z']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new ConnectException('Acknowledgement lost', new Request('POST', 'https://graph.microsoft.com')),
+        new Response(200, [], json_encode($copy, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($copy, JSON_THROW_ON_ERROR)),
+    ], $history);
+    $message = nativeGraphMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+    $retained = serialize($preparation);
+    $uncertain = $mailbox->submitPrepared($preparation, $message);
+
+    $observed = $mailbox->inspectSubmission(unserialize($retained), $message);
+    $repeated = $mailbox->inspectSubmission(unserialize($retained), $message);
+
+    expect($observed->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved)
+        ->and($observed->artifactId)->toBe('new-draft=')
+        ->and($observed->conversationId)->toBe('final-conversation')
+        ->and($observed->correlationId)->toBe($preparation->correlationId)
+        ->and($observed->context)->toEqual($preparation->context)
+        ->and($repeated->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved)
+        ->and($repeated->conversationId)->toBe('final-conversation')
+        ->and($uncertain->outcome)->toBe(SubmissionOutcome::Uncertain)
+        ->and(serialize($preparation))->toBe($retained)
+        ->and($preparation->conversationId)->toBe('source-conversation')
+        ->and($message->context->conversation->conversationId)->toBe('source-conversation')
+        ->and($history)->toHaveCount(8);
+    foreach (array_slice($history, 6) as $entry) {
+        expect($entry['request']->getMethod())->toBe('GET')
+            ->and($entry['request']->getUri()->getPath())->toEndWith('/messages/new-draft%3D');
+    }
+});
+
 it('leaves uncertain Graph sends unresolved for delayed malformed or mismatched sent copies without replay', function (mixed $lookup): void {
     $history = [];
     $draft = nativeGraphDraft();
-    $copy = array_replace($draft, ['isDraft' => false, 'sentDateTime' => '2026-10-29T12:30:00Z']);
+    $copy = array_replace($draft, ['isDraft' => false, 'conversationId' => 'final-conversation', 'sentDateTime' => '2026-10-29T12:30:00Z']);
     if (is_array($lookup)) {
         $lookup = new Response(200, ['request-id' => 'lookup-1'], json_encode(array_replace($copy, $lookup), JSON_THROW_ON_ERROR));
     }
@@ -237,7 +277,11 @@ it('leaves uncertain Graph sends unresolved for delayed malformed or mismatched 
 })->with([
     'delayed draft' => [['isDraft' => true]],
     'wrong artifact' => [['id' => 'another-draft=']],
-    'wrong conversation' => [['conversationId' => 'other-conversation']],
+    'foreign artifact and conversation' => [['id' => 'another-draft=', 'conversationId' => 'other-conversation']],
+    'missing conversation' => [['conversationId' => null]],
+    'empty conversation' => [['conversationId' => '']],
+    'whitespace conversation' => [['conversationId' => ' ']],
+    'malformed conversation' => [['conversationId' => ['id' => 'other-conversation']]],
     'wrong correlation' => [['internetMessageHeaders' => [['name' => 'x-mailbox-correlation-id', 'value' => 'other-operation']]]],
     'duplicate correlation' => [['internetMessageHeaders' => [['name' => 'x-mailbox-correlation-id', 'value' => 'native-operation'], ['name' => 'X-Mailbox-Correlation-Id', 'value' => 'native-operation']]]],
     'wrong recipients' => [['toRecipients' => []]],

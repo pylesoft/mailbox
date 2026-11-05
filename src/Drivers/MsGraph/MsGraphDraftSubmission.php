@@ -383,13 +383,12 @@ final readonly class MsGraphDraftSubmission
             && $this->matchesDraft(get_object_vars($copy), $message, $draftId, false)
             && $this->filesMatch($copy, $preparation, $message)
             && is_string($copy->conversationId ?? null) && trim($copy->conversationId) !== ''
-            && ($preparation->conversationId === null || $copy->conversationId === $preparation->conversationId)
             && is_string($copy->sentDateTime ?? null) && preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\z/', $copy->sentDateTime) === 1
             && date_parse($copy->sentDateTime)['warning_count'] === 0 && date_parse($copy->sentDateTime)['error_count'] === 0;
 
         return new SubmissionEvidence('ms-graph', $preparation->context, $preparation->correlationId, $draftId,
             $observed ? SubmissionEvidenceOutcome::SentCopyObserved : SubmissionEvidenceOutcome::Inconclusive,
-            $response->status, $response->headers, $preparation->conversationId ?? ($observed ? $copy->conversationId : null));
+            $response->status, $response->headers, $observed ? $copy->conversationId : $preparation->conversationId);
     }
 
     private function assertIntent(SubmissionPreparation $preparation, PreparedMessage $message, ?ResponseBudget $budget = null): string
