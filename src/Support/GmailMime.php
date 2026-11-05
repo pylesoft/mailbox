@@ -134,7 +134,17 @@ final class GmailMime
      */
     public static function isRelatedRoot(array $part, array $child, int $index): bool
     {
-        if (strtolower((string) ($part['mimeType'] ?? '')) !== 'multipart/related') {
+        $mime = strtolower((string) ($part['mimeType'] ?? ''));
+        if ($mime === 'multipart/mixed' && $index === 0 && self::isBody($child, true)) {
+            foreach (self::headers($child) as $header) {
+                if (strtolower($header['name']) === 'content-disposition') {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        if ($mime !== 'multipart/related') {
             return false;
         }
         $start = null;

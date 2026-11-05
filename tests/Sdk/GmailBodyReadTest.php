@@ -19,6 +19,7 @@ use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
@@ -117,6 +118,59 @@ it('retains explicitly selected message-root text files even when they have a Co
         ->and($resource->attachments()->pluck('id')->all())->toBe(['root-file'])
         ->and($history)->toHaveCount(2);
 })->with(['named inline file' => true, 'explicit attachment' => false]);
+
+it('reads the anonymous first mixed body with a Content-ID without exposing it as a downloadable file', function (string $mime, bool $external): void {
+    $history = [];
+    $content = $mime === 'text/html' ? '<p>Québec é</p>' : 'Québec é';
+    $encoded = rtrim(strtr(base64_encode($content), '+/', '-_'), '=');
+    $payload = ['mimeType' => 'multipart/mixed', 'parts' => [
+        ['partId' => '0', 'mimeType' => $mime, 'headers' => [['name' => 'Content-ID', 'value' => '<body@example.com>']],
+            'body' => $external ? ['attachmentId' => 'body', 'size' => strlen($content)] : ['data' => $encoded, 'size' => strlen($content)]],
+        ['partId' => '1', 'mimeType' => 'text/plain', 'filename' => 'notes.txt', 'body' => ['attachmentId' => 'notes', 'size' => 4]],
+        ['partId' => '2', 'mimeType' => 'image/png', 'filename' => 'image.png', 'body' => ['attachmentId' => 'image', 'size' => 2]],
+    ]];
+    $responses = [['id' => 'message', 'payload' => $payload]];
+    if ($external) {
+        $responses[] = ['data' => $encoded, 'size' => strlen($content)];
+    }
+    array_push($responses, ['id' => 'message', 'payload' => $payload], ['id' => 'message', 'payload' => $payload]);
+    $resource = gmailBodyResource($responses, $history);
+
+    $message = $resource->get();
+
+    expect($message->body?->content)->toBe($content)
+        ->and($message->hasAttachments)->toBeTrue()
+        ->and($resource->attachments()->pluck('id')->all())->toBe(['1', '2']);
+    expect(fn () => $resource->attachment($external ? 'body' : '0')->metadata())->toThrow(ResourceNotFoundException::class);
+    expect($history)->toHaveCount($external ? 4 : 3);
+})->with(['text/plain', 'text/html'])->with([false, true]);
+
+it('keeps named, disposition-selected and non-primary mixed CID parts as files', function (string $case): void {
+    $history = [];
+    $file = ['partId' => 'cid-file', 'mimeType' => 'text/plain', 'headers' => [['name' => 'Content-ID', 'value' => '<file@example.com>']],
+        'body' => ['data' => 'RmlsZQ', 'size' => 4]];
+    if ($case === 'named') {
+        $file['filename'] = 'notes.txt';
+    } elseif (in_array($case, ['inline', 'attachment'], true)) {
+        $file['headers'][] = ['name' => 'Content-Disposition', 'value' => $case];
+    }
+    $parts = match ($case) {
+        'non-primary' => [['mimeType' => 'text/plain', 'body' => ['data' => 'Qm9keQ', 'size' => 4]], $file],
+        'after named file' => [['partId' => 'leading', 'mimeType' => 'text/plain', 'filename' => 'leading.txt', 'body' => ['data' => 'TGVhZA', 'size' => 4]], $file],
+        'nested named container' => [['partId' => 'container', 'mimeType' => 'multipart/mixed', 'filename' => 'bundle.mime', 'parts' => [$file]]],
+        default => [$file],
+    };
+    $payload = ['mimeType' => 'multipart/mixed', 'parts' => $parts];
+    $resource = gmailBodyResource([['id' => 'message', 'payload' => $payload], ['id' => 'message', 'payload' => $payload]], $history);
+
+    $message = $resource->get();
+
+    expect($message->body?->content)->toBe($case === 'non-primary' ? 'Body' : null)
+        ->and($resource->attachments()->pluck('id')->all())->toBe(match ($case) {
+            'after named file' => ['leading', 'cid-file'], 'nested named container' => ['container'], default => ['cid-file'],
+        })
+        ->and($history)->toHaveCount(2);
+})->with(['named', 'inline', 'attachment', 'non-primary', 'after named file', 'nested named container']);
 
 it('rejects malformed or incomplete Gmail body bytes', function (array $body): void {
     $history = [];
