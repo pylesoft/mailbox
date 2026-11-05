@@ -35,6 +35,32 @@ Store credentials and OAuth state privately. The optional Eloquent store uses La
 
 ## Safe Return Destinations
 
+## Connecting Customer Organizations
+
+A SaaS application keeps its provider registration while each customer authorizes their own mailbox or organization. Register Microsoft as a multitenant application and Google as an External production OAuth application. Provider consent policies can require administrator approval even when a delegated permission normally permits user consent. Google restricted Gmail scopes also have production verification requirements.
+
+Keep the consenting identity separate from the selected mailbox in your host. Bind both to the customer Team, provider tenant or Workspace customer, and current authorization generation. An address supplied in a form, an email-domain match or an `admin_consent` callback flag does not prove that authority.
+
+| Connection | Authorization | Change delivery |
+| --- | --- | --- |
+| Microsoft own mailbox | User OAuth | Graph subscriptions and scheduled catch-up |
+| Microsoft delegated shared mailbox | User OAuth with shared-mail scopes and existing Exchange permissions | Scheduled synchronization; delegated shared subscriptions are unsupported |
+| Microsoft application mailbox | Customer-administrator-approved application authority | Graph subscriptions or explicit scheduled synchronization |
+| Google mailbox owner | That mailbox account's OAuth consent | Gmail watch with Pub/Sub and scheduled catch-up |
+| Google administrator-managed mailbox | Customer super-administrator-authorized domain-wide delegation | Gmail watch with Pub/Sub and scheduled catch-up |
+
+For Microsoft delegated shared access, request `Mail.Read.Shared` or `Mail.ReadWrite.Shared` and `Mail.Send.Shared` as needed. A host resolving a selected email address to an immutable directory object can separately request `User.ReadBasic.All`. The user also needs Exchange mailbox access and Send As or Send on Behalf for actual sends. Mail consent alone does not prove those Exchange sending rights; the provider remains authoritative when the host submits a selected-target operation. Qualify shared delta behavior against the actual account before advertising it.
+
+Gmail browser delegation does not turn the delegate's OAuth token into a target-mailbox token. Authorize the target Google account directly, or use explicit customer-admin DWD onboarding. DWD scopes restrict permitted data operations, not which domain users the service account can impersonate. Your host must retain and enforce the selected target binding.
+
+Your SaaS can own the Gmail Pub/Sub infrastructure centrally; a customer normally does not need a Cloud project or webhook server. The watch topic must belong to the developer project making the request. Renew watches and subscriptions through your host's existing maintenance, and recover missed changes separately. Renew short-lived access tokens on demand under the shared refresh lock; a separate daemon per mailbox is unnecessary.
+
+Native administrator approval is an application concern. Verify a fresh provider administrator identity, bind an explicit approval to the immutable request and retain evidence. Microsoft customer-admin scope attestation is different from automatically inspecting all effective Exchange and Entra grants; never present attestation as verified provider scoping. Retain strict target enforcement regardless of the onboarding method. The [AI Clerk integration](https://github.com/pylesoft/ai-clerk/pull/2) supplies this user-facing workflow; the SDK does not create customer administrator permissions or start host imports itself.
+
+See [Microsoft shared-folder limitations](https://learn.microsoft.com/en-us/graph/outlook-share-messages-folders), [Gmail push setup](https://developers.google.com/workspace/gmail/api/guides/push) and [Google DWD guidance](https://knowledge.workspace.google.com/admin/apps/domain-wide-delegation-best-practices).
+
+## Validating Return Destinations
+
 Both enrollment services accept local application paths such as `/settings/mailbox` and absolute HTTP(S) URLs whose host appears in `mailbox.oauth.allowed_return_hosts`. Invalid destinations fall back to a valid `mailbox.oauth.default_return_url`, otherwise the result has no return URL. Scheme-relative URLs, backslashes and control characters are rejected. Revalidate old cached returns too; the legacy error controllers use the same return policy.
 
 ```env
