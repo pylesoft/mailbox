@@ -33,8 +33,6 @@ Register a Web OAuth client with the provider and allow the exact HTTPS callback
 
 Store credentials and OAuth state privately. The optional Eloquent store uses Laravel's encryption key; retain that key or re-encrypt existing values during key rotation. If the original key or ownership evidence is lost, reconnect rather than trying to infer it from an email address.
 
-## Safe Return Destinations
-
 ## Connecting Customer Organizations
 
 A SaaS application keeps its provider registration while each customer authorizes their own mailbox or organization. Register Microsoft as a multitenant application and Google as an External production OAuth application. Provider consent policies can require administrator approval even when a delegated permission normally permits user consent. Google restricted Gmail scopes also have production verification requirements.
@@ -59,7 +57,7 @@ Native administrator approval is an application concern. Verify a fresh provider
 
 See [Microsoft shared-folder limitations](https://learn.microsoft.com/en-us/graph/outlook-share-messages-folders), [Gmail push setup](https://developers.google.com/workspace/gmail/api/guides/push) and [Google DWD guidance](https://knowledge.workspace.google.com/admin/apps/domain-wide-delegation-best-practices).
 
-## Validating Return Destinations
+## Safe Return Destinations
 
 Both enrollment services accept local application paths such as `/settings/mailbox` and absolute HTTP(S) URLs whose host appears in `mailbox.oauth.allowed_return_hosts`. Invalid destinations fall back to a valid `mailbox.oauth.default_return_url`, otherwise the result has no return URL. Scheme-relative URLs, backslashes and control characters are rejected. Revalidate old cached returns too; the legacy error controllers use the same return policy.
 
