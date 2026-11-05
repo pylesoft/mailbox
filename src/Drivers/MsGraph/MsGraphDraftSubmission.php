@@ -422,11 +422,19 @@ final readonly class MsGraphDraftSubmission
     private function prepareNative(PreparedMessage $message, string $payload, int $maxRequestBytes): SubmissionPreparation
     {
         $source = $this->sourceEndpoint($message);
-        if (strlen($payload) + 12 > min($maxRequestBytes, 3_999_999)) {
-            throw new UnsupportedCapabilityException('The native Graph request exceeds the caller budget or the 4 MB write limit.');
-        }
         $nativePayload = '{"message":'.$payload.'}';
         $headers = ['Prefer' => 'IdType="ImmutableId"', 'Content-Type' => 'application/json'];
+        $creationHeaders = $headers;
+        if ($message->context?->operation === ReplyForwardOperation::Forward) {
+            // Exchange can refuse to remove attachments inherited by JSON forwards in shared mailboxes.
+            $content = new PreparedMessage($message->sender, $message->to, $message->subject, $message->correlationId,
+                textBody: $message->textBody, htmlBody: $message->htmlBody, cc: $message->cc, bcc: $message->bcc, headers: $message->headers);
+            $nativePayload = base64_encode(PreparedMessageMime::encode($content, intdiv(min($maxRequestBytes, 3_999_999), 4) * 3));
+            $creationHeaders['Content-Type'] = 'text/plain';
+        }
+        if (strlen($nativePayload) > min($maxRequestBytes, 3_999_999)) {
+            throw new UnsupportedCapabilityException('The native Graph request exceeds the caller budget or the 4 MB write limit.');
+        }
         $verification = $this->client->requestOnce('GET', $source, [
             'query' => ['$select' => 'id,conversationId,parentFolderId,isDraft'], 'headers' => $headers,
         ], $this->context->mailbox);
@@ -439,7 +447,7 @@ final readonly class MsGraphDraftSubmission
             throw new ApiRequestException('The Graph source is unavailable in the selected conversation scope; no draft was created.', status: $verification->status, headers: $verification->headers);
         }
         $operation = $context?->operation === ReplyForwardOperation::Reply ? 'createReply' : 'createForward';
-        $response = $this->client->requestOnce('POST', $source.'/'.$operation, ['body' => $nativePayload, 'headers' => $headers], $this->context->mailbox, maxResponseBytes: 4_194_304);
+        $response = $this->client->requestOnce('POST', $source.'/'.$operation, ['body' => $nativePayload, 'headers' => $creationHeaders], $this->context->mailbox, maxResponseBytes: 4_194_304);
         $draft = json_decode($response->body() ?? '');
         $validDraft = $response->status === 201 && $draft instanceof \stdClass
             && self::validId($draft->id ?? null) && ! in_array($draft->id, array_column($context?->conversation->messages ?? [], 'id'), true)

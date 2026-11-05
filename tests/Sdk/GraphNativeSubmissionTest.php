@@ -15,6 +15,7 @@ use Pyle\Mailbox\DTOs\ConversationRead;
 use Pyle\Mailbox\DTOs\EmailAddressDto;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\DTOs\PreparedFile;
 use Pyle\Mailbox\DTOs\PreparedMessage;
 use Pyle\Mailbox\DTOs\ReplyForwardContext;
 use Pyle\Mailbox\DTOs\SubmissionPreparation;
@@ -31,6 +32,57 @@ use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
+use ZBateson\MailMimeParser\MailMimeParser;
+
+it('prepares native forwards with exact MIME content instead of undeletable inherited files', function (?string $html): void {
+    $history = [];
+    $mimeCreated = false;
+    $draft = array_replace(nativeGraphDraft(), ['conversationId' => 'forward-conversation']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        static function (Request $request) use (&$mimeCreated, $draft): Response {
+            $mimeCreated = $request->getHeaderLine('Content-Type') === 'text/plain';
+
+            return new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR));
+        },
+        static function () use (&$mimeCreated): Response {
+            return new Response(200, [], $mimeCreated ? '{"value":[]}' : '{"value":[{"id":"undeletable-inherited="}]}');
+        },
+        static fn (Request $request): Response => $request->getMethod() === 'DELETE'
+            ? new Response(503, [], '{"error":{"code":"ErrorMailboxMoveInProgress"}}')
+            : new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+    ], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['sender' => new EmailAddressDto('Élodie', 'sender@example.com'),
+        'subject' => 'Transfert : Montréal', 'textBody' => $html === null ? 'Only the chosen résumé' : null, 'htmlBody' => $html,
+        'cc' => [new EmailAddressDto('', 'copy@example.com')], 'bcc' => [new EmailAddressDto('', 'private@example.com')],
+        'headers' => ['X-Choice' => 'Chosen'],
+        'files' => [new PreparedFile('chosen-file', 'later.txt', 'text/plain', 5,
+            static fn () => throw new LogicException('Selected files belong to later attachment preparation.'), hash('sha256', 'hello'))],
+        'context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $base->context->conversation, 'source=')]);
+
+    $prepared = $mailbox->prepareSubmission($message);
+
+    expect($prepared->outcome)->toBe(PreparationOutcome::Preparing)
+        ->and($prepared->conversationId)->toBe('forward-conversation')
+        ->and($prepared->attachments)->toBe([]);
+    expect(array_map(fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['GET', 'POST', 'GET', 'PATCH']);
+    $request = $history[1]['request'];
+    expect($request->getUri()->getPath())->toEndWith('/mailFolders/Inbox/messages/source%3D/createForward');
+    $raw = base64_decode((string) $request->getBody(), true);
+    $mime = (new MailMimeParser)->parse($raw, false);
+    expect($mime->getHeaderValue('Subject'))->toBe('Transfert : Montréal')
+        ->and($mime->getHeader('From')->getAddresses()[0]->getName())->toBe('Élodie')
+        ->and($mime->getHeader('To')->getAddresses()[0]->getEmail())->toBe('chosen@example.com')
+        ->and($mime->getHeader('Cc')->getAddresses()[0]->getEmail())->toBe('copy@example.com')
+        ->and($mime->getHeader('Bcc')->getAddresses()[0]->getEmail())->toBe('private@example.com')
+        ->and($mime->getHeaderValue('X-Choice'))->toBe('Chosen')
+        ->and($mime->getHeaderValue('X-Mailbox-Correlation-Id'))->toBe('native-operation')
+        ->and($mime->getTextContent())->toBe($html === null ? 'Only the chosen résumé' : null)
+        ->and($mime->getHtmlContent())->toBe($html)
+        ->and($mime->getAttachmentCount())->toBe(0);
+    expect($raw)->not->toContain('Original content', 'later.txt');
+})->with(['plain text' => [null], 'HTML' => ['<p>Only the chosen résumé</p>']]);
 
 it('verifies native sends and sent copies after provider display name resolution', function (ReplyForwardOperation $operation): void {
     $history = [];
@@ -131,12 +183,49 @@ it('removes only copied native forward attachments before sending caller chosen 
         expect($history[$index]['request']->getMethod())->toBe('DELETE')
             ->and($history[$index]['request']->getUri()->getPath())->toEndWith('/messages/new-draft%3D/attachments/'.$id);
     }
-    $created = json_decode((string) $history[1]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    $created = (new MailMimeParser)->parse(base64_decode((string) $history[1]['request']->getBody(), true), false);
     $normalized = json_decode((string) $history[5]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
-    expect($created['message']['internetMessageHeaders'])->toBe([['name' => 'X-Mailbox-Correlation-Id', 'value' => 'native-operation']])
+    expect($created->getHeaderValue('X-Mailbox-Correlation-Id'))->toBe('native-operation')
         ->and($normalized)->not->toHaveKey('internetMessageHeaders')
         ->and($normalized['body']['content'])->toBe('Chosen content')
         ->and($normalized['bccRecipients'])->toBe([]);
+});
+
+it('enforces the native forward MIME wire budget before reading or creating provider resources', function (): void {
+    $history = [];
+    $responses = static fn (): array => [new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'), new Response(200, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR))];
+    $mailbox = nativeGraphMailbox([...$responses(), ...$responses()], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['textBody' => str_repeat('Montréal ', 1000),
+        'context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $base->context->conversation, 'source=')]);
+    $mailbox->prepareSubmission($message);
+    $wireBytes = strlen((string) $history[1]['request']->getBody());
+
+    expect($mailbox->prepareSubmission($message, $wireBytes)->outcome)->toBe(PreparationOutcome::Prepared);
+    expect(fn () => $mailbox->prepareSubmission($message, $wireBytes - 1))->toThrow(UnsupportedCapabilityException::class);
+    expect($history)->toHaveCount(8);
+});
+
+it('retains native MIME forward creation uncertainty without retrying or sending', function (): void {
+    $history = [];
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new ConnectException('private-forward timeout', new Request('POST', 'https://private-forward')),
+        new Response(201, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR)),
+    ], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $base->context->conversation, 'source=')]);
+
+    $prepared = $mailbox->prepareSubmission($message);
+
+    expect($prepared->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($prepared->draftId)->toBeNull();
+    expect(fn () => $mailbox->submitPrepared($prepared, $message))->toThrow(InvalidArgumentException::class);
+    expect($history)->toHaveCount(2)
+        ->and($history[1]['request']->getHeaderLine('Content-Type'))->toBe('text/plain');
+    expect(json_encode($prepared, JSON_THROW_ON_ERROR))->not->toContain('private-forward');
 });
 
 it('retains native preparation uncertainty and its draft identity after interrupted copied file cleanup', function (): void {
