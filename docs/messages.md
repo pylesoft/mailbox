@@ -18,6 +18,89 @@ $messages = Mailbox::mailbox('invoices@acme.com')
 
 By default, Mailbox fetches messages from the inbox sorted by `receivedAt` descending (newest first). Each item in the returned collection is a `MessageDto` instance containing the message metadata.
 
+### Retaining Received-Header Rejections
+
+Microsoft and Gmail queries implement the optional `SupportsMessageQueryResults` capability. You may use `getResult()` when your application needs to process valid messages while retaining malformed received-address or header failures:
+
+```php
+use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
+
+$query = Mailbox::mailbox('invoices@acme.com')->messages()->take(50);
+
+if ($query instanceof SupportsMessageQueryResults) {
+    $result = $query->getResult();
+
+    foreach ($result->messages as $message) {
+        // Process the validated MessageDto.
+    }
+
+    foreach ($result->rejections as $rejection) {
+        // Retain providerMessageId privately and the safe reason for operator recovery.
+    }
+}
+```
+
+Each rejection contains a validated `providerMessageId` and the reason `invalid_received_header`. A rejected candidate has unknown filter eligibility and does not count toward `take()`. The result retains every rejection encountered on the fetched pages, including those before valid matches. Folder scope, filters, ordering and duplicate handling follow the existing query behavior. Graph adds `id` to projections for this capability.
+
+`$result->exhausted` is `true` when the query exhausted its provider results. It is `false` when the configured valid-message limit stopped the query. Page limits, repeated or unusable continuations, and response byte limits still throw. The optional path bounds combined listing responses to 8 MiB; Gmail message hydration retains its separate body and response limits.
+
+`get()`, `first()` and single-message reads remain strict and throw `InvalidReceivedHeaderException`, which extends `MailboxException`. Identity, envelope, MIME/body, authentication, authorization, throttling and transport failures also remain exceptions. Custom drivers need no new method unless they implement the optional capability.
+
+Result array/JSON serialization and debug output expose counts and completion only. Rejection output exposes the safe reason only. Read the properties explicitly when retaining private provider references. Applications own durable rejection storage and retry policy; this capability requires no Mailbox database tables.
+
+### Persisting Partial Results
+
+If you use the optional Eloquent integration, `MessageSyncService::syncMailboxResult()` persists valid matches and returns the rejected candidates alongside them:
+
+```php
+use Pyle\Mailbox\Services\Persistence\MessageSyncService;
+
+$service = app(MessageSyncService::class);
+$result = $service->syncMailboxResult($mailbox, [
+    'folder' => 'inbox',
+    'filters' => ['limit' => 50],
+]);
+
+foreach ($result->persisted as $entry) {
+    $providerMessageId = $entry['providerMessageId'];
+    $message = $entry['message'];
+}
+```
+
+`messages` contains unique local models sorted by received date. `persisted` retains each accepted provider ID and its local model, even when several provider IDs share one canonical Internet Message-ID. Use that explicit correlation when settling a retained rejection: a local row's provider ID can change during deduplication. `excludedProviderMessageIds` contains valid candidates excluded by the local matcher. Rejections have unknown eligibility.
+
+Partial results leave `last_synced_at` unchanged. A result without rejections retains the existing timestamp behavior; this timestamp does not attest complete mailbox coverage. `exhausted` follows the native query result. For a custom query without `SupportsMessageQueryResults`, the service uses strict `get()` and reports `exhausted=false` because completion is unknown. Operational and persistence errors still propagate. Result serialization and debug output expose counts and completion only.
+
+### Recovering One Retained Candidate
+
+You may retry a retained provider ID through the same sync rules and persistence:
+
+```php
+$message = $service->syncMailboxMessage($mailbox, $providerMessageId, [
+    'folder' => 'inbox',
+    'filters' => ['subject_contains' => ['Invoice']],
+]);
+```
+
+The method performs a strict read through the optional `SupportsExactMessageRead::getExact()` capability, verifying identity before parsing received headers. Microsoft and Gmail provide this capability; custom resources without it throw `UnsupportedCapabilityException`. Ordinary `get()` remains unchanged. Recovery resolves the current folder independently, comparing Graph's parent folder or all Gmail labels, and checks the current filters and rule tree. Only the derived rolling lookback is bypassed; explicit dates remain enforced. It returns `null` for an excluded candidate and does not advance `last_synced_at`. Header validation, unavailable messages, provider failures and persistence errors remain exceptions.
+
+Gmail recovery also preserves ordinary list visibility: messages labelled `SPAM` or `TRASH` are excluded, including messages that retain a selected custom label. Exact recovery requires valid raw label membership even when no folder is selected; missing or malformed label evidence remains an exception.
+
+Native exact reads report a missing top-level message with `ResourceNotFoundException` whose `resourceType` is `message` and `resourceId` is the requested provider ID. Folder, attachment and external-body failures remain operational exceptions; applications must not interpret every not-found exception as a missing message.
+
+Applications remain responsible for ownership, current authorization, retained rejections and durable capture. `syncMailboxResult()`, `syncMailboxMessage()` and `MailboxMessagePersister::upsert()` accept a trailing optional `guardedWrite` closure. Strict `syncMailbox()` retains its original two-argument signature. The wrapper receives the actual local database-write closure and must execute and return that closure's result under the application's fresh-authority transaction fence:
+
+```php
+$message = $service->syncMailboxMessage(
+    $mailbox,
+    $providerMessageId,
+    $options,
+    guardedWrite: $guardedWrite,
+);
+```
+
+The SDK invokes this wrapper separately for every message upsert, attachment upsert, stale attachment deletion and clean sync timestamp. Attachment downloads occur outside it. The host must also check authority before provider access. Keep each fence transaction short; do not hold it across provider requests. A request already in flight may finish after a binding change, but the next guarded write can reject its result. This seam does not detect a binding changed away and back between checks, and it does not make attachment persistence atomic.
+
 ### Scoping to a Folder
 
 Use `inFolder()` to query a specific folder. You can pass a `WellKnownFolder` enum value or a raw provider folder ID:

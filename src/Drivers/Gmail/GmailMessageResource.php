@@ -7,6 +7,7 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\AttachmentResource;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsExactMessageRead;
 use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
@@ -19,7 +20,7 @@ use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ResponseBudget;
 
-class GmailMessageResource implements MessageResource, SupportsMessageMetadataRead
+class GmailMessageResource implements MessageResource, SupportsExactMessageRead, SupportsMessageMetadataRead
 {
     public function __construct(
         private readonly GmailClient $client,
@@ -29,7 +30,22 @@ class GmailMessageResource implements MessageResource, SupportsMessageMetadataRe
 
     public function get(?BodyReadLimits $limits = null): MessageDto
     {
-        $payload = (new GmailMessageReader($this->client, $this->mailbox))->get($this->messageId, $limits);
+        return $this->read($limits, false);
+    }
+
+    public function getExact(): MessageDto
+    {
+        return $this->read(null, true);
+    }
+
+    private function read(?BodyReadLimits $limits, bool $verifyIdentity): MessageDto
+    {
+        $reader = new GmailMessageReader($this->client, $this->mailbox);
+        $payload = $verifyIdentity ? $reader->getExact($this->messageId) : $reader->get($this->messageId, $limits);
+
+        if ($verifyIdentity && ($payload['id'] ?? null) !== $this->messageId) {
+            throw new MailboxException('Gmail returned a mismatched message identity.');
+        }
 
         return MessageDto::fromGmail($payload);
     }

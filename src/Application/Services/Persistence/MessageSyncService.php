@@ -5,17 +5,25 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Services\Persistence;
 
 use Carbon\Carbon;
+use Closure;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\SupportsExactMessageRead;
+use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\DTOs\MessageQueryResult;
+use Pyle\Mailbox\DTOs\MessageSyncResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxMessage;
 use Pyle\Mailbox\Support\MessageMatcher;
+use Pyle\Mailbox\Support\ProviderMessageId;
 use RuntimeException;
 
 class MessageSyncService
@@ -31,24 +39,135 @@ class MessageSyncService
      */
     public function syncMailbox(Mailbox $mailbox, array $options = []): Collection
     {
+        return $this->sync($mailbox, $options, false, null)->messages;
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     * @param  Closure(Closure(): mixed): mixed|null  $guardedWrite
+     */
+    public function syncMailboxResult(Mailbox $mailbox, array $options = [], ?Closure $guardedWrite = null): MessageSyncResult
+    {
+        return $this->sync($mailbox, $options, true, $guardedWrite);
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     * @param  Closure(Closure(): mixed): mixed|null  $guardedWrite
+     */
+    private function sync(Mailbox $mailbox, array $options, bool $isolateHeaders, ?Closure $guardedWrite): MessageSyncResult
+    {
         $request = MessageSyncRequest::from($options, $this->ruleTree);
         $this->ensureMailboxHasDriver($mailbox);
         $plan = $this->buildPlan($request, Carbon::now('UTC'));
         $mailboxResource = MailboxFacade::forMailbox($mailbox);
-        $messages = $this->messagesForSync($mailboxResource, $plan);
-        $persisted = $this->persistMessages(
-            $mailboxResource,
-            $mailbox->id,
-            $messages,
-            $plan,
+        $outcome = $this->fetchMessages($mailboxResource, $plan, $isolateHeaders);
+        $messages = $outcome->messages->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)->values();
+        $persisted = $this->persistMessages($mailboxResource, $mailbox->id, $messages, $plan, $guardedWrite);
+        if ($outcome->rejections->isEmpty()) {
+            $write = fn (): bool => $mailbox->update(['last_synced_at' => now()]);
+            $guardedWrite === null ? $write() : $guardedWrite($write);
+        }
+
+        return new MessageSyncResult(
+            messages: $persisted->pluck('message')->unique('id')->sortBy('received_at')->values(),
+            persisted: $persisted,
+            rejections: $outcome->rejections,
+            excludedProviderMessageIds: $messages->pluck('id')->diff($persisted->pluck('providerMessageId'))->values(),
+            exhausted: $outcome->exhausted,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     * @param  Closure(Closure(): mixed): mixed|null  $guardedWrite
+     */
+    public function syncMailboxMessage(Mailbox $mailbox, string $providerMessageId, array $options = [], ?Closure $guardedWrite = null): ?MailboxMessage
+    {
+        if (! ProviderMessageId::isValid($providerMessageId)) {
+            throw new MailboxException('A valid provider message identity is required.');
+        }
+        $request = MessageSyncRequest::from($options, $this->ruleTree);
+        $this->ensureMailboxHasDriver($mailbox);
+        $plan = $this->buildPlan($request, Carbon::now('UTC'));
+        $resource = MailboxFacade::forMailbox($mailbox);
+        $messageResource = $resource->message($providerMessageId);
+        if (! $messageResource instanceof SupportsExactMessageRead) {
+            throw new UnsupportedCapabilityException('Targeted recovery requires exact message reads.');
+        }
+        $message = $messageResource->getExact();
+        if ($message->id !== $providerMessageId) {
+            throw new MailboxException('Provider returned a mismatched message identity.');
+        }
+        if (! $this->matchesFolder($resource, $plan, $message, (string) $mailbox->connection->driver)) {
+            return null;
+        }
+        $filters = $plan->filters();
+        if (empty($request->filters()['received_after'])) {
+            unset($filters['received_after']);
+        }
+        foreach (['received_after', 'received_before'] as $key) {
+            if (! empty($filters[$key])) {
+                $date = Carbon::parse((string) $filters[$key])->utc();
+                if ($message->receivedAt === null || ($key === 'received_after' ? $message->receivedAt->lt($date) : $message->receivedAt->gt($date))) {
+                    return null;
+                }
+            }
+        }
+        if (! empty($filters['internet_message_id'])) {
+            $id = trim((string) $filters['internet_message_id']);
+            $id = str_starts_with($id, '<') ? $id : "<{$id}>";
+            if ($message->internetMessageId !== $id) {
+                return null;
+            }
+        }
+        $targetPlan = new MessageSyncPlan(
+            filters: $filters,
+            ruleTree: $plan->ruleTree(),
+            folderReference: $plan->folderReference(),
+            matcher: $this->buildMatcher($filters, $plan->ruleTree(), true),
+            requiresAttachmentMetadata: $plan->requiresAttachmentMetadata(),
+            persistAttachments: $plan->persistAttachments(),
         );
 
-        $mailbox->update(['last_synced_at' => now()]);
+        return $this->persistMessages($resource, $mailbox->id, collect([$message]), $targetPlan, $guardedWrite)->first()['message'] ?? null;
+    }
 
-        return $persisted
-            ->unique('id')
-            ->sortBy('received_at')
-            ->values();
+    private function matchesFolder(MailboxResource $resource, MessageSyncPlan $plan, MessageDto $message, string $driver): bool
+    {
+        $folder = $plan->folderReference();
+        $folderId = null;
+        if ($folder !== null) {
+            $folderId = $resource->folder($folder)->get()->id;
+            if (trim($folderId) === '') {
+                throw new MailboxException('Provider returned an invalid folder identity.');
+            }
+        }
+        if (in_array($driver, ['gmail', 'google-workspace'], true)) {
+            $labels = $message->raw['labelIds'] ?? null;
+            if (! is_array($labels) || ! array_is_list($labels)) {
+                throw new MailboxException('Gmail returned invalid folder membership.');
+            }
+            foreach ($labels as $label) {
+                if (! is_string($label) || trim($label) === '') {
+                    throw new MailboxException('Gmail returned invalid folder membership.');
+                }
+            }
+
+            if (in_array('SPAM', $labels, true) || in_array('TRASH', $labels, true)) {
+                return false;
+            }
+
+            return $folder === null || in_array($folderId, $labels, true);
+        }
+        if ($folder === null) {
+            return true;
+        }
+        if ($message->parentFolderId === null || trim($message->parentFolderId) === '') {
+            throw new MailboxException('Provider returned invalid folder membership.');
+        }
+
+        return $message->parentFolderId === $folderId;
     }
 
     private function ensureMailboxHasDriver(Mailbox $mailbox): void
@@ -109,39 +228,17 @@ class MessageSyncService
         return $referenceTime->copy()->subHours(6)->toIso8601String();
     }
 
-    /**
-     * @return Collection<int, MessageDto>
-     */
-    private function fetchMessages(MailboxResource $mailbox, MessageSyncPlan $plan): Collection
+    private function fetchMessages(MailboxResource $mailbox, MessageSyncPlan $plan, bool $isolateHeaders): MessageQueryResult
     {
-        $folderReference = $plan->folderReference();
-        if ($folderReference !== null) {
-            return $this->fetchUsingQuery($mailbox->messages()->inFolder($folderReference), $plan);
-        }
-
-        return $this->fetchUsingQuery($mailbox->messages()->allFolders(), $plan);
-    }
-
-    /**
-     * @return Collection<int, MessageDto>
-     */
-    private function fetchUsingQuery(MessageQueryBuilder $query, MessageSyncPlan $plan): Collection
-    {
+        $folder = $plan->folderReference();
+        $query = $folder === null ? $mailbox->messages()->allFolders() : $mailbox->messages()->inFolder($folder);
         $this->applyFilters($query, $plan);
 
-        return $query->get();
-    }
+        if ($isolateHeaders && $query instanceof SupportsMessageQueryResults) {
+            return $query->getResult();
+        }
 
-    /**
-     * @return Collection<int, MessageDto>
-     */
-    private function messagesForSync(
-        MailboxResource $mailboxResource,
-        MessageSyncPlan $plan,
-    ): Collection {
-        return $this->fetchMessages($mailboxResource, $plan)
-            ->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)
-            ->values();
+        return new MessageQueryResult($query->get(), collect(), false);
     }
 
     private function applyFilters(MessageQueryBuilder $query, MessageSyncPlan $plan): void
@@ -225,13 +322,15 @@ class MessageSyncService
 
     /**
      * @param  Collection<int, MessageDto>  $messages
-     * @return Collection<int, MailboxMessage>
+     * @param  Closure(Closure(): mixed): mixed|null  $guardedWrite
+     * @return Collection<int, array{providerMessageId: string, message: MailboxMessage}>
      */
     private function persistMessages(
         MailboxResource $mailboxResource,
         int $mailboxId,
         Collection $messages,
         MessageSyncPlan $plan,
+        ?Closure $guardedWrite = null,
     ): Collection {
         $persisted = collect();
 
@@ -250,14 +349,15 @@ class MessageSyncService
                 continue;
             }
 
-            $persisted->push($this->persister->upsert(
+            $persisted->push(['providerMessageId' => $message->id, 'message' => $this->persister->upsert(
                 $mailboxResource,
                 $mailboxId,
                 $message,
                 $messageResource,
                 $plan->requiresAttachmentMetadata() ? $attachments : null,
                 $plan->persistAttachments(),
-            ));
+                $guardedWrite,
+            )]);
         }
 
         return $persisted;
@@ -267,13 +367,13 @@ class MessageSyncService
      * @param  array<string, mixed>  $filters
      * @param  array<string, mixed>  $ruleTree
      */
-    private function buildMatcher(array $filters, array $ruleTree): ?MessageMatcher
+    private function buildMatcher(array $filters, array $ruleTree, bool $includeFilters = false): ?MessageMatcher
     {
-        if ($ruleTree !== []) {
+        if ($ruleTree !== [] && ! $includeFilters) {
             return new MessageMatcher($ruleTree);
         }
 
-        $conditions = [];
+        $conditions = $ruleTree === [] ? [] : [$ruleTree];
 
         $fromAddresses = $this->normalizeStringArray($filters['from_email_addresses'] ?? null);
         if ($fromAddresses !== []) {

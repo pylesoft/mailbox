@@ -6,13 +6,15 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
+use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
 use Pyle\Mailbox\Contracts\SupportsMessageSyncRulePushdown;
 use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\DTOs\MessageQueryResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 
-class GmailMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRulePushdown
+class GmailMessageQuery implements MessageQueryBuilder, SupportsMessageQueryResults, SupportsMessageSyncRulePushdown
 {
     private const MAX_PAGES = 100;
 
@@ -180,6 +182,18 @@ class GmailMessageQuery implements MessageQueryBuilder, SupportsMessageSyncRuleP
         );
 
         return $this->sortMessages($messages);
+    }
+
+    public function getResult(): MessageQueryResult
+    {
+        $result = $this->pageCollector->collectResult(
+            query: $this->buildListQuery(),
+            maxPages: $this->maxPages,
+            limit: $this->limit,
+            filterer: $this->filterer(),
+        );
+
+        return new MessageQueryResult($this->sortMessages($result->messages), $result->rejections, $result->exhausted);
     }
 
     public function count(): int

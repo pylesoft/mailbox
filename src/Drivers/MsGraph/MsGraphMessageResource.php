@@ -8,16 +8,21 @@ use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Support\Collection;
 use Pyle\Mailbox\Contracts\AttachmentResource;
 use Pyle\Mailbox\Contracts\MessageResource;
+use Pyle\Mailbox\Contracts\SupportsExactMessageRead;
 use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\AttachmentFileDto;
 use Pyle\Mailbox\DTOs\BodyDto;
+use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Support\ConversationPayload;
+use Pyle\Mailbox\Support\ProviderMessageId;
 use Pyle\Mailbox\Support\ResponseBudget;
 
-class MsGraphMessageResource implements MessageResource, SupportsMessageMetadataRead
+class MsGraphMessageResource implements MessageResource, SupportsExactMessageRead, SupportsMessageMetadataRead
 {
     private const METADATA_FIELDS = ['id', 'conversationId', 'parentFolderId', 'isDraft', 'receivedDateTime', 'sentDateTime'];
 
@@ -31,7 +36,35 @@ class MsGraphMessageResource implements MessageResource, SupportsMessageMetadata
 
     public function get(): MessageDto
     {
-        $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
+        return $this->read(false);
+    }
+
+    public function getExact(): MessageDto
+    {
+        return $this->read(true);
+    }
+
+    private function read(bool $verifyIdentity): MessageDto
+    {
+        if ($verifyIdentity && ! ProviderMessageId::isValid($this->messageId)) {
+            throw new MailboxException('A valid provider message identity is required.');
+        }
+        try {
+            if ($verifyIdentity) {
+                $raw = $this->client->getBoundedObject($this->messageEndpoint(), new ResponseBudget((new BodyReadLimits)->maxResponseBytes), mailbox: $this->mailbox, retry: true);
+                if (($raw->id ?? null) !== $this->messageId) {
+                    throw new MailboxException('Graph returned a mismatched message identity.');
+                }
+                $payload = ConversationPayload::receivedMessage($raw);
+            } else {
+                $payload = $this->client->getMessagePayload($this->messageEndpoint(), mailbox: $this->mailbox);
+            }
+        } catch (ResourceNotFoundException $exception) {
+            if (! $verifyIdentity) {
+                throw $exception;
+            }
+            throw new ResourceNotFoundException('message', $this->messageId, 'The requested message was not found.', $exception->getCode(), $exception);
+        }
 
         return MessageDto::fromMsGraph($payload);
     }

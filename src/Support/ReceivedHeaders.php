@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Support;
 
 use Pyle\Mailbox\DTOs\EmailAddressDto;
-use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
 use ZBateson\MailMimeParser\Header\AddressHeader;
 use ZBateson\MailMimeParser\Header\IHeaderPart;
 use ZBateson\MailMimeParser\Header\Part\AddressPart;
@@ -25,7 +25,7 @@ final class ReceivedHeaders
                 continue;
             }
             if (preg_match('/\A[\x21-\x39\x3b-\x7e]+:/', $line) !== 1) {
-                throw new MailboxException('Malformed received MIME header framing.');
+                throw new InvalidReceivedHeaderException('Malformed received MIME header framing.');
             }
             $previous = true;
         }
@@ -33,10 +33,10 @@ final class ReceivedHeaders
         $headers = [];
         foreach ($parsed->getAllHeaders() as $header) {
             if ($header->hasAnyErrors(true)) {
-                throw new MailboxException('Malformed received MIME header.');
+                throw new InvalidReceivedHeaderException('Malformed received MIME header.');
             }
             $raw = preg_replace('/\r\n[ \t]+/', ' ', $header->getRawValue())
-                ?? throw new MailboxException('Malformed received MIME header folding.');
+                ?? throw new InvalidReceivedHeaderException('Malformed received MIME header folding.');
             self::validateEncoding($raw);
             if (in_array(strtolower($header->getName()), ['from', 'sender', 'to', 'cc', 'bcc', 'reply-to'], true)) {
                 self::addresses($raw);
@@ -54,7 +54,7 @@ final class ReceivedHeaders
         $decoded = $header->getDecodedValue();
 
         if ($header->hasAnyErrors()) {
-            throw new MailboxException('Malformed or unsupported received text header.');
+            throw new InvalidReceivedHeaderException('Malformed or unsupported received text header.');
         }
 
         return $decoded;
@@ -68,19 +68,19 @@ final class ReceivedHeaders
         $header = new AddressHeader('To', $value);
 
         if ($header->hasAnyErrors()) {
-            throw new MailboxException('Malformed received address header.');
+            throw new InvalidReceivedHeaderException('Malformed received address header.');
         }
 
         foreach ($header->getGroups() as $group) {
             if ($group->hasErrors(true)) {
-                throw new MailboxException('Malformed received address group.');
+                throw new InvalidReceivedHeaderException('Malformed received address group.');
             }
         }
 
         foreach ($header->getAddresses() as $address) {
             self::validateAddressSpacing($address);
             if ($address->hasAnyErrors(true) || preg_match('/^(?:"(?:[^"\\\\]|\\\\.)+"|[^\s@"<>(),;:\[\]]+)@(?:[^\s@"<>(),;:\[\]]+|\[[^\[\]\s]+\])$/u', $address->getEmail()) !== 1) {
-                throw new MailboxException('Malformed received email address.');
+                throw new InvalidReceivedHeaderException('Malformed received email address.');
             }
         }
 
@@ -100,7 +100,7 @@ final class ReceivedHeaders
                 return;
             }
         }
-        $values = array_map(static fn (IHeaderPart $part): string => $part->getValue() ?? throw new MailboxException('Malformed received address part.'), $parts);
+        $values = array_map(static fn (IHeaderPart $part): string => $part->getValue() ?? throw new InvalidReceivedHeaderException('Malformed received address part.'), $parts);
         for ($index = 1; $index < count($values) - 1; $index++) {
             if (trim($values[$index]) !== '') {
                 continue;
@@ -108,7 +108,7 @@ final class ReceivedHeaders
             $before = rtrim($values[$index - 1]);
             $after = ltrim($values[$index + 1]);
             if (! in_array(substr($before, -1), ['@', '.'], true) && ! in_array(substr($after, 0, 1), ['@', '.'], true)) {
-                throw new MailboxException('Malformed received address whitespace.');
+                throw new InvalidReceivedHeaderException('Malformed received address whitespace.');
             }
         }
     }
@@ -116,13 +116,13 @@ final class ReceivedHeaders
     private static function validateEncoding(string $value): void
     {
         if (! mb_check_encoding($value, 'UTF-8') || preg_match('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\r(?!\n[ \t])|(?<!\r)\n|\n(?![ \t])/', $value) === 1) {
-            throw new MailboxException('Malformed received header bytes or folding.');
+            throw new InvalidReceivedHeaderException('Malformed received header bytes or folding.');
         }
 
         preg_match_all('/=\?([^?\s]+)\?([bBqQ])\?([^?\s]*)\?=/', $value, $words, PREG_SET_ORDER);
         $remainder = preg_replace('/=\?([^?\s]+)\?([bBqQ])\?([^?\s]*)\?=/', '', $value);
         if (str_contains($remainder ?? '', '=?')) {
-            throw new MailboxException('Malformed or truncated received encoded word.');
+            throw new InvalidReceivedHeaderException('Malformed or truncated received encoded word.');
         }
 
         foreach ($words as $word) {
@@ -130,11 +130,11 @@ final class ReceivedHeaders
             if (strtoupper($word[2]) === 'B') {
                 $bytes = base64_decode($encoded, true);
                 if ($bytes === false || strlen($encoded) % 4 !== 0) {
-                    throw new MailboxException('Malformed received encoded word base64.');
+                    throw new InvalidReceivedHeaderException('Malformed received encoded word base64.');
                 }
             } else {
                 if (preg_match('/=(?![0-9a-fA-F]{2})|[^\x21-\x7e]/', $encoded) === 1) {
-                    throw new MailboxException('Malformed received encoded word quoted-printable.');
+                    throw new InvalidReceivedHeaderException('Malformed received encoded word quoted-printable.');
                 }
                 $bytes = quoted_printable_decode(str_replace('_', ' ', $encoded));
             }
@@ -145,10 +145,10 @@ final class ReceivedHeaders
                 $valid = $converter->checkEncoding($bytes, $charset);
                 $decoded = $converter->convert($bytes, $charset, 'UTF-8');
             } catch (\Throwable) {
-                throw new MailboxException('Unsupported received header charset.');
+                throw new InvalidReceivedHeaderException('Unsupported received header charset.');
             }
             if (! $valid || preg_match('/[\x00-\x1f\x7f]/', $decoded) === 1) {
-                throw new MailboxException('Malformed received encoded word bytes.');
+                throw new InvalidReceivedHeaderException('Malformed received encoded word bytes.');
             }
         }
     }
@@ -165,7 +165,7 @@ final class ReceivedHeaders
             if ($character === '\\') {
                 $index++;
                 if ($index >= $length) {
-                    throw new MailboxException('Truncated received address escape.');
+                    throw new InvalidReceivedHeaderException('Truncated received address escape.');
                 }
 
                 continue;
@@ -183,13 +183,13 @@ final class ReceivedHeaders
                 $stack[] = $character;
             } elseif (in_array($character, [')', '>', ']', ';'], true)) {
                 if ($current === false || $pairs[$current] !== $character) {
-                    throw new MailboxException('Malformed received address delimiters.');
+                    throw new InvalidReceivedHeaderException('Malformed received address delimiters.');
                 }
                 array_pop($stack);
             }
         }
         if ($stack !== []) {
-            throw new MailboxException('Truncated received address header.');
+            throw new InvalidReceivedHeaderException('Truncated received address header.');
         }
     }
 }

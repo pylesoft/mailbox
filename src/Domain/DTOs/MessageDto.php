@@ -9,7 +9,7 @@ use Illuminate\Contracts\Support\Arrayable;
 use JsonSerializable;
 use Pyle\Mailbox\DTOs\Concerns\ArraySerializable;
 use Pyle\Mailbox\Enums\Importance;
-use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
 use Pyle\Mailbox\Support\GmailMime;
 use Pyle\Mailbox\Support\ReceivedHeaders;
 
@@ -55,7 +55,7 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
     {
         foreach (['from', 'sender'] as $name) {
             if (isset($data[$name]) && ! is_array($data[$name])) {
-                throw new MailboxException('Malformed received Graph sender.');
+                throw new InvalidReceivedHeaderException('Malformed received Graph sender.');
             }
         }
 
@@ -123,7 +123,7 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
     private static function mapAddresses(mixed $addresses): array
     {
         if (! is_array($addresses) || ! array_is_list($addresses)) {
-            throw new MailboxException('Malformed received Graph recipient collection.');
+            throw new InvalidReceivedHeaderException('Malformed received Graph recipient collection.');
         }
 
         return array_map(
@@ -136,12 +136,12 @@ final readonly class MessageDto implements Arrayable, JsonSerializable
     private static function mapHeaders(mixed $headers): array
     {
         if (! is_array($headers) || ! array_is_list($headers)) {
-            throw new MailboxException('Malformed received header collection.');
+            throw new InvalidReceivedHeaderException('Malformed received header collection.');
         }
         $mapped = [];
         foreach ($headers as $header) {
             if (! is_array($header) || ! is_string($header['name'] ?? null) || $header['name'] === '' || ! is_string($header['value'] ?? null)) {
-                throw new MailboxException('Malformed received header.');
+                throw new InvalidReceivedHeaderException('Malformed received header.');
             }
             $mapped[] = ['name' => $header['name'], 'value' => $header['value']];
         }
