@@ -26,9 +26,9 @@ Existing token rows, encrypted attributes, references and configured integration
 
 Register a Web OAuth client with the provider and allow the exact HTTPS callback URI used by your host. Configure only the delegated mail permissions your application needs, with the identity and offline-consent scopes required below. Provider registration, consent, actual mailbox permissions and deployed shared-lock behavior remain separate integration prerequisites.
 
-| Provider | Client settings | Callback and scopes |
-| --- | --- | --- |
-| Gmail | `mailbox.oauth.gmail.client_id`, `client_secret` | `mailbox.oauth.gmail.redirect_uri`, `scopes` including `openid` and the intended Gmail permissions |
+| Provider  | Client settings                                                    | Callback and scopes                                                                                                                                  |
+| --------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gmail     | `mailbox.oauth.gmail.client_id`, `client_secret`                   | `mailbox.oauth.gmail.redirect_uri`, `scopes` including `openid` and the intended Gmail permissions                                                   |
 | Microsoft | `mailbox.drivers.ms-graph.client_id`, `client_secret`, `tenant_id` | `mailbox.oauth.ms_graph.redirect_uri`, `scopes` including `openid`, `profile`, `offline_access`, `User.Read` and the intended Graph mail permissions |
 
 Store credentials and OAuth state privately. The optional Eloquent store uses Laravel's encryption key; retain that key or re-encrypt existing values during key rotation. If the original key or ownership evidence is lost, reconnect rather than trying to infer it from an email address.
@@ -39,13 +39,13 @@ A SaaS application keeps its provider registration while each customer authorize
 
 Keep the consenting identity separate from the selected mailbox in your host. Bind both to the customer Team, provider tenant or Workspace customer, and current authorization generation. An address supplied in a form, an email-domain match or an `admin_consent` callback flag does not prove that authority.
 
-| Connection | Authorization | Change delivery |
-| --- | --- | --- |
-| Microsoft own mailbox | User OAuth | Graph subscriptions and scheduled catch-up |
-| Microsoft delegated shared mailbox | User OAuth with shared-mail scopes and existing Exchange permissions | Scheduled synchronization; delegated shared subscriptions are unsupported |
-| Microsoft application mailbox | Customer-administrator-approved application authority | Graph subscriptions or explicit scheduled synchronization |
-| Google mailbox owner | That mailbox account's OAuth consent | Gmail watch with Pub/Sub and scheduled catch-up |
-| Google administrator-managed mailbox | Customer super-administrator-authorized domain-wide delegation | Gmail watch with Pub/Sub and scheduled catch-up |
+| Connection                           | Authorization                                                        | Change delivery                                                           |
+| ------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Microsoft own mailbox                | User OAuth                                                           | Graph subscriptions and scheduled catch-up                                |
+| Microsoft delegated shared mailbox   | User OAuth with shared-mail scopes and existing Exchange permissions | Scheduled synchronization; delegated shared subscriptions are unsupported |
+| Microsoft application mailbox        | Customer-administrator-approved application authority                | Graph subscriptions or explicit scheduled synchronization                 |
+| Google mailbox owner                 | That mailbox account's OAuth consent                                 | Gmail watch with Pub/Sub and scheduled catch-up                           |
+| Google administrator-managed mailbox | Customer super-administrator-authorized domain-wide delegation       | Gmail watch with Pub/Sub and scheduled catch-up                           |
 
 For Microsoft delegated shared access, request `Mail.Read.Shared` or `Mail.ReadWrite.Shared` and `Mail.Send.Shared` as needed. A host resolving a selected email address to an immutable directory object can separately request `User.ReadBasic.All`. The user also needs Exchange mailbox access and Send As or Send on Behalf for actual sends. Mail consent alone does not prove those Exchange sending rights; the provider remains authoritative when the host submits a selected-target operation. Qualify shared delta behavior against the actual account before advertising it.
 
@@ -111,11 +111,11 @@ You may connect personal Gmail or Google Workspace accounts without package tabl
 
 Supply three host adapters to the enrollment service:
 
-| Contract | Host responsibility |
-| --- | --- |
-| `OAuthEnrollmentGuard` | `assertAllowed($context, $hostContext)` authorizes the current principal, selected connection, grant and generation at initiation, before exchange and before commit. Derive the opaque host context from trusted session/application state. |
-| `OAuthStateStore` | `put($state, $payload)` stores the private `OAuthState` until `expiresAt`; `consume($state)` atomically removes it once across all callback workers. A cache `get` followed by `forget`, including Laravel's `Cache::pull`, does not satisfy this contract. |
-| `GrantStore` | `load($context)` loads that selected grant. `replace($context, $expected, $replacement)` atomically checks ownership, lifecycle generation and the expected identity/revision. A null expectation requires absence; return false on conflict. |
+| Contract               | Host responsibility                                                                                                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OAuthEnrollmentGuard` | `assertAllowed($context, $hostContext)` authorizes the current principal, selected connection, grant and generation at initiation, before exchange and before commit. Derive the opaque host context from trusted session/application state.                |
+| `OAuthStateStore`      | `put($state, $payload)` stores the private `OAuthState` until `expiresAt`; `consume($state)` atomically removes it once across all callback workers. A cache `get` followed by `forget`, including Laravel's `Cache::pull`, does not satisfy this contract. |
+| `GrantStore`           | `load($context)` loads that selected grant. `replace($context, $expected, $replacement)` atomically checks ownership, lifecycle generation and the expected identity/revision. A null expectation requires absence; return false on conflict.               |
 
 ```php
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -192,12 +192,12 @@ You may connect work/school Microsoft 365 and personal Outlook.com or Hotmail ac
 
 Configure `mailbox.drivers.ms-graph.client_id`, `client_secret` and `tenant_id` for the selected Entra Web app registration, plus `mailbox.oauth.ms_graph.redirect_uri` and `scopes`. Register the exact redirect URI and choose supported account types that match the intended users. The authority must be one of these values:
 
-| `tenant_id` | Accounts accepted by the SDK |
-| --- | --- |
+| `tenant_id`             | Accounts accepted by the SDK                           |
+| ----------------------- | ------------------------------------------------------ |
 | An explicit tenant GUID | That tenant, including users signing into it as guests |
-| `organizations` | Organizational tenants |
-| `consumers` | The personal Microsoft account tenant |
-| `common` | Organizational and personal Microsoft accounts |
+| `organizations`         | Organizational tenants                                 |
+| `consumers`             | The personal Microsoft account tenant                  |
+| `common`                | Organizational and personal Microsoft accounts         |
 
 The actual ID-token issuer must be `https://login.microsoftonline.com/{tid}/v2.0`; `common`, `organizations` and `consumers` are authority selectors, never literal issuers. Other clouds, tenant-domain aliases and arbitrary authority URLs are not supported by this flow.
 
