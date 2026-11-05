@@ -16,6 +16,7 @@ final readonly class ChangePage implements JsonSerializable
      * @param  list<string>  $removals
      * @param  list<array{folderId: string, upserts: list<string>, removals: list<string>}>  $folderChanges
      * @param  list<string>  $coveredFolders
+     * @param  array<string, MessageDto>  $selectionMetadata  Optional selection hints, never complete message content.
      */
     public function __construct(
         public array $upserts = [],
@@ -26,6 +27,7 @@ final readonly class ChangePage implements JsonSerializable
         public ?string $reason = null,
         public array $folderChanges = [],
         public array $coveredFolders = [],
+        public array $selectionMetadata = [],
     ) {
         if ((int) ($continuation !== null) + (int) ($checkpoint !== null) + (int) $resetRequired !== 1) {
             throw new InvalidArgumentException('A change page requires exactly one continuation, completed checkpoint or reset requirement.');

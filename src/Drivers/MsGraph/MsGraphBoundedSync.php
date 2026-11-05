@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use Carbon\Exceptions\InvalidFormatException;
 use JsonException;
 use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
@@ -36,6 +38,8 @@ final readonly class MsGraphBoundedSync
         $state = $this->state($identity, $checkpoint, $continuation, $previous);
         $responses = new ResponseBudget($budget->maxResponseBytes);
         $changes = [];
+        $selectionMetadata = [];
+        $excludedMetadata = [];
         $items = 0;
 
         for ($pages = 0; ; $pages++) {
@@ -47,7 +51,7 @@ final readonly class MsGraphBoundedSync
                 }
             }
             if ($active === null && $state['enumeration'] === []) {
-                return $this->result($identity, $state, $changes);
+                return $this->result($identity, $state, $changes, selectionMetadata: $selectionMetadata);
             }
             $reason = match (true) {
                 $items >= $budget->maxItems => 'item_limit',
@@ -57,7 +61,7 @@ final readonly class MsGraphBoundedSync
                 default => null,
             };
             if ($reason !== null) {
-                return $this->result($identity, $state, $changes, $reason);
+                return $this->result($identity, $state, $changes, $reason, selectionMetadata: $selectionMetadata);
             }
             if ($state['enumeration'] !== []) {
                 try {
@@ -66,7 +70,7 @@ final readonly class MsGraphBoundedSync
                     $reason = 'response_limit';
                 }
                 if ($reason !== null) {
-                    return $this->result($identity, $state, $changes, $reason);
+                    return $this->result($identity, $state, $changes, $reason, selectionMetadata: $selectionMetadata);
                 }
 
                 continue;
@@ -81,10 +85,10 @@ final readonly class MsGraphBoundedSync
             try {
                 $payload = $this->client->getBoundedDeltaPage($endpoint, $responses, min(1000, $remaining), $this->context->mailbox, $folder['nextLink'] === null);
             } catch (ResponseLimitExceededException) {
-                return $this->result($identity, $state, $changes, 'response_limit');
+                return $this->result($identity, $state, $changes, 'response_limit', selectionMetadata: $selectionMetadata);
             } catch (ApiRequestException $e) {
                 if ($e->status === 410 || $e->providerCode === 'syncStateNotFound') {
-                    return $this->result($identity, $state, $changes, 'delta_expired', reset: true);
+                    return $this->result($identity, $state, $changes, 'delta_expired', reset: true, selectionMetadata: $selectionMetadata);
                 }
                 throw $e;
             }
@@ -104,21 +108,21 @@ final readonly class MsGraphBoundedSync
             $values = $response['value'];
             $hasNext = array_key_exists('@odata.nextLink', $response);
             if ($hasNext === array_key_exists('@odata.deltaLink', $response)) {
-                return $this->result($identity, $state, $changes, 'provider_progress_missing');
+                return $this->result($identity, $state, $changes, 'provider_progress_missing', selectionMetadata: $selectionMetadata);
             }
             $rawLink = $response[$hasNext ? '@odata.nextLink' : '@odata.deltaLink'];
             if (! is_string($rawLink) || trim($rawLink) === '') {
-                return $this->result($identity, $state, $changes, 'provider_progress_missing');
+                return $this->result($identity, $state, $changes, 'provider_progress_missing', selectionMetadata: $selectionMetadata);
             }
             $link = $this->client->continuationEndpoint($rawLink, $base, $this->context->mailbox);
             if (! $this->hasToken($link, [$hasNext ? 'skiptoken' : 'deltatoken'])) {
-                return $this->result($identity, $state, $changes, 'provider_progress_missing');
+                return $this->result($identity, $state, $changes, 'provider_progress_missing', selectionMetadata: $selectionMetadata);
             }
             if ($hasNext && ($link === $endpoint || in_array(hash('sha256', $link), $folder['seenTokens'], true))) {
-                return $this->result($identity, $state, $changes, 'provider_progress_repeated');
+                return $this->result($identity, $state, $changes, 'provider_progress_repeated', selectionMetadata: $selectionMetadata);
             }
             if (count($values) > $remaining) {
-                return $this->result($identity, $state, $changes, 'provider_item_limit');
+                return $this->result($identity, $state, $changes, 'provider_item_limit', selectionMetadata: $selectionMetadata);
             }
             $changeIndex = array_search($folder['folderId'], array_column($changes, 'folderId'), true);
             $change = $changeIndex === false
@@ -133,8 +137,20 @@ final readonly class MsGraphBoundedSync
                         throw new ApiRequestException('Graph returned malformed folder-removal evidence.');
                     }
                     $change['removals'][] = $value['id'];
+                    $excludedMetadata[$value['id']] = true;
+                    unset($selectionMetadata[$value['id']]);
                 } else {
                     $change['upserts'][] = $value['id'];
+                    if (! isset($excludedMetadata[$value['id']])) {
+                        $metadata = $this->selectionMetadata($value);
+                        if ($metadata === null || (isset($selectionMetadata[$value['id']])
+                            && $selectionMetadata[$value['id']]->raw !== $metadata->raw)) {
+                            $excludedMetadata[$value['id']] = true;
+                            unset($selectionMetadata[$value['id']]);
+                        } else {
+                            $selectionMetadata[$value['id']] = $metadata;
+                        }
+                    }
                 }
             }
             $change['upserts'] = array_values(array_unique($change['upserts']));
@@ -154,6 +170,30 @@ final readonly class MsGraphBoundedSync
             }
             $state['folders'][$active] = $folder;
         }
+    }
+
+    /** @param array<string, mixed> $value */
+    private function selectionMetadata(array $value): ?MessageDto
+    {
+        if (! is_bool($value['isDraft'] ?? null)
+            || ! is_string($value['conversationId'] ?? null) || trim($value['conversationId']) === ''
+            || ! is_string($value['parentFolderId'] ?? null) || trim($value['parentFolderId']) === '') {
+            return null;
+        }
+        foreach (['receivedDateTime', 'sentDateTime'] as $field) {
+            if (! array_key_exists($field, $value)
+                || ($value[$field] !== null && (! is_string($value[$field]) || trim($value[$field]) === ''))) {
+                return null;
+            }
+        }
+        $fields = array_fill_keys(['id', 'conversationId', 'parentFolderId', 'isDraft', 'receivedDateTime', 'sentDateTime'], null);
+        try {
+            $message = MessageDto::fromMsGraph(array_replace($fields, array_intersect_key($value, $fields)));
+        } catch (InvalidFormatException) {
+            return null;
+        }
+
+        return $message->receivedAt === null && $message->sentAt === null ? null : $message;
     }
 
     /**
@@ -369,8 +409,9 @@ final readonly class MsGraphBoundedSync
     /**
      * @param  SyncState  $state
      * @param  FolderChanges  $changes
+     * @param  array<string, MessageDto>  $selectionMetadata
      */
-    private function result(SyncIdentity $identity, #[\SensitiveParameter] array $state, array $changes, ?string $reason = null, bool $reset = false): ChangePage
+    private function result(SyncIdentity $identity, #[\SensitiveParameter] array $state, array $changes, ?string $reason = null, bool $reset = false, array $selectionMetadata = []): ChangePage
     {
         $folders = array_map(static fn (array $folder): array => ['folderId' => $folder['folderId'], 'deltaLink' => $folder['deltaLink']], $state['folders']);
 
@@ -383,6 +424,7 @@ final readonly class MsGraphBoundedSync
             reason: $reason,
             folderChanges: $changes,
             coveredFolders: array_column($state['folders'], 'folderId'),
+            selectionMetadata: $selectionMetadata,
         );
     }
 }

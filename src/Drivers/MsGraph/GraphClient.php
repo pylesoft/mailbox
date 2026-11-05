@@ -67,7 +67,7 @@ class GraphClient
         }
         // $top can cap the tracked collection rather than only the response page.
         $preference = ($this->prefersImmutableIds() ? 'IdType="ImmutableId", ' : '').'odata.maxpagesize='.$pageSize;
-        $response = $this->readBounded($endpoint, $budget, $initial ? ['$select' => 'id'] : [], $mailbox, false, false, ['Prefer' => $preference]);
+        $response = $this->readBounded($endpoint, $budget, $initial ? ['$select' => 'id,conversationId,parentFolderId,isDraft,receivedDateTime,sentDateTime'] : [], $mailbox, false, false, ['Prefer' => $preference]);
         if (! $response instanceof \stdClass) {
             throw new ApiRequestException('Graph returned an invalid delta page.');
         }

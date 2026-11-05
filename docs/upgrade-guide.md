@@ -111,6 +111,8 @@ History returns reconciliation candidates without created-versus-updated guesses
 
 Explicit-grant Graph resources now use the same optional `SupportsInitialSync` and `SupportsIncrementalSync` contracts and sync DTOs as Gmail. Graph results add trailing optional `ChangePage::coveredFolders` and `folderChanges` fields, with empty defaults for existing consumers. Mailbox-wide rounds enumerate the hierarchy and retain independent folder progress; a folder token alone never completes the mailbox.
 
+`ChangePage::selectionMetadata` adds another trailing optional field with an empty default. Fresh Graph delta sequences request six selection fields and return validated `MessageDto` hints keyed by exact provider ID, without body, header or file content. Missing or conflicting hints leave the original ID for normal reconciliation. Existing opaque continuation queries remain unchanged and may return no hints; the SDK does not restart imports or skip content automatically. See [optional selection metadata](delta-sync.md#optional-selection-metadata) for completeness and fallback rules. Existing custom drivers need no new methods.
+
 Graph `removals` are folder-membership evidence, not verified mailbox-wide deletion. Recheck candidates against the original folder/import policy and preserve retained history during resets. Delta requests remain unfiltered to avoid Graph's documented 5,000-message filtered-delta ceiling; the cutoff stays bound to state. Existing configured/eager APIs remain available. See [bounded Graph delta](delta-sync.md#bounded-graph-folder-delta) for progress, budgets, recovery and coverage limits.
 
 ## Checking Your Current Version

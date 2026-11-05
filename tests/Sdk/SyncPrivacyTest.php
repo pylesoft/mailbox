@@ -37,6 +37,7 @@ it('redacts change page recovery positions while preserving trusted native persi
         'reason' => $page->reason, 'folderChanges' => $page->folderChanges, 'coveredFolders' => ['FolderA'],
     ]);
     expect($page->__debugInfo())->toBe($page->jsonSerialize());
+    expect($page->selectionMetadata)->toBe([]);
     $restored = unserialize(serialize($page));
     expect($restored)->toEqual($page)
         ->and($restored->continuation?->position)->toBe($page->continuation?->position)

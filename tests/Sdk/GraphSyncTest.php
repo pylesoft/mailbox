@@ -11,6 +11,7 @@ use Psr\Http\Message\RequestInterface;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\SyncBudget;
 use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
@@ -50,9 +51,111 @@ it('resumes Graph folder deltas through documented opaque next and delta links',
         ->and((string) $history[2]['request']->getUri())->toBe($delta)
         ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token');
     parse_str($history[0]['request']->getUri()->getQuery(), $query);
-    expect($query)->toBe(['$select' => 'id'])
+    expect($query)->toBe(['$select' => 'id,conversationId,parentFolderId,isDraft,receivedDateTime,sentDateTime'])
         ->and($history[0]['request']->getHeaderLine('Prefer'))->toContain('odata.maxpagesize=100', 'IdType="ImmutableId"');
 });
+
+it('returns bounded Graph selection metadata without retaining message content', function (): void {
+    $history = [];
+    $metadata = graphSyncSelectionMetadata();
+    $mailbox = graphSyncResource([new Response(200, [], json_encode(['value' => [[...$metadata,
+        'body' => ['contentType' => 'html', 'content' => 'private-body'], 'subject' => 'private-subject',
+        'from' => 'malformed-unselected-sender', 'internetMessageHeaders' => [['name' => 'X-Private', 'value' => 'private-header']],
+        'attachments' => [['contentBytes' => 'private-file']],
+    ]], '@odata.deltaLink' => graphSyncLink('FolderA', 'complete')], JSON_THROW_ON_ERROR))], $history);
+
+    $result = $mailbox->initialSync(new SyncScope('FolderA'), new SyncBudget(maxPages: 1, maxItems: 1, maxRequests: 1));
+
+    expect($result->upserts)->toBe(['candidate'])
+        ->and($result->checkpoint)->not->toBeNull()
+        ->and(array_keys($result->selectionMetadata))->toBe(['candidate']);
+    $selection = $result->selectionMetadata['candidate'];
+    expect($selection)->toBeInstanceOf(MessageDto::class)
+        ->and($selection->raw)->toBe($metadata)
+        ->and($selection->body)->toBeNull()
+        ->and($selection->receivedAt?->toIso8601String())->toBe('2026-01-01T12:00:00+00:00')
+        ->and($selection->sentAt?->toIso8601String())->toBe('2026-01-01T11:59:00+00:00')
+        ->and(json_encode($result, JSON_THROW_ON_ERROR))->not->toContain('private-body', 'private-subject', 'private-header', 'private-file', 'malformed-unselected-sender')
+        ->and($history)->toHaveCount(1);
+    parse_str($history[0]['request']->getUri()->getQuery(), $query);
+    expect($query)->toBe(['$select' => 'id,conversationId,parentFolderId,isDraft,receivedDateTime,sentDateTime']);
+});
+
+it('keeps Graph IDs without trusting incomplete or malformed optional selection metadata', function (array $replace, array $missing): void {
+    $history = [];
+    $metadata = array_diff_key(array_replace(graphSyncSelectionMetadata(), $replace), array_flip($missing));
+    $mailbox = graphSyncResource([new Response(200, [], json_encode(['value' => [$metadata],
+        '@odata.deltaLink' => graphSyncLink('FolderA', 'complete')], JSON_THROW_ON_ERROR))], $history);
+
+    $result = $mailbox->initialSync(new SyncScope('FolderA'), new SyncBudget);
+
+    expect($result->upserts)->toBe(['candidate'])
+        ->and($result->selectionMetadata)->toBe([])
+        ->and($result->checkpoint)->not->toBeNull()
+        ->and($history)->toHaveCount(1);
+})->with([
+    'ID only' => [[], ['conversationId', 'parentFolderId', 'isDraft', 'receivedDateTime', 'sentDateTime']],
+    'missing group' => [[], ['conversationId']],
+    'empty group' => [['conversationId' => ' '], []],
+    'missing membership' => [[], ['parentFolderId']],
+    'invalid membership' => [['parentFolderId' => 1], []],
+    'missing draft flag' => [[], ['isDraft']],
+    'invalid draft flag' => [['isDraft' => 'false'], []],
+    'missing received activity' => [[], ['receivedDateTime']],
+    'missing sent activity' => [[], ['sentDateTime']],
+    'no activity' => [['receivedDateTime' => null, 'sentDateTime' => null], []],
+    'invalid received type' => [['receivedDateTime' => []], []],
+    'invalid sent text' => [['sentDateTime' => 'not-a-date'], []],
+    'empty received text' => [['receivedDateTime' => ''], []],
+]);
+
+it('accepts complete Graph selection metadata with one explicitly unavailable activity', function (string $field): void {
+    $history = [];
+    $metadata = array_replace(graphSyncSelectionMetadata(), [$field => null]);
+    $mailbox = graphSyncResource([new Response(200, [], json_encode(['value' => [$metadata],
+        '@odata.deltaLink' => graphSyncLink('FolderA', 'complete')], JSON_THROW_ON_ERROR))], $history);
+
+    $result = $mailbox->initialSync(new SyncScope('FolderA'), new SyncBudget);
+
+    expect($result->upserts)->toBe(['candidate'])
+        ->and($result->selectionMetadata['candidate']->raw)->toBe($metadata)
+        ->and($result->checkpoint)->not->toBeNull();
+})->with(['receivedDateTime', 'sentDateTime']);
+
+it('never reinserts ambiguous Graph selection hints within a bounded change page', function (string $change, bool $separatePages): void {
+    $history = [];
+    $original = graphSyncSelectionMetadata();
+    $changed = match ($change) {
+        'group' => array_replace($original, ['conversationId' => 'other-group']),
+        'membership' => array_replace($original, ['parentFolderId' => 'other-folder']),
+        'activity' => array_replace($original, ['sentDateTime' => '2026-01-02T12:00:00Z']),
+        'partial' => ['id' => 'candidate'],
+        'removed' => ['id' => 'candidate', '@removed' => ['reason' => 'deleted']],
+        default => $original,
+    };
+    $values = [$original, $changed, $original];
+    $responses = $separatePages ? array_map(fn (int $index): Response => new Response(200, [], json_encode([
+        'value' => [$values[$index]], $index < 2 ? '@odata.nextLink' : '@odata.deltaLink' => graphSyncLink('FolderA', 'page-'.$index, $index < 2),
+    ], JSON_THROW_ON_ERROR)), [0, 1, 2]) : [new Response(200, [], json_encode([
+        'value' => $values, '@odata.deltaLink' => graphSyncLink('FolderA', 'complete'),
+    ], JSON_THROW_ON_ERROR))];
+    $mailbox = graphSyncResource($responses, $history);
+
+    $result = $mailbox->initialSync(new SyncScope('FolderA'), new SyncBudget(maxPages: 3, maxItems: 3, maxRequests: 3));
+
+    expect($result->upserts)->toBe(['candidate'])
+        ->and($result->removals)->toBe($change === 'removed' ? ['candidate'] : [])
+        ->and(array_keys($result->selectionMetadata))->toBe($change === 'same' ? ['candidate'] : [])
+        ->and($result->checkpoint)->not->toBeNull()
+        ->and($history)->toHaveCount($separatePages ? 3 : 1);
+})->with(['group', 'membership', 'activity', 'partial', 'removed', 'same'])->with([false, true]);
+
+/** @return array{id: string, conversationId: string, parentFolderId: string, isDraft: bool, receivedDateTime: string, sentDateTime: string} */
+function graphSyncSelectionMetadata(): array
+{
+    return ['id' => 'candidate', 'conversationId' => 'group', 'parentFolderId' => 'FolderA', 'isDraft' => false,
+        'receivedDateTime' => '2026-01-01T12:00:00Z', 'sentDateTime' => '2026-01-01T11:59:00Z'];
+}
 
 it('enumerates mailbox folders and retains independent progress until every covered folder finishes', function (): void {
     $history = [];
@@ -143,7 +246,7 @@ it('does not turn the per-page Graph budget into a total delta collection cap', 
     expect($received)->toBe($ids)
         ->and($result->checkpoint)->not->toBeNull();
     parse_str($history[0]['request']->getUri()->getQuery(), $query);
-    expect($query)->toBe(['$select' => 'id']);
+    expect($query)->toBe(['$select' => 'id,conversationId,parentFolderId,isDraft,receivedDateTime,sentDateTime']);
     foreach ($history as $entry) {
         expect($entry['request']->getHeaderLine('Prefer'))->toContain('IdType="ImmutableId"', 'odata.maxpagesize=2');
     }

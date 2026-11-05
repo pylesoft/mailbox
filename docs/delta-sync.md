@@ -133,6 +133,18 @@ A `SyncScope` with a folder ID covers that exact provider folder, without its ch
 
 Graph delta returns unfiltered message-ID candidates. Although `importSince` remains bound to the state, the SDK deliberately does not push it into a `receivedDateTime` delta filter: Microsoft documents a 5,000-message ceiling for filtered delta. Recheck content, folder membership and the original import policy before updating the host projection. A completed checkpoint means the unfiltered delta round finished; it does not assert that every candidate satisfies the host's cutoff.
 
+### Optional selection metadata
+
+Fresh Graph delta requests select `id`, `conversationId`, `parentFolderId`, `isDraft`, `receivedDateTime` and `sentDateTime`. `ChangePage::selectionMetadata` maps exact provider message IDs to `MessageDto` hints containing only these six provider fields. Bodies, headers and files are not included. For an ID from `$page->upserts`, you may read its hint:
+
+```php
+$selection = $page->selectionMetadata[$id] ?? null;
+```
+
+Both activity keys must be present; either may explicitly be `null`, but at least one must contain a valid date. Missing, partial or malformed metadata produces no hint. Conflicting repeated metadata or removal evidence suppresses that ID's hint for the entire returned `ChangePage`, including later entries in the same call. The original ID remains reconciliation evidence. The SDK does not skip content or apply the host's import policy from these hints. Gmail and existing custom drivers retain the empty default.
+
+Only a new delta sequence's initial request adds this projection. Saved next and delta URLs remain unchanged, including their encoded query shape, so existing tokens may continue to return IDs without selection metadata. Changing SDK versions does not upgrade those tokens or restart a scan; a replacement initial scan requires the host's explicit recovery policy.
+
 ### Folder evidence and progress
 
 Graph pages add two optional fields to the shared `ChangePage`; Gmail pages leave both empty:
