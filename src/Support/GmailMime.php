@@ -39,7 +39,7 @@ final class GmailMime
     }
 
     /** @param array<string, mixed> $part */
-    public static function body(array $part, bool $relatedRoot = false): ?BodyDto
+    public static function body(array $part, bool $relatedRoot = true): ?BodyDto
     {
         if (self::isFile($part, $relatedRoot)) {
             return null;
@@ -159,7 +159,7 @@ final class GmailMime
      * @param  array<string, mixed>  $part
      * @return list<array<string, mixed>>
      */
-    public static function files(array $part, bool $relatedRoot = false): array
+    public static function files(array $part, bool $relatedRoot = true): array
     {
         if (self::isFile($part, $relatedRoot)) {
             return [$part];

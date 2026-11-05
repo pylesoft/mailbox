@@ -80,6 +80,44 @@ it('reads externalized Gmail text as body without advertising it as a file', fun
         ->and($history[1]['request']->getUri()->getPath())->toBe('/gmail/v1/users/reader%40example.com/messages/message/attachments/external-body');
 });
 
+it('reads a message root with a Content-ID as body rather than an inline file', function (string $mime, bool $external): void {
+    $history = [];
+    $content = $mime === 'text/html' ? '<p>Québec é</p>' : 'Québec é';
+    $encoded = rtrim(strtr(base64_encode($content), '+/', '-_'), '=');
+    $payload = ['partId' => '', 'mimeType' => $mime, 'headers' => [['name' => 'Content-ID', 'value' => '<message-root@example.com>']],
+        'body' => $external ? ['attachmentId' => 'root-body', 'size' => strlen($content)] : ['data' => $encoded, 'size' => strlen($content)]];
+    $responses = [['id' => 'message', 'payload' => $payload]];
+    if ($external) {
+        $responses[] = ['data' => $encoded, 'size' => strlen($content)];
+    }
+    $responses[] = ['id' => 'message', 'payload' => $payload];
+    $resource = gmailBodyResource($responses, $history);
+
+    $message = $resource->get();
+
+    expect($message->body?->content)->toBe($content)
+        ->and($message->body?->contentType)->toBe($mime === 'text/html' ? 'html' : 'text')
+        ->and($message->hasAttachments)->toBeFalse()
+        ->and($resource->attachments())->toBeEmpty()
+        ->and($history)->toHaveCount($external ? 3 : 2);
+})->with(['text/plain', 'text/html'])->with([false, true]);
+
+it('retains explicitly selected message-root text files even when they have a Content-ID', function (bool $named): void {
+    $history = [];
+    $payload = ['partId' => '', 'mimeType' => 'text/plain', 'filename' => $named ? 'notes.txt' : '',
+        'headers' => [['name' => 'Content-ID', 'value' => '<message-root@example.com>'],
+            ['name' => 'Content-Disposition', 'value' => $named ? 'inline' : 'attachment']],
+        'body' => ['attachmentId' => 'root-file', 'size' => 4]];
+    $resource = gmailBodyResource([['id' => 'message', 'payload' => $payload], ['id' => 'message', 'payload' => $payload]], $history);
+
+    $message = $resource->get();
+
+    expect($message->body)->toBeNull()
+        ->and($message->hasAttachments)->toBeTrue()
+        ->and($resource->attachments()->pluck('id')->all())->toBe(['root-file'])
+        ->and($history)->toHaveCount(2);
+})->with(['named inline file' => true, 'explicit attachment' => false]);
+
 it('rejects malformed or incomplete Gmail body bytes', function (array $body): void {
     $history = [];
     $resource = gmailBodyResource([['id' => 'message', 'payload' => ['mimeType' => 'text/plain', 'body' => $body]]], $history);

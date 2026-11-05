@@ -90,7 +90,7 @@ class GmailAttachmentResource implements AttachmentResource, SupportsAttachmentR
     /** @param array<string, mixed> $payload
      * @return array<string, mixed>|null
      */
-    private function findPart(#[\SensitiveParameter] array $payload, ResponseBudget $responses, bool $relatedRoot = false): ?array
+    private function findPart(#[\SensitiveParameter] array $payload, ResponseBudget $responses, bool $relatedRoot = true): ?array
     {
         $this->reserveMetadataMemory($payload, $responses);
         $body = is_array($payload['body'] ?? null) ? $payload['body'] : [];

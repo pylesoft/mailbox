@@ -109,7 +109,7 @@ final class GmailMessageReader
      * @param  array<string, mixed>  $part
      * @return array<string, mixed>
      */
-    private function hydrate(array $part, string $endpoint, bool $relatedRoot = false): array
+    private function hydrate(array $part, string $endpoint, bool $relatedRoot = true): array
     {
         if (++$this->parts > $this->limits->maxParts) {
             throw new ResponseLimitExceededException('Gmail body read exceeded the MIME part limit.');
