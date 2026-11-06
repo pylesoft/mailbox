@@ -257,6 +257,9 @@ trait PerformsApiRequests
             return $path;
         }
         $segments = explode('/', $path);
+        if (($segments[2] ?? null) === 'users' && isset($segments[3])) {
+            $segments[3] = rawurlencode(rawurldecode($segments[3]));
+        }
         if (isset($segments[4]) && preg_match("/^mailfolders\\('((?:[^']|'')+)'\\)$/iD", $segments[4], $match) === 1) {
             array_splice($segments, 4, 1, ['mailFolders', rawurlencode(str_replace("''", "'", rawurldecode($match[1])))]);
         }

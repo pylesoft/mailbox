@@ -42,6 +42,23 @@ function continuationGraphClient(array $responses, array &$history): GraphClient
     ]));
 }
 
+it('reads equivalent mailbox encodings in provider continuations without rewriting the URL', function (string $mailboxPath): void {
+    $next = "https://graph.microsoft.com/v1.0/users/{$mailboxPath}/mailFolders('folder=')/messages?\$skiptoken=a%2fb&opaque=one&opaque=two";
+    $history = [];
+    $graph = continuationGraphClient([
+        new Response(200, [], json_encode(['value' => [], '@odata.nextLink' => $next])),
+        new Response(200, [], '{"value":[]}'),
+    ], $history);
+    $mailbox = new MsGraphMailboxResource($graph, new BatchRequest($graph), new MsGraphDeltaSync($graph), 'team@example.com');
+
+    $result = $mailbox->messages()->inFolder('folder=')->getResult();
+
+    expect($result->messages)->toBeEmpty()
+        ->and($result->exhausted)->toBeTrue()
+        ->and($history)->toHaveCount(2)
+        ->and((string) $history[1]['request']->getUri())->toBe($next);
+})->with(['team%40example.com', 'team@example.com']);
+
 it('preserves the original mailbox scoped batch GET URL', function (bool $absolute): void {
     $history = [];
     $graph = continuationGraphClient([new Response(200, [], '{"value":[]}')], $history);
