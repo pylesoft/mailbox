@@ -31,11 +31,30 @@ final readonly class GmailHistorySync
         $upserts = [];
         $removals = [];
 
-        for ($pages = 0; ; $pages++) {
+        $pages = isset($state['pending']) ? 1 : 0;
+        $requests = 0;
+        while (true) {
+            if (isset($state['pending'])) {
+                $pending = &$state['pending'];
+                $remaining = $budget->maxItems - count($upserts) - count($removals);
+                $upserts = [...$upserts, ...array_splice($pending['upserts'], 0, $remaining)];
+                $remaining = $budget->maxItems - count($upserts) - count($removals);
+                $removals = [...$removals, ...array_splice($pending['removals'], 0, $remaining)];
+                if ($pending['upserts'] !== [] || $pending['removals'] !== []) {
+                    return $this->unfinished($identity, $state, $upserts, $removals, 'item_limit');
+                }
+                $position = $pending['historyId'];
+                $state['seenTokens'][] = hash('sha256', $state['pageToken'] ?? '');
+                $state['pageToken'] = $pending['nextPageToken'];
+                unset($pending, $state['pending']);
+                if ($state['pageToken'] === null) {
+                    return new ChangePage(upserts: $upserts, removals: $removals, checkpoint: new SyncCheckpoint($identity, $position));
+                }
+            }
             $reason = match (true) {
                 count($upserts) + count($removals) >= $budget->maxItems => 'item_limit',
                 $pages >= $budget->maxPages => 'page_limit',
-                $pages >= $budget->maxRequests => 'request_limit',
+                $requests >= $budget->maxRequests => 'request_limit',
                 $responses->remaining() === 0 => 'response_limit',
                 default => null,
             };
@@ -47,6 +66,8 @@ final readonly class GmailHistorySync
                 $query['pageToken'] = $state['pageToken'];
             }
             try {
+                $pages++;
+                $requests++;
                 $response = ConversationPayload::array($this->client->getBoundedObject('users/'.rawurlencode($this->context->mailbox).'/history', $responses, $query, $this->context->mailbox));
             } catch (ResponseLimitExceededException) {
                 return $this->unfinished($identity, $state, $upserts, $removals, 'response_limit');
@@ -70,21 +91,15 @@ final readonly class GmailHistorySync
             }
             $nextUpserts = array_values(array_unique([...array_diff($upserts, $changes['removals']), ...$changes['upserts']]));
             $nextRemovals = array_values(array_unique([...array_diff($removals, $changes['upserts']), ...$changes['removals']]));
-            if (count($nextUpserts) + count($nextRemovals) > $budget->maxItems || count($response['history'] ?? []) > $query['maxResults']) {
+            if (count($response['history'] ?? []) > $query['maxResults']) {
                 return $this->unfinished($identity, $state, $upserts, $removals, 'provider_item_limit');
             }
-            $upserts = $nextUpserts;
-            $removals = $nextRemovals;
-            $state['seenTokens'][] = hash('sha256', $state['pageToken'] ?? '');
-            $state['pageToken'] = $next;
-
-            if ($state['pageToken'] === null) {
-                return new ChangePage(upserts: $upserts, removals: $removals, checkpoint: new SyncCheckpoint($identity, $position));
-            }
+            $state['pending'] = ['upserts' => $nextUpserts, 'removals' => $nextRemovals, 'historyId' => $position, 'nextPageToken' => $next];
+            $upserts = $removals = [];
         }
     }
 
-    /** @return array{baseline: string, pageToken: ?string, seenTokens: list<string>} */
+    /** @return array{baseline: string, pageToken: ?string, seenTokens: list<string>, pending?: array{upserts: list<string>, removals: list<string>, historyId: string, nextPageToken: ?string}} */
     private function state(SyncIdentity $identity, #[\SensitiveParameter] SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation): array
     {
         if (preg_match('/^[0-9]+$/D', $checkpoint->position) !== 1) {
@@ -108,9 +123,38 @@ final readonly class GmailHistorySync
                 throw new InvalidSyncStateException('The Gmail history continuation contains invalid progress evidence.');
             }
         }
+        if (array_key_exists('pending', $state)) {
+            $pending = $state['pending'];
+            if (! is_array($pending) || count($pending) !== 4
+                || ! $this->validIds($pending['upserts'] ?? null) || ! $this->validIds($pending['removals'] ?? null)
+                || ($pending['upserts'] === [] && $pending['removals'] === [])
+                || array_intersect($pending['upserts'], $pending['removals']) !== []
+                || ! is_string($pending['historyId'] ?? null) || preg_match('/^[0-9]+$/D', $pending['historyId']) !== 1
+                || ! $this->atLeast($pending['historyId'], $checkpoint->position)
+                || ! array_key_exists('nextPageToken', $pending)
+                || ($pending['nextPageToken'] !== null && (! is_string($pending['nextPageToken']) || trim($pending['nextPageToken']) === ''
+                    || $pending['nextPageToken'] === $state['pageToken']
+                    || in_array(hash('sha256', $pending['nextPageToken']), $state['seenTokens'], true)))) {
+                throw new InvalidSyncStateException('The Gmail history continuation contains invalid retained page evidence.');
+            }
+        }
 
-        /** @var array{baseline: string, pageToken: ?string, seenTokens: list<string>} $state */
+        /** @var array{baseline: string, pageToken: ?string, seenTokens: list<string>, pending?: array{upserts: list<string>, removals: list<string>, historyId: string, nextPageToken: ?string}} $state */
         return $state;
+    }
+
+    private function validIds(mixed $ids): bool
+    {
+        if (! is_array($ids) || ! array_is_list($ids)) {
+            return false;
+        }
+        foreach ($ids as $id) {
+            if (! is_string($id) || trim($id) === '') {
+                return false;
+            }
+        }
+
+        return count(array_unique($ids)) === count($ids);
     }
 
     /**

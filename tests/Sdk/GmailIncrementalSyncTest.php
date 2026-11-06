@@ -109,26 +109,149 @@ it('replays unretained history and resumes empty pages without promoting an inte
     expect($query)->toBe(['startHistoryId' => '100', 'maxResults' => '100', 'pageToken' => 'last-page']);
 });
 
-it('does not advance past a single history record that expands beyond the retained item budget', function (): void {
+it('drains a single expanded history record without another provider read or an early checkpoint', function (): void {
     $history = [];
     $body = '{"history":[{"id":"101","messagesAdded":[{"message":{"id":"first"}},{"message":{"id":"overflow"}}]}],"historyId":"110"}';
-    $mailbox = incrementalSyncResource([new Response(200, [], $body), new Response(200, [], $body)], $history);
+    $mailbox = incrementalSyncResource([new Response(200, [], $body)], $history);
     $scope = new SyncScope;
     $checkpoint = incrementalSyncCheckpoint($scope);
 
     $limited = $mailbox->incrementalSync($scope, new SyncBudget(maxItems: 1), $checkpoint);
 
-    expect($limited->upserts)->toBe([])
+    expect($limited->upserts)->toBe(['first'])
         ->and($limited->checkpoint)->toBeNull()
-        ->and($limited->reason)->toBe('provider_item_limit')
+        ->and($limited->reason)->toBe('item_limit')
         ->and($limited->continuation->position['pageToken'])->toBeNull();
 
     $retained = $mailbox->incrementalSync($scope, new SyncBudget(maxItems: 2), $checkpoint, $limited->continuation);
 
-    expect($retained->upserts)->toBe(['first', 'overflow'])
-        ->and($retained->checkpoint->position)->toBe('110');
+    expect($retained->upserts)->toBe(['overflow'])
+        ->and($retained->checkpoint->position)->toBe('110')
+        ->and($history)->toHaveCount(1);
     parse_str($history[0]['request']->getUri()->getQuery(), $query);
     expect($query['maxResults'])->toBe('1');
+});
+
+it('retains a bulk history page across fixed budgets and preserves later deletion ordering', function (): void {
+    $history = [];
+    $ids = array_map(static fn (int $id): string => 'old-'.$id, range(1, 205));
+    $mailbox = incrementalSyncResource([
+        new Response(200, [], json_encode(['history' => [['id' => '101',
+            'labelsAdded' => array_map(static fn (string $id): array => ['message' => ['id' => $id]], $ids),
+            'messagesDeleted' => [['message' => ['id' => 'deleted']]],
+        ]], 'historyId' => '110', 'nextPageToken' => 'later'], JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"history":[{"id":"111","messagesDeleted":[{"message":{"id":"old-1"}}]}],"historyId":"120"}'),
+    ], $history);
+    $scope = new SyncScope(null, new DateTimeImmutable('2026-01-01T00:00:00Z'));
+    $checkpoint = incrementalSyncCheckpoint($scope);
+    $budget = new SyncBudget(maxItems: 100, maxPages: 1, maxRequests: 1);
+
+    $first = $mailbox->incrementalSync($scope, $budget, $checkpoint);
+    $second = $mailbox->incrementalSync($scope, $budget, $checkpoint, $first->continuation);
+
+    expect($first->upserts)->toBe(array_slice($ids, 0, 100))
+        ->and($first->checkpoint)->toBeNull()
+        ->and($second->upserts)->toBe(array_slice($ids, 100, 100))
+        ->and($second->checkpoint)->toBeNull()
+        ->and($history)->toHaveCount(1);
+
+    $tail = $mailbox->incrementalSync($scope, $budget, $checkpoint, $second->continuation);
+
+    expect($tail->upserts)->toBe(array_slice($ids, 200))
+        ->and($tail->removals)->toBe(['deleted'])
+        ->and($tail->reason)->toBe('page_limit')
+        ->and($tail->checkpoint)->toBeNull()
+        ->and($history)->toHaveCount(1);
+
+    $last = $mailbox->incrementalSync($scope, $budget, $checkpoint, $tail->continuation);
+
+    expect($last->upserts)->toBe([])
+        ->and($last->removals)->toBe(['old-1'])
+        ->and($last->checkpoint->position)->toBe('120')
+        ->and($history)->toHaveCount(2);
+    parse_str($history[1]['request']->getUri()->getQuery(), $query);
+    expect($query['pageToken'])->toBe('later');
+});
+
+it('returns retained history tail evidence before inspecting an expired next page', function (): void {
+    $history = [];
+    $mailbox = incrementalSyncResource([
+        new Response(200, [], '{"history":[{"id":"101","labelsAdded":[{"message":{"id":"first"}},{"message":{"id":"older-tail"}}]}],"historyId":"110","nextPageToken":"expired"}'),
+        new Response(404, [], '{}'),
+    ], $history);
+    $scope = new SyncScope(null, new DateTimeImmutable('2026-01-01T00:00:00Z'));
+    $checkpoint = incrementalSyncCheckpoint($scope);
+    $first = $mailbox->incrementalSync($scope, new SyncBudget(maxItems: 1), $checkpoint);
+
+    $tail = $mailbox->incrementalSync($scope, new SyncBudget(maxItems: 100, maxPages: 1), $checkpoint, $first->continuation);
+
+    expect($tail->upserts)->toBe(['older-tail'])
+        ->and($tail->resetRequired)->toBeFalse()
+        ->and($tail->reason)->toBe('page_limit')
+        ->and($history)->toHaveCount(1);
+
+    $expired = $mailbox->incrementalSync($scope, new SyncBudget, $checkpoint, $tail->continuation);
+
+    expect($expired->upserts)->toBe([])
+        ->and($expired->resetRequired)->toBeTrue()
+        ->and($history)->toHaveCount(2);
+});
+
+it('counts only actual requests when a retained history page and a new page fit the page budget', function (): void {
+    $history = [];
+    $mailbox = incrementalSyncResource([
+        new Response(200, [], '{"history":[{"id":"101","messages":[{"id":"first"},{"id":"tail"}]}],"historyId":"110","nextPageToken":"next"}'),
+        new Response(200, [], '{"history":[{"id":"111","messages":[{"id":"new-page"}]}],"historyId":"120"}'),
+    ], $history);
+    $scope = new SyncScope;
+    $checkpoint = incrementalSyncCheckpoint($scope);
+    $first = $mailbox->incrementalSync($scope, new SyncBudget(maxItems: 1), $checkpoint);
+
+    $last = $mailbox->incrementalSync($scope, new SyncBudget(maxPages: 2, maxRequests: 1), $checkpoint, $first->continuation);
+
+    expect($last->upserts)->toBe(['tail', 'new-page'])
+        ->and($last->checkpoint->position)->toBe('120')
+        ->and($history)->toHaveCount(2);
+});
+
+it('rejects malformed retained history page evidence before provider IO', function (string $difference): void {
+    $history = [];
+    $mailbox = incrementalSyncResource([], $history);
+    $scope = new SyncScope;
+    $checkpoint = incrementalSyncCheckpoint($scope);
+    $pending = ['upserts' => ['remaining'], 'removals' => [], 'historyId' => '110', 'nextPageToken' => 'next'];
+    match ($difference) {
+        'null' => $pending = null,
+        'non-list' => $pending['upserts'] = ['key' => 'remaining'],
+        'invalid ID' => $pending['upserts'] = [1],
+        'duplicates' => $pending['upserts'] = ['remaining', 'remaining'],
+        'overlap' => $pending['removals'] = ['remaining'],
+        'empty' => $pending['upserts'] = [],
+        'position' => $pending['historyId'] = 'invalid',
+        'regressed position' => $pending['historyId'] = '99',
+        'repeated token' => $pending['nextPageToken'] = 'current',
+        'seen token' => $pending['nextPageToken'] = 'old',
+        'missing token' => $pending = array_diff_key($pending, ['nextPageToken' => true]),
+    };
+    $continuation = new SyncContinuation($checkpoint->identity, 'gmail.history', ['baseline' => '100',
+        'pageToken' => 'current', 'seenTokens' => [hash('sha256', 'old')], 'pending' => $pending]);
+
+    expect(fn () => $mailbox->incrementalSync($scope, new SyncBudget, $checkpoint, $continuation))
+        ->toThrow(InvalidSyncStateException::class)
+        ->and($history)->toBe([]);
+})->with(['null', 'non-list', 'invalid ID', 'duplicates', 'overlap', 'empty', 'position', 'regressed position', 'repeated token', 'seen token', 'missing token']);
+
+it('does not retain an overrequested history record collection as pending changes', function (): void {
+    $history = [];
+    $mailbox = incrementalSyncResource([new Response(200, [], '{"history":[{"id":"101","messages":[{"id":"first"}]},{"id":"102","messages":[{"id":"second"}]}],"historyId":"110"}')], $history);
+    $scope = new SyncScope;
+
+    $page = $mailbox->incrementalSync($scope, new SyncBudget(maxItems: 1), incrementalSyncCheckpoint($scope));
+
+    expect($page->reason)->toBe('provider_item_limit')
+        ->and($page->upserts)->toBe([])
+        ->and($page->checkpoint)->toBeNull()
+        ->and($page->continuation->position)->not->toHaveKey('pending');
 });
 
 it('requires scoped recovery after expired history and catches arrivals from the new pre-scan baseline', function (): void {
