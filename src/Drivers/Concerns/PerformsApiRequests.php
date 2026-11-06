@@ -115,7 +115,7 @@ trait PerformsApiRequests
                         continue;
                     }
                     $this->throwMappedException($e, $mailbox, $mailboxKey, $safeEndpoint, $attempt);
-                } catch (ApiRequestException $e) {
+                } catch (ApiRequestException|ProviderTransportException $e) {
                     $previous = $e->getPrevious();
                     if ($retry && ($previous instanceof ConnectException || ($previous instanceof RequestException && $previous->getResponse() === null))
                         && $this->retryTransportFailure($previous, 'GET', $safeEndpoint, $mailboxKey, $attempt, $startedAt)) {
@@ -155,7 +155,15 @@ trait PerformsApiRequests
                 $size = 0;
                 while (true) {
                     $budget->assertMemoryAvailable(strlen($body) + 32768);
-                    $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
+                    try {
+                        $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
+                    } catch (\RuntimeException) {
+                        throw new ProviderTransportException(
+                            message: 'The provider response stream was interrupted.',
+                            endpoint: $this->redactedEndpoint($endpoint),
+                            mailbox: $mailbox,
+                        );
+                    }
                     if ($chunk === '') {
                         if ($stream->eof()) {
                             break;
@@ -172,7 +180,7 @@ trait PerformsApiRequests
             } finally {
                 $stream->close();
             }
-        } catch (ResponseLimitExceededException|ApiRequestException $e) {
+        } catch (ResponseLimitExceededException|ApiRequestException|ProviderTransportException $e) {
             throw $e;
         } catch (\Throwable) {
             throw new ApiRequestException('The provider response stream could not be read.');
@@ -450,7 +458,7 @@ trait PerformsApiRequests
             throw new \InvalidArgumentException('A streamed response byte limit must be positive.');
         }
         $budget->assertMemoryAvailable(65536);
-        $response = $this->requestRaw('GET', $endpoint, ['stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox, retry: false);
+        $response = $this->requestRaw('GET', $endpoint, ['stream' => true, 'http_errors' => true, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox, retry: false);
         $source = $response->getBody();
         $temporary = null;
         $size = 0;
@@ -468,7 +476,15 @@ trait PerformsApiRequests
             }
             while (true) {
                 $budget->assertMemoryAvailable(65536);
-                $chunk = $source->read(min(8192, $budget->remaining()) + 1);
+                try {
+                    $chunk = $source->read(min(8192, $budget->remaining()) + 1);
+                } catch (\RuntimeException) {
+                    throw new ProviderTransportException(
+                        message: 'The provider response stream was interrupted.',
+                        endpoint: $this->redactedEndpoint($endpoint),
+                        mailbox: $mailbox,
+                    );
+                }
                 if ($chunk === '') {
                     if ($source->eof()) {
                         break;
@@ -495,7 +511,7 @@ trait PerformsApiRequests
             $temporary = null;
 
             return $stream;
-        } catch (ResponseLimitExceededException|ApiRequestException $exception) {
+        } catch (ResponseLimitExceededException|ApiRequestException|ProviderTransportException $exception) {
             throw $exception;
         } catch (\Throwable) {
             throw new ApiRequestException('The provider response stream could not be read completely.');
@@ -587,15 +603,29 @@ trait PerformsApiRequests
                 try {
                     return $this->sendRequest($method, $target, $options, $mailboxKey, $attempt, $startedAt);
                 } catch (ConnectException $e) {
-                    $e = new ConnectException($this->providerLabel().' connection failed.', new Request($method, $endpoint));
+                    $curlErrorNumber = $e->getHandlerContext()['errno'] ?? null;
+                    $diagnostic = is_int($curlErrorNumber) && $curlErrorNumber > 0 && $curlErrorNumber <= 999
+                        ? ' (cURL error '.$curlErrorNumber.')' : '';
+                    $e = new ConnectException($this->providerLabel().' connection failed'.$diagnostic.'.', new Request($method, $endpoint));
                     if ($retry && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
                         continue;
+                    }
+
+                    if (! $retry && $method === 'GET') {
+                        throw new ProviderTransportException(
+                            message: $e->getMessage(),
+                            endpoint: $endpoint,
+                            mailbox: $mailbox,
+                            attemptsExhausted: $attempt,
+                            previous: $e,
+                        );
                     }
 
                     throw $this->wrapUnexpectedThrowable($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt);
                 } catch (RequestException $e) {
                     $response = $e->getResponse();
                     $status = $response?->getStatusCode();
+                    $response?->getBody()->close();
                     $e = new RequestException(
                         $this->providerLabel().' request failed'.($status === null ? '.' : ' with HTTP '.$status.'.'),
                         new Request($method, $endpoint),
@@ -605,6 +635,16 @@ trait PerformsApiRequests
 
                     if ($retry && $e->getResponse() === null && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
                         continue;
+                    }
+
+                    if (! $retry && $method === 'GET' && $response === null) {
+                        throw new ProviderTransportException(
+                            message: $e->getMessage(),
+                            endpoint: $endpoint,
+                            mailbox: $mailbox,
+                            attemptsExhausted: $attempt,
+                            previous: $e,
+                        );
                     }
 
                     if ($retry && $this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {

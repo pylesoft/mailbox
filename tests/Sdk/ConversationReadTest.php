@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Http;
@@ -386,12 +388,26 @@ it('bounds an unpaged Gmail thread by actual response bytes and can restart it w
         ->and($resumedHistory)->toHaveCount(1);
 });
 
-it('retains earlier Graph messages when a later metadata fetch is interrupted without hidden retries', function (int $status, ?int $retryAfter): void {
+it('retains earlier Graph messages when a later metadata fetch is interrupted without hidden retries', function (int $status, ?int $retryAfter, string $failure = 'http'): void {
     $history = [];
+    $closed = false;
+    $source = Utils::streamFor('private-provider-detail');
+    $stream = FnStream::decorate($source, [
+        'read' => static fn (int $length): string => throw new RuntimeException('private-provider-detail'),
+        'close' => function () use ($source, &$closed): void {
+            $closed = true;
+            $source->close();
+        },
+    ]);
+    $response = match ($failure) {
+        'connection' => new ConnectException('private-provider-detail', new Request('GET', 'https://graph.microsoft.com/private-provider-detail')),
+        'stream' => new Response(200, [], $stream),
+        default => new Response($status, $retryAfter === null ? [] : ['Retry-After' => (string) $retryAfter], '{"error":"private-provider-detail"}'),
+    };
     $mailbox = conversationMailbox('ms-graph', [
         ['value' => [graphConversationMessage('older'), graphConversationMessage('recent')]],
         ['value' => []],
-        new Response($status, $retryAfter === null ? [] : ['Retry-After' => (string) $retryAfter], '{"error":"private-provider-detail"}'),
+        $response,
     ], $history);
     $scope = new SyncScope('FolderA');
 
@@ -405,6 +421,9 @@ it('retains earlier Graph messages when a later metadata fetch is interrupted wi
         ->and($history)->toHaveCount(3);
     expect(json_encode($first))->not->toContain('private-provider-detail');
     expect(json_encode($first))->not->toContain('selected-token');
+    if ($failure === 'stream') {
+        expect($closed)->toBeTrue();
+    }
     if ($retryAfter === null) {
         expect($first->jsonSerialize())->not->toHaveKey('retryAfter');
     } else {
@@ -419,26 +438,53 @@ it('retains earlier Graph messages when a later metadata fetch is interrupted wi
         ->and(array_column($last->messages, 'id'))->toBe(['recent'])
         ->and($last->retryAfter)->toBeNull()
         ->and($resumedHistory)->toHaveCount(2);
-})->with(['unavailable' => [503, null], 'rate limited' => [429, 73]]);
+})->with([
+    'unavailable' => [503, null],
+    'rate limited' => [429, 73],
+    'connection' => [0, null, 'connection'],
+    'interrupted stream' => [200, null, 'stream'],
+]);
 
-it('retains completed Gmail content and the retry delay when later body hydration is rate limited', function (): void {
+it('retains completed Gmail content when later body hydration is interrupted without hidden retries', function (string $failure, ?int $retryAfter): void {
     Http::preventStrayRequests();
     $history = [];
+    $closed = false;
+    $source = Utils::streamFor('private-provider-detail');
+    $stream = FnStream::decorate($source, [
+        'read' => static fn (int $length): string => throw new RuntimeException('private-provider-detail'),
+        'close' => function () use ($source, &$closed): void {
+            $closed = true;
+            $source->close();
+        },
+    ]);
+    $response = match ($failure) {
+        'connection' => new ConnectException('private-provider-detail', new Request('GET', 'https://gmail.googleapis.com/private-provider-detail')),
+        'stream' => new Response(200, [], $stream),
+        default => new Response(429, ['Retry-After' => (string) $retryAfter], '{"error":"rate limited"}'),
+    };
     $external = ['id' => 'recent', 'threadId' => 'thread', 'payload' => [
         'mimeType' => 'text/plain', 'body' => ['attachmentId' => 'external-body', 'size' => 3],
     ]];
     $read = conversationMailbox('gmail', [
         ['id' => 'thread', 'messages' => [gmailConversationMessage('older'), $external]],
-        new Response(429, ['Retry-After' => '91'], '{"error":"rate limited"}'),
+        $response,
     ], $history)->conversation('thread', new SyncScope, new SyncBudget);
 
     expect($read->complete)->toBeFalse()
         ->and($read->reason)->toBe('provider_interrupted')
-        ->and($read->retryAfter)->toBe(91)
+        ->and($read->retryAfter)->toBe($retryAfter)
         ->and(array_column($read->messages, 'id'))->toBe(['older'])
         ->and($read->continuation->position['pending'])->toBe(['recent'])
-        ->and($read->jsonSerialize()['retryAfter'])->toBe(91)
         ->and($history)->toHaveCount(2);
+    expect(json_encode($read))->not->toContain('private-provider-detail', 'selected-token');
+    if ($failure === 'stream') {
+        expect($closed)->toBeTrue();
+    }
+    if ($retryAfter === null) {
+        expect($read->jsonSerialize())->not->toHaveKey('retryAfter');
+    } else {
+        expect($read->jsonSerialize()['retryAfter'])->toBe($retryAfter);
+    }
 
     $resumedHistory = [];
     $last = conversationMailbox('gmail', [$external, ['data' => 'WWVz', 'size' => 3]], $resumedHistory)
@@ -450,7 +496,7 @@ it('retains completed Gmail content and the retry delay when later body hydratio
         ->and($last->retryAfter)->toBeNull()
         ->and($last->jsonSerialize())->not->toHaveKey('retryAfter')
         ->and($resumedHistory)->toHaveCount(2);
-});
+})->with(['rate limited' => ['http', 91], 'connection' => ['connection', null], 'interrupted stream' => ['stream', null]]);
 
 it('never completes a malformed object in place of a conversation collection', function (string $provider, string $body): void {
     $history = [];
