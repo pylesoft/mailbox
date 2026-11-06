@@ -3,10 +3,14 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Http;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\SupportsFolderCatalogue;
@@ -73,20 +77,42 @@ it('resumes a bounded folder catalogue independently of message delta with canon
     }
 });
 
-it('retains catalogue progress and the retry delay when a child read is rate limited', function (): void {
+it('retains catalogue progress when a child read is interrupted without hidden retries', function (string $failure, ?int $retryAfter): void {
     Http::preventStrayRequests();
     $history = [];
+    $closed = false;
+    $source = Utils::streamFor('private-provider-detail');
+    $stream = FnStream::decorate($source, [
+        'read' => static fn (int $length): string => throw new RuntimeException('private-provider-detail'),
+        'close' => function () use ($source, &$closed): void {
+            $closed = true;
+            $source->close();
+        },
+    ]);
+    $response = match ($failure) {
+        'connection' => new ConnectException('private-provider-detail', new Request('GET', 'https://graph.microsoft.com/private-provider-detail')),
+        'stream' => new Response(200, [], $stream),
+        default => new Response(429, ['Retry-After' => (string) $retryAfter], '{"error":"rate limited"}'),
+    };
     $aliases = [WellKnownFolder::DRAFTS];
     $read = catalogueMailbox([
         ['id' => 'draft-id'],
         ['value' => [catalogueFolder('A', 'Projects', 'root', children: 1)]],
-        new Response(429, ['Retry-After' => '83'], '{"error":"rate limited"}'),
+        $response,
     ], $history)->folderCatalogue(new SyncBudget(maxPages: 3), wellKnownFolders: $aliases);
 
     expect($read->complete)->toBeFalse();
     expect($read->reason)->toBe('provider_interrupted');
-    expect($read->retryAfter)->toBe(83);
-    expect($read->jsonSerialize()['retryAfter'])->toBe(83);
+    expect($read->retryAfter)->toBe($retryAfter);
+    if ($retryAfter === null) {
+        expect($read->jsonSerialize())->not->toHaveKey('retryAfter');
+    } else {
+        expect($read->jsonSerialize()['retryAfter'])->toBe($retryAfter);
+    }
+    expect(json_encode($read))->not->toContain('private-provider-detail', 'selected-token');
+    if ($failure === 'stream') {
+        expect($closed)->toBeTrue();
+    }
     expect(array_column($read->folders, 'id'))->toBe(['A']);
     expect($read->rootFolderIds)->toBe(['A']);
     expect($read->wellKnownFolderIds)->toBe(['drafts' => 'draft-id']);
@@ -105,7 +131,7 @@ it('retains catalogue progress and the retry delay when a child read is rate lim
     expect($last->jsonSerialize())->not->toHaveKey('retryAfter');
     expect($resumedHistory)->toHaveCount(1);
     expect($resumedHistory[0]['request']->getUri()->getPath())->toEndWith('/mailFolders/A/childFolders');
-});
+})->with(['rate limited' => ['http', 83], 'connection' => ['connection', null], 'interrupted stream' => ['stream', null]]);
 
 it('retains explicit root observations across catalogue restarts without guessing an unknown parent', function (): void {
     Http::preventStrayRequests();

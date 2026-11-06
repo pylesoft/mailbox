@@ -17,8 +17,8 @@ use Pyle\Mailbox\Contracts\MessageResource;
 use Pyle\Mailbox\Contracts\SupportsMessageMetadataRead;
 use Pyle\Mailbox\DTOs\BodyReadLimits;
 use Pyle\Mailbox\DTOs\GrantContext;
-use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ProviderTransportException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Facades\Mailbox;
@@ -496,10 +496,14 @@ it('hydrates bodies through the Gmail listing and incremental delta paths', func
 it('fails an interrupted external body stream without returning partial text or retrying', function (): void {
     $history = [];
     $closed = false;
+    $reads = 0;
     $stream = new FnStream([
         'getSize' => fn (): ?int => null,
         'eof' => fn (): bool => false,
-        'read' => function (int $length): string {
+        'read' => function (int $length) use (&$reads): string {
+            if ($reads++ === 0) {
+                return '{"data":"private-partial-text';
+            }
             throw new RuntimeException('Private provider stream detail.');
         },
         'close' => function () use (&$closed): void {
@@ -511,8 +515,19 @@ it('fails an interrupted external body stream without returning partial text or 
         new Response(200, [], $stream),
     ], $history);
 
-    expect(fn () => $resource->body())->toThrow(ApiRequestException::class, 'The provider response stream could not be read.')
+    $content = null;
+    $failure = null;
+    try {
+        $content = $resource->body()->content;
+    } catch (MailboxException $exception) {
+        $failure = $exception;
+    }
+
+    expect($failure)->toBeInstanceOf(ProviderTransportException::class)
+        ->and((string) $failure)->not->toContain('Private provider stream detail.', 'private-partial-text')
+        ->and($content)->toBeNull()
         ->and($history)->toHaveCount(2)
+        ->and($reads)->toBe(2)
         ->and($closed)->toBeTrue();
 });
 

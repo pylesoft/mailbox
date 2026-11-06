@@ -20,6 +20,7 @@ use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
+use Pyle\Mailbox\Exceptions\ProviderTransportException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
@@ -136,7 +137,7 @@ final readonly class MsGraphFolderCatalogue
         } catch (RateLimitException $exception) {
             $reason = 'provider_interrupted';
             $retryAfter = $exception->retryAfter;
-        } catch (ApiRequestException|ProviderServerException) {
+        } catch (ApiRequestException|ProviderServerException|ProviderTransportException) {
             $reason = 'provider_interrupted';
         } catch (MailboxException) {
             $reason = 'content_incomplete';

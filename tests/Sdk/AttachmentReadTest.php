@@ -3,10 +3,13 @@
 declare(strict_types=1);
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Event;
@@ -19,9 +22,82 @@ use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\Events\AttachmentDownloaded;
 use Pyle\Mailbox\Events\AttachmentSkipped;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ProviderServerException;
+use Pyle\Mailbox\Exceptions\ProviderTransportException;
+use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
+
+it('classifies bounded Graph attachment connection failures for host retries without replaying the request', function (string $operation): void {
+    Storage::fake('attachment-read-tests');
+    config()->set('mailbox.attachment_disk', 'attachment-read-tests');
+    $history = [];
+    $attachment = attachmentReadResource('ms-graph', [
+        ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2],
+        new ConnectException(
+            'private-provider-token connection timed out',
+            new Request('GET', 'https://graph.microsoft.com/private-reference?token=private-provider-token'),
+            handlerContext: ['errno' => 28, 'url' => 'private-provider-token', 'primary_ip' => 'private-address'],
+        ),
+    ], $history);
+    $failure = null;
+
+    try {
+        $attachment->{$operation}();
+    } catch (MailboxException $exception) {
+        $failure = $exception;
+    }
+
+    expect($failure)->toBeInstanceOf(ProviderTransportException::class)
+        ->and($failure->getMessage())->toContain('28')
+        ->and((string) $failure)->not->toContain('private-provider-token', 'private-address', 'private-reference')
+        ->and($history)->toHaveCount(2)
+        ->and(Storage::disk('attachment-read-tests')->allFiles())->toBeEmpty();
+})->with(['stream', 'download']);
+
+it('classifies bounded Graph attachment HTTP failures for host retries and closes their streams', function (int $status, string $exceptionClass): void {
+    $history = [];
+    $body = Utils::streamFor('private-error-body');
+    $attachment = attachmentReadResource('ms-graph', [
+        ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2],
+        new Response($status, ['Retry-After' => '17'], $body),
+    ], $history);
+    $failure = null;
+
+    try {
+        $attachment->stream();
+    } catch (MailboxException $exception) {
+        $failure = $exception;
+    }
+
+    expect($failure)->toBeInstanceOf($exceptionClass)
+        ->and((string) $failure)->not->toContain('private-error-body')
+        ->and($history)->toHaveCount(2)
+        ->and($body->isReadable())->toBeFalse();
+    if ($failure instanceof RateLimitException) {
+        expect($failure->retryAfter)->toBe(17);
+    }
+})->with([
+    'throttled' => [429, RateLimitException::class],
+    'server unavailable' => [503, ProviderServerException::class],
+]);
+
+it('classifies a response-less bounded Graph attachment request failure without replaying it', function (): void {
+    $history = [];
+    $attachment = attachmentReadResource('ms-graph', [
+        ['id' => 'attachment', 'name' => 'file.bin', 'size' => 2],
+        new RequestException('private transport detail', new Request('GET', 'https://graph.microsoft.com/private-reference')),
+    ], $history);
+
+    try {
+        $attachment->stream();
+        test()->fail('The interrupted provider request must fail.');
+    } catch (ProviderTransportException $exception) {
+        expect((string) $exception)->not->toContain('private transport detail', 'private-reference');
+    }
+    expect($history)->toHaveCount(2);
+});
 
 it('rejects truncated Gmail attachment encoding instead of returning an empty file', function (): void {
     $history = [];
@@ -337,7 +413,7 @@ it('closes interrupted provider and temporary streams without storing partial fi
         $failure = $exception;
     }
 
-    expect($failure)->toBeInstanceOf(MailboxException::class)->and($closed)->toBeTrue();
+    expect($failure)->toBeInstanceOf(ProviderTransportException::class)->and($closed)->toBeTrue();
     expect($failure->getMessage())->not->toContain('interruption-private');
     $files = array_filter(array_map(
         static fn ($resource): string => (string) (stream_get_meta_data($resource)['uri'] ?? ''),

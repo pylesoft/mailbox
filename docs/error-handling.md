@@ -207,7 +207,9 @@ try {
 
 ### `ProviderTransportException`
 
-Thrown when the provider request fails before an HTTP response is available, such as a connection reset, DNS failure, or cURL timeout, and Mailbox has released the current queue job or exhausted its retry budget. This behavior is controlled by the `retry_transport_failures` [config](configuration.md) value and is enabled by default.
+Thrown when a provider connection fails or a response stream is interrupted. For requests with SDK retries enabled, the `retry_transport_failures` [config](configuration.md) value controls transport retries and queue release. It is enabled by default.
+
+Bounded attachment reads do not replay a partially read response or release the enclosing job. Your application may catch this exception and apply its bounded retry policy. Byte-limit and content-validation failures remain separate errors. Bounded conversation and folder-catalogue reads return an incomplete result with the `provider_interrupted` reason and retain their continuation state.
 
 ```php
 use Pyle\Mailbox\Exceptions\ProviderTransportException;
@@ -218,7 +220,7 @@ use Pyle\Mailbox\Exceptions\ProviderTransportException;
 | `$endpoint` | `?string` | The API endpoint that was being called. |
 | `$mailbox` | `?string` | The mailbox email address or mailbox key. |
 | `$attemptsExhausted` | `int` | The attempt number that triggered the exception. |
-| `$retryDelay` | `?int` | Seconds before retrying when Mailbox released a queued job, or `null` after retries are exhausted. |
+| `$retryDelay` | `?int` | Seconds before retrying when Mailbox released a queued job, or `null` when no queue delay was assigned. |
 
 ```php
 try {
@@ -585,7 +587,7 @@ This table summarizes every exception, whether it is retryable, and the matching
 | `RateLimitException` | Yes | `RateLimitHit` | Too many API calls |
 | `ApiRequestException` | No | `ApiError` | Bad request, invalid parameters |
 | `ProviderServerException` | Yes | `ApiError` | Provider outage (5xx) |
-| `ProviderTransportException` | Yes | -- | Connection reset, DNS failure, or timeout before an HTTP response |
+| `ProviderTransportException` | Yes | -- | Connection reset, DNS failure, timeout, or interrupted response stream |
 | `DeltaTokenExpiredException` | Full re-sync | `DeltaTokenExpired` | Stale delta link / history ID |
 | `ResourceNotFoundException` | No | -- | Deleted message, folder, or attachment |
 | `DriverNotConfiguredException` | No | -- | Missing config entry |
