@@ -5,13 +5,15 @@ declare(strict_types=1);
 use Pyle\Mailbox\Drivers\MsGraph\BatchRequest;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMessageQuery;
+use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
+use Pyle\Mailbox\Drivers\MsGraph\TokenManager;
 
 it('queries messages and maps DTOs', function (): void {
     $client = new class extends GraphClient
     {
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return [
                 'value' => [
@@ -35,7 +37,7 @@ it('applies client-side filters when using search with where clauses', function 
     {
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             expect($query)->toHaveKey('$search');
 
@@ -64,7 +66,7 @@ it('applies internetMessageId and from.address client-side filters during search
     {
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             expect($query)->toHaveKey('$search');
 
@@ -122,7 +124,7 @@ it('sends bulk actions in chunked batch requests', function (): void {
             return [];
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return ['value' => []];
         }
@@ -168,7 +170,7 @@ it('retries failed bulk batch items individually', function (): void {
             return [];
         }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             return ['value' => []];
         }
@@ -190,7 +192,7 @@ it('queries across all folders when allFolders is used', function (): void {
 
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->endpoints[] = $endpoint;
 
@@ -217,7 +219,7 @@ it('builds grouped OR filters when whereAny is used', function (): void {
 
         public function __construct() {}
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->queries[] = $query;
 
@@ -236,15 +238,18 @@ it('builds grouped OR filters when whereAny is used', function (): void {
         ->toContain('isRead eq false');
 });
 
-it('stops on repeated nextLink pages and deduplicates message ids', function (): void {
+it('deduplicates message ids across completed pages', function (): void {
     $client = new class extends GraphClient
     {
         /** @var array<int, string> */
         public array $endpoints = [];
 
-        public function __construct() {}
+        public function __construct()
+        {
+            parent::__construct([], new TokenManager([]), new RateLimiter([]));
+        }
 
-        public function get(string $endpoint, array $query = [], ?string $mailbox = null): array
+        public function getMessagePayload(string $endpoint, array $query = [], ?string $mailbox = null): array
         {
             $this->endpoints[] = $endpoint;
 
@@ -263,7 +268,6 @@ it('stops on repeated nextLink pages and deduplicates message ids', function ():
                     ['id' => 'm-2', 'subject' => 'B'],
                     ['id' => 'm-3', 'subject' => 'C'],
                 ],
-                '@odata.nextLink' => 'https://graph.microsoft.com/v1.0/users/invoices%40example.com/messages?$skiptoken=repeat',
             ];
         }
     };

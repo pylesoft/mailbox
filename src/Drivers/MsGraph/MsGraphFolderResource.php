@@ -43,7 +43,7 @@ class MsGraphFolderResource implements FolderResource
             ->inFolder($this->folderId);
     }
 
-    public function delta(?string $deltaToken = null): DeltaResultDto
+    public function delta(#[\SensitiveParameter] ?string $deltaToken = null): DeltaResultDto
     {
         return $this->deltaSync->syncFolder($this->mailbox, $this->folderId, $deltaToken);
     }

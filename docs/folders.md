@@ -22,6 +22,57 @@ foreach ($folders as $folder) {
 
 The returned collection contains `FolderDto` instances with metadata about each folder, including item counts and parent relationships. Each folder's `children` array is empty in a flat listing -- use the tree method described next when you need hierarchy.
 
+## Reading a Bounded Graph Catalogue
+
+Use the optional `SupportsFolderCatalogue` capability to discover Graph folders across bounded operations. It lists folder metadata independently of message synchronization, including hidden folders and recursive children. It never reads messages or message delta.
+
+```php
+use Pyle\Mailbox\Contracts\SupportsFolderCatalogue;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+
+$mailbox = Mailbox::forGrant($context, $tokens);
+
+if (! $mailbox instanceof SupportsFolderCatalogue) {
+    throw new UnsupportedCapabilityException('This mailbox cannot read bounded folder catalogues.');
+}
+
+$wellKnownFolders = [WellKnownFolder::DRAFTS, WellKnownFolder::DELETED, WellKnownFolder::JUNK];
+$budget = new SyncBudget(maxPages: 4, maxRequests: 4, maxItems: 100);
+$catalogue = $mailbox->folderCatalogue($budget, wellKnownFolders: $wellKnownFolders);
+
+foreach ($catalogue->folders as $folder) {
+    // Retain the metadata before retaining this result's continuation.
+}
+```
+
+This capability requires an explicit grant context. Existing eager folder APIs, mandatory resource contracts and custom drivers keep their existing signatures. Gmail does not implement this optional catalogue capability.
+
+`folders` contains this call's `FolderDto` values with exact IDs, parent IDs, counts, `isHidden` and `providerType`. `rootFolderIds` accumulates IDs actually observed in root collection pages. A confirmed root retains its provider parent ID even when that mailbox-root ID is not itself a catalogue entry. Child pages must identify the parent being queried; missing or conflicting ancestry remains incomplete. The host must not treat unresolved ancestry as an ordinary root.
+
+`wellKnownFolderIds` accumulates the canonical IDs resolved from the caller's distinct `WellKnownFolder` enum list. Keys use the enum values, such as `drafts`, `deleted` and `junk`. The catalogue's `wellKnownName` comes from these resolved IDs. A custom folder named Drafts remains custom, and localized display names do not change canonical identity. The SDK reports facts; the host chooses exclusions and applies them to descendants.
+
+Graph collections may include virtual search folders. The catalogue preserves explicit `@odata.type` values, including unknown derived types, for the host to handle. When the annotation is omitted under Graph's default minimal metadata, `providerType` is `#microsoft.graph.mailFolder`. The [OData JSON format](https://docs.oasis-open.org/odata/odata-json-format/v4.0/odata-json-format-v4.0.html) requires derived types to be annotated, and [Graph documents search folders](https://learn.microsoft.com/en-us/graph/api/user-list-mailfolders?view=graph-rest-1.0) in this collection. A non-hidden folder is not necessarily an ordinary mail folder.
+
+### Retaining Catalogue Progress
+
+Every canonical lookup and collection request shares the invocation's actual response-byte, request, page and item budgets. Canonical lookups each consume one request, page and item. Collection pages consume their returned item count, including duplicates. There is no depth ceiling. These bounds do not turn the mutable hierarchy into an atomic snapshot; schedule future catalogue rounds to discover subsequent changes.
+
+An unfinished result has `complete: false`, a `reason` and a private `continuation`. Retain returned metadata, root observations and canonical identities before advancing that continuation. A later operation may resume with the same selected grant and enum list:
+
+```php
+$next = $mailbox->folderCatalogue(
+    $budget,
+    continuation: $storedContinuation,
+    wellKnownFolders: $wellKnownFolders,
+);
+```
+
+Each call receives fresh budgets. A page that exceeds the remaining item or byte budget stays pending; the SDK never truncates it and advances past omitted folders. Use a sufficient budget to retain that page. Only finished catalogue work returns `complete: true` and no continuation; this is not a message synchronization checkpoint.
+
+Continuations bind provider, connection, grant/generation, mailbox, format, catalogue phase and the exact ordered enum list. Retain trusted continuation fields or private PHP serialization unchanged. Ordinary result JSON and debug output redact private recovery positions and cannot serve as stored recovery state. Never accept a continuation from an untrusted client.
+
 ## Building a Folder Tree
 
 The `tree()` method returns the same folders but organized into a nested hierarchy. Each parent folder's `children` array is populated with its child folders, recursively:

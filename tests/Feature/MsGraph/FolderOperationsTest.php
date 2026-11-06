@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphFolderQuery;
+use Pyle\Mailbox\Tests\Support\FakeGraphClient;
 
 it('builds folder tree', function (): void {
-    $client = new class extends GraphClient
+    $client = new class extends FakeGraphClient
     {
         public function __construct() {}
 

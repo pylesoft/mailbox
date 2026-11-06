@@ -7,21 +7,39 @@ namespace Pyle\Mailbox\Drivers\Gmail;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\Event;
+use InvalidArgumentException;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\SubmissionEvidence;
+use Pyle\Mailbox\DTOs\SubmissionLimits;
+use Pyle\Mailbox\DTOs\SubmissionResult;
+use Pyle\Mailbox\Enums\ReplyForwardOperation;
+use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
+use Pyle\Mailbox\Enums\SubmissionOutcome;
 use Pyle\Mailbox\Events\AccessDenied;
 use Pyle\Mailbox\Events\ApiError;
 use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ProviderServerException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Support\GrantAuthorization;
+use Pyle\Mailbox\Support\PreparedMessageMime;
+use Pyle\Mailbox\Support\ReceivedHeaders;
+use Pyle\Mailbox\Support\ResponseBudget;
 
 class GmailClient
 {
-    use PerformsApiRequests;
+    use PerformsApiRequests {
+        resolveTarget as private resolveApiTarget;
+    }
 
     /** @param array<string, mixed> $config */
     public function __construct(
@@ -29,6 +47,7 @@ class GmailClient
         private readonly GmailTokenManager $tokenManager,
         private readonly RateLimiter $rateLimiter,
         ?Client $client = null,
+        private readonly ?GrantAuthorization $grantAuthorization = null,
     ) {
         $this->bootApiClient(
             $this->config,
@@ -42,9 +61,113 @@ class GmailClient
         return 'gmail';
     }
 
+    public function submitMessage(PreparedMessage $message, string $mailbox, int $maxRequestBytes = 1_048_576, ?SubmissionLimits $limits = null, ?GrantContext $context = null): SubmissionResult
+    {
+        if ($context !== null) {
+            ($this->grantAuthorization ?? throw new UnsupportedCapabilityException('Gmail receipt binding requires captured grant authorization.'))->assertActive($context);
+        }
+        $limits ??= new SubmissionLimits;
+        $budget = new ResponseBudget($maxRequestBytes, $limits->maxMemoryBytes);
+        try {
+            $message = (new GmailSubmissionContext($context, $budget))->apply($message);
+            $replyThread = $message->context?->operation === ReplyForwardOperation::Reply ? $message->context->conversation->conversationId : null;
+            $payload = PreparedMessageMime::gmailPayload($message, $maxRequestBytes, $limits, $replyThread, $budget);
+        } catch (ResponseLimitExceededException) {
+            throw new UnsupportedCapabilityException('Gmail context exceeds its memory allocation budget.');
+        }
+        try {
+            $response = $this->requestOnce('POST', 'users/'.rawurlencode($mailbox).'/messages/send', [
+                'body' => $payload, 'headers' => ['Content-Type' => 'application/json'],
+            ], $mailbox);
+        } finally {
+            $payload->close();
+        }
+        $data = json_decode($response->body() ?? '', true);
+        $messageId = is_array($data) && is_string($data['id'] ?? null) && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $data['id']) === 1 ? $data['id'] : null;
+        $threadId = is_array($data) && is_string($data['threadId'] ?? null) && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $data['threadId']) === 1 ? $data['threadId'] : null;
+        $outcome = $response->status === 200 && $messageId !== null && (! array_key_exists('threadId', $data) || $threadId !== null)
+            ? SubmissionOutcome::Accepted
+            : SubmissionOutcome::Uncertain;
+        if (in_array($response->status, [400, 401, 403, 404, 405, 409, 410, 411, 412, 413, 414, 415, 422, 429], true)) {
+            $outcome = SubmissionOutcome::Rejected;
+        }
+        if ($outcome === SubmissionOutcome::Accepted && $message->context !== null
+            && ($threadId === null || ($message->context->operation === ReplyForwardOperation::Reply
+                ? $threadId !== $replyThread
+                : $threadId === $message->context->conversation->conversationId))) {
+            $outcome = SubmissionOutcome::Uncertain;
+        }
+
+        return new SubmissionResult('gmail', $outcome, $message->correlationId, $response->status, $response->headers, $messageId, $threadId, $context);
+    }
+
+    public function inspectSubmission(SubmissionResult $submission, GrantContext $context): SubmissionEvidence
+    {
+        if ($submission->provider !== 'gmail' || $submission->context === null || ! $submission->context->matches($context)
+            || trim($submission->correlationId) === '' || strlen($submission->correlationId) > 512
+            || ! mb_check_encoding($submission->correlationId, 'UTF-8') || preg_match('/[\x00-\x1f\x7f]/', $submission->correlationId) === 1
+            || ($submission->messageId !== null && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $submission->messageId) !== 1)
+            || ($submission->threadId !== null && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $submission->threadId) !== 1)) {
+            throw new InvalidArgumentException('The Gmail receipt does not match the selected grant, generation, mailbox or original correlation.');
+        }
+        ($this->grantAuthorization ?? throw new UnsupportedCapabilityException('Gmail inspection requires captured grant authorization.'))->assertActive($context);
+        if ($submission->messageId === null) {
+            return new SubmissionEvidence('gmail', $submission->context, $submission->correlationId, null,
+                SubmissionEvidenceOutcome::Inconclusive, null, conversationId: $submission->threadId);
+        }
+        $response = $this->requestOnce('GET', 'users/'.rawurlencode($context->mailbox).'/messages/'.rawurlencode($submission->messageId), [
+            'query' => ['format' => 'metadata'],
+        ], $context->mailbox);
+        $copy = json_decode($response->body() ?? '');
+        $observed = $response->status === 200 && $copy instanceof \stdClass
+            && ($copy->id ?? null) === $submission->messageId
+            && is_string($copy->threadId ?? null) && preg_match('/\A[A-Za-z0-9_-]{1,512}\z/', $copy->threadId) === 1
+            && ($submission->threadId === null || $copy->threadId === $submission->threadId)
+            && is_array($copy->labelIds ?? null) && array_is_list($copy->labelIds) && array_filter($copy->labelIds, 'is_string') === $copy->labelIds
+            && in_array('SENT', $copy->labelIds, true) && ! in_array('DRAFT', $copy->labelIds, true)
+            && $this->hasCorrelation($copy, $submission->correlationId);
+
+        return new SubmissionEvidence('gmail', $submission->context, $submission->correlationId, $submission->messageId,
+            $observed ? SubmissionEvidenceOutcome::SentCopyObserved : SubmissionEvidenceOutcome::Inconclusive,
+            $response->status, $response->headers, $submission->threadId ?? ($observed ? $copy->threadId : null));
+    }
+
+    private function hasCorrelation(\stdClass $message, string $correlationId): bool
+    {
+        if (! ($message->payload ?? null) instanceof \stdClass || ! is_array($message->payload->headers ?? null) || ! array_is_list($message->payload->headers)) {
+            return false;
+        }
+        $found = [];
+        foreach ($message->payload->headers as $header) {
+            if (! $header instanceof \stdClass || ! is_string($header->name ?? null) || ! is_string($header->value ?? null)) {
+                return false;
+            }
+            if (strcasecmp($header->name, 'X-Mailbox-Correlation-Id') === 0) {
+                $found[] = $header->value;
+            }
+        }
+
+        if (count($found) !== 1) {
+            return false;
+        }
+        try {
+            return ReceivedHeaders::text($found[0]) === $correlationId;
+        } catch (MailboxException) {
+            return false;
+        }
+    }
+
     protected function providerLabel(): string
     {
         return 'Gmail';
+    }
+
+    private function resolveTarget(#[\SensitiveParameter] string $endpoint, ?string $mailbox = null): string
+    {
+        $target = $this->resolveApiTarget($endpoint, $mailbox);
+        $this->assertMailboxTarget($target, $mailbox, allowMe: true);
+
+        return $target;
     }
 
     /**
@@ -55,7 +178,7 @@ class GmailClient
     {
         return array_merge($options, [
             'headers' => array_merge($this->defaultHeaders($mailboxKey), (array) ($options['headers'] ?? [])),
-        ]);
+        ], $this->grantAuthorization !== null ? ['auth' => null] : []);
     }
 
     /**
@@ -64,7 +187,7 @@ class GmailClient
     private function defaultHeaders(string $mailboxKey): array
     {
         return [
-            'Authorization' => 'Bearer '.$this->tokenManager->getToken($mailboxKey),
+            'Authorization' => 'Bearer '.($this->grantAuthorization?->accessToken($mailboxKey) ?? $this->tokenManager->getToken($mailboxKey)),
             'Accept' => 'application/json',
         ];
     }
@@ -113,7 +236,7 @@ class GmailClient
         int $durationMs,
         bool &$reauthAttempted,
     ): bool {
-        if ($reauthAttempted) {
+        if ($reauthAttempted || $this->grantAuthorization !== null) {
             return false;
         }
 

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Storage;
 use Pyle\Mailbox\Drivers\Gmail\GmailAttachmentResource;
-use Pyle\Mailbox\Drivers\Gmail\GmailClient;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('downloads and dedups gmail attachments', function (): void {
     Storage::fake('local');
@@ -12,7 +12,7 @@ it('downloads and dedups gmail attachments', function (): void {
     config()->set('mailbox.attachment_disk', 'local');
     config()->set('mailbox.attachment_path', 'mailbox-attachments');
 
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -33,6 +33,7 @@ it('downloads and dedups gmail attachments', function (): void {
                             'filename' => 'invoice.pdf',
                             'mimeType' => 'application/pdf',
                             'body' => [
+                                'data' => '',
                                 'attachmentId' => 'att1',
                                 'size' => 4,
                             ],
@@ -51,4 +52,6 @@ it('downloads and dedups gmail attachments', function (): void {
     Storage::disk('local')->assertExists($first->path);
     expect($first->alreadyExisted)->toBeFalse();
     expect($second->alreadyExisted)->toBeTrue();
+    expect(Storage::disk('local')->get($first->path))->toBe('test');
+    expect($first->size)->toBe(4);
 });

@@ -57,7 +57,7 @@ it('retries gmail requests on 429 then succeeds', function (): void {
 
     $gmail = new GmailClient(['max_retries' => 2, 'queue_retry_strategy' => 'sleep'], $token, $rateLimiter, $client);
 
-    expect($gmail->get('users/test/messages', mailbox: 'test@example.com'))->toHaveKey('messages');
+    expect($gmail->get('users/test%40example.com/messages', mailbox: 'test@example.com'))->toHaveKey('messages');
     Event::assertDispatched(RateLimitHit::class);
 });
 
@@ -103,7 +103,7 @@ it('retries gmail transport failures then succeeds', function (): void {
         'retry_backoff_base' => 0,
     ], $token, $rateLimiter, $client);
 
-    expect($gmail->get('users/test/messages', mailbox: 'test@example.com'))->toHaveKey('messages');
+    expect($gmail->get('users/test%40example.com/messages', mailbox: 'test@example.com'))->toHaveKey('messages');
 });
 
 it('throws mailbox access denied for gmail 403', function (): void {
@@ -143,7 +143,7 @@ it('throws mailbox access denied for gmail 403', function (): void {
 
     $gmail = new GmailClient(['max_retries' => 1], $token, $rateLimiter, $client);
 
-    $gmail->get('users/test/messages', mailbox: 'test@example.com');
+    $gmail->get('users/test%40example.com/messages', mailbox: 'test@example.com');
 })->throws(MailboxAccessDeniedException::class);
 
 it('releases queue jobs for gmail when configured', function (): void {
@@ -294,7 +294,7 @@ it('releases queue jobs for gmail when configured', function (): void {
 
     $gmail = new GmailClient(['max_retries' => 2, 'queue_retry_strategy' => 'release'], $token, $rateLimiter, $client);
 
-    expect(fn () => $gmail->get('users/test/messages', mailbox: 'test@example.com'))
+    expect(fn () => $gmail->get('users/test%40example.com/messages', mailbox: 'test@example.com'))
         ->toThrow(RateLimitException::class);
 
     expect($state->releasedDelay)->toBe(3);

@@ -27,6 +27,8 @@ final readonly class FolderDto implements Arrayable, JsonSerializable
         public ?string $path,
         public ?WellKnownFolder $wellKnownName,
         public array $children = [],
+        public ?bool $isHidden = null,
+        public ?string $providerType = null,
     ) {}
 
     /** @param array<string, mixed> $data */
@@ -123,6 +125,8 @@ final readonly class FolderDto implements Arrayable, JsonSerializable
             path: $this->path,
             wellKnownName: $this->wellKnownName,
             children: $children,
+            isHidden: $this->isHidden,
+            providerType: $this->providerType,
         );
     }
 
@@ -138,6 +142,8 @@ final readonly class FolderDto implements Arrayable, JsonSerializable
             path: $path,
             wellKnownName: $this->wellKnownName,
             children: $this->children,
+            isHidden: $this->isHidden,
+            providerType: $this->providerType,
         );
     }
 }

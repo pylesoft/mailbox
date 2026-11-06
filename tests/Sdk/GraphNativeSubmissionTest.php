@@ -1,0 +1,758 @@
+<?php
+
+declare(strict_types=1);
+
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
+use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
+use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
+use Pyle\Mailbox\DTOs\ConversationRead;
+use Pyle\Mailbox\DTOs\EmailAddressDto;
+use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\DTOs\MessageDto;
+use Pyle\Mailbox\DTOs\PreparedFile;
+use Pyle\Mailbox\DTOs\PreparedMessage;
+use Pyle\Mailbox\DTOs\ReplyForwardContext;
+use Pyle\Mailbox\DTOs\SubmissionPreparation;
+use Pyle\Mailbox\DTOs\SyncBudget;
+use Pyle\Mailbox\DTOs\SyncContinuation;
+use Pyle\Mailbox\DTOs\SyncIdentity;
+use Pyle\Mailbox\DTOs\SyncScope;
+use Pyle\Mailbox\Enums\PreparationOutcome;
+use Pyle\Mailbox\Enums\ReplyForwardOperation;
+use Pyle\Mailbox\Enums\SubmissionEvidenceOutcome;
+use Pyle\Mailbox\Enums\SubmissionOutcome;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
+use Pyle\Mailbox\Facades\Mailbox;
+use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
+use ZBateson\MailMimeParser\MailMimeParser;
+
+it('prepares native forwards with exact MIME content instead of undeletable inherited files', function (?string $html): void {
+    $history = [];
+    $mimeCreated = false;
+    $draft = array_replace(nativeGraphDraft(), ['conversationId' => 'forward-conversation']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        static function (Request $request) use (&$mimeCreated, $draft): Response {
+            $mimeCreated = $request->getHeaderLine('Content-Type') === 'text/plain';
+
+            return new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR));
+        },
+        static function () use (&$mimeCreated): Response {
+            return new Response(200, [], $mimeCreated ? '{"value":[]}' : '{"value":[{"id":"undeletable-inherited="}]}');
+        },
+        static fn (Request $request): Response => $request->getMethod() === 'DELETE'
+            ? new Response(503, [], '{"error":{"code":"ErrorMailboxMoveInProgress"}}')
+            : new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+    ], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['sender' => new EmailAddressDto('Élodie', 'sender@example.com'),
+        'subject' => 'Transfert : Montréal', 'textBody' => $html === null ? 'Only the chosen résumé' : null, 'htmlBody' => $html,
+        'cc' => [new EmailAddressDto('', 'copy@example.com')], 'bcc' => [new EmailAddressDto('', 'private@example.com')],
+        'headers' => ['X-Choice' => 'Chosen'],
+        'files' => [new PreparedFile('chosen-file', 'later.txt', 'text/plain', 5,
+            static fn () => throw new LogicException('Selected files belong to later attachment preparation.'), hash('sha256', 'hello'))],
+        'context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $base->context->conversation, 'source=')]);
+
+    $prepared = $mailbox->prepareSubmission($message);
+
+    expect($prepared->outcome)->toBe(PreparationOutcome::Preparing)
+        ->and($prepared->conversationId)->toBe('forward-conversation')
+        ->and($prepared->attachments)->toBe([]);
+    expect(array_map(fn (array $entry): string => $entry['request']->getMethod(), $history))->toBe(['GET', 'POST', 'GET', 'PATCH']);
+    $request = $history[1]['request'];
+    expect($request->getUri()->getPath())->toEndWith('/mailFolders/Inbox/messages/source%3D/createForward');
+    $raw = base64_decode((string) $request->getBody(), true);
+    $mime = (new MailMimeParser)->parse($raw, false);
+    expect($mime->getHeaderValue('Subject'))->toBe('Transfert : Montréal')
+        ->and($mime->getHeader('From')->getAddresses()[0]->getName())->toBe('Élodie')
+        ->and($mime->getHeader('To')->getAddresses()[0]->getEmail())->toBe('chosen@example.com')
+        ->and($mime->getHeader('Cc')->getAddresses()[0]->getEmail())->toBe('copy@example.com')
+        ->and($mime->getHeader('Bcc')->getAddresses()[0]->getEmail())->toBe('private@example.com')
+        ->and($mime->getHeaderValue('X-Choice'))->toBe('Chosen')
+        ->and($mime->getHeaderValue('X-Mailbox-Correlation-Id'))->toBe('native-operation')
+        ->and($mime->getTextContent())->toBe($html === null ? 'Only the chosen résumé' : null)
+        ->and($mime->getHtmlContent())->toBe($html)
+        ->and($mime->getAttachmentCount())->toBe(0);
+    expect($raw)->not->toContain('Original content', 'later.txt');
+})->with(['plain text' => [null], 'HTML' => ['<p>Only the chosen résumé</p>']]);
+
+it('verifies native sends and sent copies after provider display name resolution', function (ReplyForwardOperation $operation): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $draft['from']['emailAddress']['name'] = 'Provider sender label';
+    $draft['toRecipients'][0]['emailAddress']['name'] = 'chosen@example.com';
+    $draft['conversationId'] = $operation === ReplyForwardOperation::Forward ? 'forward-conversation' : 'source-conversation';
+    $sent = array_replace($draft, ['isDraft' => false, 'sentDateTime' => '2026-11-02T19:00:00Z']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(202),
+        new Response(200, [], json_encode($sent, JSON_THROW_ON_ERROR)),
+    ], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext($operation, $base->context->conversation, 'source=')]);
+
+    $preparation = $mailbox->prepareSubmission($message);
+    $result = $mailbox->submitPrepared($preparation, $message);
+    $evidence = $mailbox->inspectSubmission($preparation, $message);
+
+    expect($result->outcome)->toBe(SubmissionOutcome::Accepted);
+    expect($evidence->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved);
+    expect(array_map(fn (array $entry): string => $entry['request']->getMethod(), $history))
+        ->toBe(['GET', 'POST', 'GET', 'PATCH', 'GET', 'POST', 'GET']);
+})->with([ReplyForwardOperation::Reply, ReplyForwardOperation::Forward]);
+
+it('prepares an explicit native Graph reply without inheriting recipients or changing the source', function (): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $inherited = array_replace($draft, [
+        'toRecipients' => [['emailAddress' => ['name' => 'Inherited', 'address' => 'inherited@example.com']]],
+        'bccRecipients' => [['emailAddress' => ['name' => 'Historical', 'address' => 'historical@example.com']]],
+        'body' => ['contentType' => 'text', 'content' => 'Inherited quoted history'],
+    ]);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($inherited, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(202),
+    ], $history);
+    $message = nativeGraphMessage();
+
+    $preparation = $mailbox->prepareSubmission($message);
+
+    expect($preparation->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($preparation->draftId)->toBe('new-draft=')
+        ->and($preparation->correlationId)->toBe('native-operation');
+    $result = $mailbox->submitPrepared($preparation, $message);
+    expect($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($result->context)->toBe($preparation->context);
+    $requests = array_column($history, 'request');
+    expect(array_map(static fn ($request): string => $request->getMethod(), $requests))->toBe(['GET', 'POST', 'GET', 'PATCH', 'GET', 'POST'])
+        ->and($requests[0]->getUri()->getPath())->toEndWith('/mailFolders/Inbox/messages/source%3D')
+        ->and($requests[1]->getUri()->getPath())->toEndWith('/mailFolders/Inbox/messages/source%3D/createReply')
+        ->and($requests[2]->getUri()->getPath())->toEndWith('/messages/new-draft%3D/attachments')
+        ->and($requests[3]->getUri()->getPath())->toEndWith('/messages/new-draft%3D')
+        ->and($requests[5]->getUri()->getPath())->toEndWith('/messages/new-draft%3D/send');
+    $normalized = json_decode((string) $requests[3]->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    expect($normalized['toRecipients'])->toBe([['emailAddress' => ['name' => 'Chosen', 'address' => 'chosen@example.com']]])
+        ->and($normalized['ccRecipients'])->toBe([])
+        ->and($normalized['bccRecipients'])->toBe([])
+        ->and($normalized['body'])->toBe(['contentType' => 'Text', 'content' => 'Chosen content']);
+    foreach ($requests as $request) {
+        expect($request->getHeaderLine('Prefer'))->toContain('IdType="ImmutableId"');
+    }
+});
+
+it('removes only copied native forward attachments before sending caller chosen content', function (): void {
+    $history = [];
+    $draft = array_replace(nativeGraphDraft(), ['conversationId' => 'forward-conversation']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[{"id":"copied-inline="},{"id":"copied-document="}]}'),
+        new Response(204), new Response(204),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(202),
+    ], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $base->context->conversation, 'source=')]);
+
+    $preparation = $mailbox->prepareSubmission($message);
+    $result = $mailbox->submitPrepared(unserialize(serialize($preparation)), $message);
+
+    expect($preparation->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($preparation->conversationId)->toBe('forward-conversation')
+        ->and($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($history)->toHaveCount(8)
+        ->and($history[1]['request']->getUri()->getPath())->toEndWith('/source%3D/createForward');
+    foreach ([3 => 'copied-inline%3D', 4 => 'copied-document%3D'] as $index => $id) {
+        expect($history[$index]['request']->getMethod())->toBe('DELETE')
+            ->and($history[$index]['request']->getUri()->getPath())->toEndWith('/messages/new-draft%3D/attachments/'.$id);
+    }
+    $created = (new MailMimeParser)->parse(base64_decode((string) $history[1]['request']->getBody(), true), false);
+    $normalized = json_decode((string) $history[5]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    expect($created->getHeaderValue('X-Mailbox-Correlation-Id'))->toBe('native-operation')
+        ->and($normalized)->not->toHaveKey('internetMessageHeaders')
+        ->and($normalized['body']['content'])->toBe('Chosen content')
+        ->and($normalized['bccRecipients'])->toBe([]);
+});
+
+it('enforces the native forward MIME wire budget before reading or creating provider resources', function (): void {
+    $history = [];
+    $responses = static fn (): array => [new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'), new Response(200, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR))];
+    $mailbox = nativeGraphMailbox([...$responses(), ...$responses()], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['textBody' => str_repeat('Montréal ', 1000),
+        'context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $base->context->conversation, 'source=')]);
+    $mailbox->prepareSubmission($message);
+    $wireBytes = strlen((string) $history[1]['request']->getBody());
+
+    expect($mailbox->prepareSubmission($message, $wireBytes)->outcome)->toBe(PreparationOutcome::Prepared);
+    expect(fn () => $mailbox->prepareSubmission($message, $wireBytes - 1))->toThrow(UnsupportedCapabilityException::class);
+    expect($history)->toHaveCount(8);
+});
+
+it('retains native MIME forward creation uncertainty without retrying or sending', function (): void {
+    $history = [];
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new ConnectException('private-forward timeout', new Request('POST', 'https://private-forward')),
+        new Response(201, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR)),
+    ], $history);
+    $base = nativeGraphMessage();
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $base->context->conversation, 'source=')]);
+
+    $prepared = $mailbox->prepareSubmission($message);
+
+    expect($prepared->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($prepared->draftId)->toBeNull();
+    expect(fn () => $mailbox->submitPrepared($prepared, $message))->toThrow(InvalidArgumentException::class);
+    expect($history)->toHaveCount(2)
+        ->and($history[1]['request']->getHeaderLine('Content-Type'))->toBe('text/plain');
+    expect(json_encode($prepared, JSON_THROW_ON_ERROR))->not->toContain('private-forward');
+});
+
+it('retains native preparation uncertainty and its draft identity after interrupted copied file cleanup', function (): void {
+    $history = [];
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[{"id":"copied-inline="},{"id":"copied-document="}]}'),
+        new ConnectException('private-token timeout', new Request('DELETE', 'https://private-upload')),
+        new Response(204), new Response(202),
+    ], $history);
+    $message = nativeGraphMessage();
+
+    $preparation = $mailbox->prepareSubmission($message);
+
+    expect($preparation->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($preparation->draftId)->toBe('new-draft=')
+        ->and($preparation->status)->toBeNull()
+        ->and(fn () => $mailbox->submitPrepared($preparation, $message))->toThrow(InvalidArgumentException::class)
+        ->and($history)->toHaveCount(4);
+    expect(json_encode($preparation, JSON_THROW_ON_ERROR))->not->toContain('private-token')->not->toContain('private-upload');
+});
+
+it('inspects the same immutable sent artifact without changing prior acceptance or resending after a later missing copy', function (): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $sent = array_replace($draft, ['isDraft' => false, 'sentDateTime' => '2026-10-29T12:30:00Z']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(202, ['request-id' => 'accepted-send']),
+        new Response(200, ['request-id' => 'observed-copy'], json_encode($sent, JSON_THROW_ON_ERROR)),
+        new Response(404, ['request-id' => 'missing-copy']),
+    ], $history);
+    $message = nativeGraphMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+    $accepted = $mailbox->submitPrepared($preparation, $message);
+
+    expect($mailbox)->toBeInstanceOf(SupportsDraftSubmissionInspection::class);
+    $observed = $mailbox->inspectSubmission($preparation, $message);
+    $missing = $mailbox->inspectSubmission($preparation, $message);
+
+    expect($observed->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved)
+        ->and($observed->artifactId)->toBe('new-draft=')
+        ->and($observed->correlationId)->toBe('native-operation')
+        ->and($observed->context)->toBe($preparation->context)
+        ->and($observed->conversationId)->toBe('source-conversation')
+        ->and($observed->status)->toBe(200)
+        ->and($observed->headers)->toBe(['request-id' => ['observed-copy']])
+        ->and($missing->outcome)->toBe(SubmissionEvidenceOutcome::Inconclusive)
+        ->and($missing->artifactId)->toBe('new-draft=')
+        ->and($missing->status)->toBe(404)
+        ->and($accepted->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($accepted->headers)->toBe(['request-id' => ['accepted-send']])
+        ->and($preparation->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($history)->toHaveCount(8);
+    foreach (array_slice($history, 6) as $entry) {
+        expect($entry['request']->getMethod())->toBe('GET')
+            ->and($entry['request']->getUri()->getPath())->toEndWith('/messages/new-draft%3D')
+            ->and($entry['request']->getHeaderLine('Prefer'))->toContain('IdType="ImmutableId"');
+    }
+});
+
+it('recovers a lost Graph send acknowledgement from the same immutable artifact in its final conversation', function (): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $copy = array_replace($draft, ['isDraft' => false, 'conversationId' => 'final-conversation', 'sentDateTime' => '2026-10-29T12:30:00Z']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new ConnectException('Acknowledgement lost', new Request('POST', 'https://graph.microsoft.com')),
+        new Response(200, [], json_encode($copy, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($copy, JSON_THROW_ON_ERROR)),
+    ], $history);
+    $message = nativeGraphMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+    $retained = serialize($preparation);
+    $uncertain = $mailbox->submitPrepared($preparation, $message);
+
+    $observed = $mailbox->inspectSubmission(unserialize($retained), $message);
+    $repeated = $mailbox->inspectSubmission(unserialize($retained), $message);
+
+    expect($observed->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved)
+        ->and($observed->artifactId)->toBe('new-draft=')
+        ->and($observed->conversationId)->toBe('final-conversation')
+        ->and($observed->correlationId)->toBe($preparation->correlationId)
+        ->and($observed->context)->toEqual($preparation->context)
+        ->and($repeated->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved)
+        ->and($repeated->conversationId)->toBe('final-conversation')
+        ->and($uncertain->outcome)->toBe(SubmissionOutcome::Uncertain)
+        ->and(serialize($preparation))->toBe($retained)
+        ->and($preparation->conversationId)->toBe('source-conversation')
+        ->and($message->context->conversation->conversationId)->toBe('source-conversation')
+        ->and($history)->toHaveCount(8);
+    foreach (array_slice($history, 6) as $entry) {
+        expect($entry['request']->getMethod())->toBe('GET')
+            ->and($entry['request']->getUri()->getPath())->toEndWith('/messages/new-draft%3D');
+    }
+});
+
+it('leaves uncertain Graph sends unresolved for delayed malformed or mismatched sent copies without replay', function (mixed $lookup): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $copy = array_replace($draft, ['isDraft' => false, 'conversationId' => 'final-conversation', 'sentDateTime' => '2026-10-29T12:30:00Z']);
+    if (is_array($lookup)) {
+        $lookup = new Response(200, ['request-id' => 'lookup-1'], json_encode(array_replace($copy, $lookup), JSON_THROW_ON_ERROR));
+    }
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new ConnectException('private-token timeout', new Request('POST', 'https://private-upload')),
+        $lookup, new Response(202),
+    ], $history);
+    $message = nativeGraphMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+    $uncertain = $mailbox->submitPrepared($preparation, $message);
+
+    $evidence = $mailbox->inspectSubmission(unserialize(serialize($preparation)), $message);
+
+    expect($evidence->outcome)->toBe(SubmissionEvidenceOutcome::Inconclusive)
+        ->and($evidence->artifactId)->toBe('new-draft=')
+        ->and($evidence->correlationId)->toBe('native-operation')
+        ->and($evidence->conversationId)->toBe('source-conversation')
+        ->and($uncertain->outcome)->toBe(SubmissionOutcome::Uncertain)
+        ->and($preparation->outcome)->toBe(PreparationOutcome::Prepared)
+        ->and($history)->toHaveCount(7)
+        ->and($history[6]['request']->getMethod())->toBe('GET');
+    $public = json_encode($evidence, JSON_THROW_ON_ERROR).print_r($evidence, true);
+    expect($public)->not->toContain('private-token')->not->toContain('private-upload')->not->toContain('private-response');
+})->with([
+    'delayed draft' => [['isDraft' => true]],
+    'wrong artifact' => [['id' => 'another-draft=']],
+    'foreign artifact and conversation' => [['id' => 'another-draft=', 'conversationId' => 'other-conversation']],
+    'missing conversation' => [['conversationId' => null]],
+    'empty conversation' => [['conversationId' => '']],
+    'whitespace conversation' => [['conversationId' => ' ']],
+    'malformed conversation' => [['conversationId' => ['id' => 'other-conversation']]],
+    'wrong correlation' => [['internetMessageHeaders' => [['name' => 'x-mailbox-correlation-id', 'value' => 'other-operation']]]],
+    'duplicate correlation' => [['internetMessageHeaders' => [['name' => 'x-mailbox-correlation-id', 'value' => 'native-operation'], ['name' => 'X-Mailbox-Correlation-Id', 'value' => 'native-operation']]]],
+    'wrong recipients' => [['toRecipients' => []]],
+    'inherited Bcc' => [['bccRecipients' => [['emailAddress' => ['address' => 'historical@example.com']]]]],
+    'changed content' => [['body' => ['contentType' => 'text', 'content' => 'Changed after submission']]],
+    'copied inline file' => [['attachments' => [['id' => 'unselected-inline']]]],
+    'missing file list' => [['attachments' => null]],
+    'malformed file list' => [['attachments' => (object) []]],
+    'unfinished file list' => [['attachments@odata.nextLink' => 'https://private-upload']],
+    'missing sent date' => [['sentDateTime' => null]],
+    'malformed sent date' => [['sentDateTime' => '2026-02-31T12:00:00Z']],
+    'missing copy' => [new Response(404, ['request-id' => 'missing-1'], 'private-response')],
+    'server interrupted' => [new Response(503, ['Location' => 'https://private-upload'], 'private-response')],
+    'lost lookup acknowledgement' => [new ConnectException('private-token timeout', new Request('GET', 'https://private-upload'))],
+    'malformed JSON' => [new Response(200, [], '{')],
+    'oversized copy' => [new Response(200, [], str_repeat('a', 4_194_305))],
+    'encoded copy' => [new Response(200, ['Content-Encoding' => 'gzip'], gzencode('private-response'))],
+]);
+
+it('rejects incomplete or mismatched native context before provider work', function (string $change): void {
+    $history = [];
+    $base = nativeGraphMessage()->context->conversation;
+    $grant = get_object_vars($base->identity->context);
+    if (array_key_exists($change, $grant)) {
+        $grant[$change] = 'another-context';
+    }
+    $identity = new SyncIdentity($change === 'provider' ? 'gmail' : 'ms-graph', new GrantContext(...$grant), $base->identity->scope, $change === 'version' ? 2 : 1);
+    $source = nativeGraphSource();
+    if ($change === 'body') {
+        unset($source['body']);
+    }
+    if ($change === 'source conversation') {
+        $source['conversationId'] = 'another-conversation';
+    }
+    $read = new ConversationRead($identity, 'source-conversation',
+        $change === 'missing source' ? [] : [MessageDto::fromMsGraph($source)],
+        complete: $change !== 'incomplete', continuation: $change === 'incomplete' ? new SyncContinuation($identity, 'ms-graph.conversation', []) : null);
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Reply, $read, $change === 'unsafe ID' ? '../source' : 'source=')]);
+    $mailbox = nativeGraphMailbox([], $history);
+
+    expect(fn () => $mailbox->prepareSubmission($message))->toThrow(UnsupportedCapabilityException::class)
+        ->and($history)->toBe([]);
+})->with(['connectionId', 'grantId', 'lifecycleGeneration', 'driver', 'mailbox', 'provider', 'version', 'body', 'source conversation', 'missing source', 'incomplete', 'unsafe ID']);
+
+it('stops stale or unavailable source context before creating a native draft', function (mixed $source): void {
+    $history = [];
+    if (is_array($source)) {
+        $source = new Response(200, ['request-id' => 'source-1'], json_encode(array_replace(nativeGraphSource(), $source), JSON_THROW_ON_ERROR));
+    }
+    $mailbox = nativeGraphMailbox([$source, new Response(201, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR))], $history);
+
+    try {
+        $mailbox->prepareSubmission(nativeGraphMessage());
+        test()->fail('Unavailable source context must stop before draft creation.');
+    } catch (ApiRequestException $exception) {
+        $public = $exception->getMessage().json_encode($exception->headers, JSON_THROW_ON_ERROR);
+        expect($public)->not->toContain('private-token')->not->toContain('private-response')->not->toContain('private-upload');
+    }
+    expect($history)->toHaveCount(1)
+        ->and($history[0]['request']->getMethod())->toBe('GET');
+})->with([
+    'moved source' => [new Response(404, ['request-id' => 'missing-source'], 'private-response')],
+    'forbidden scope' => [new Response(403, [], 'private-response')],
+    'wrong source' => [['id' => 'other-source=']],
+    'wrong conversation' => [['conversationId' => 'other-conversation']],
+    'source is draft' => [['isDraft' => true]],
+    'malformed source' => [new Response(200, [], '{}')],
+]);
+
+it('keeps missing native creation acknowledgements distinct from send uncertainty without touching a possible original', function (mixed $created): void {
+    $history = [];
+    if (is_array($created)) {
+        $created = new Response(201, ['request-id' => 'native-create'], json_encode(array_replace(nativeGraphDraft(), $created), JSON_THROW_ON_ERROR));
+    }
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)), $created,
+        new Response(202),
+    ], $history);
+    $message = nativeGraphMessage();
+
+    $preparation = $mailbox->prepareSubmission($message);
+
+    expect($preparation->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($preparation->draftId)->toBeNull()
+        ->and(fn () => $mailbox->submitPrepared($preparation, $message))->toThrow(InvalidArgumentException::class)
+        ->and($history)->toHaveCount(2);
+})->with([
+    'lost create' => [new ConnectException('private-token timeout', new Request('POST', 'https://private-upload'))],
+    'interrupted create' => [new Response(503, [], 'private-response')],
+    'missing identity' => [['id' => null]],
+    'original identity' => [['id' => 'source=']],
+    'wrong reply conversation' => [['conversationId' => 'different-conversation']],
+    'unacknowledged draft' => [['isDraft' => null]],
+]);
+
+it('retains a known native draft without mutations when inherited file metadata is unfinished malformed or over budget', function (mixed $files): void {
+    $history = [];
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode(nativeGraphDraft(), JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($files, JSON_THROW_ON_ERROR)), new Response(202),
+    ], $history);
+    $message = nativeGraphMessage();
+
+    $preparation = $mailbox->prepareSubmission($message);
+
+    expect($preparation->outcome)->toBe(PreparationOutcome::Uncertain)
+        ->and($preparation->draftId)->toBe('new-draft=')
+        ->and(fn () => $mailbox->submitPrepared($preparation, $message))->toThrow(InvalidArgumentException::class)
+        ->and($history)->toHaveCount(3);
+})->with([
+    'unfinished page' => [['value' => [['id' => 'copied=']], '@odata.nextLink' => 'https://private-upload']],
+    'missing list' => [(object) []],
+    'object list' => [['value' => (object) []]],
+    'malformed ID' => [['value' => [['id' => '../source']]]],
+    'duplicate ID' => [['value' => [['id' => 'copied='], ['id' => 'copied=']]]],
+    'too many files' => [['value' => array_map(static fn (int $id): array => ['id' => 'file-'.$id], range(1, 1001))]],
+]);
+
+it('uses complete public scoped conversation content while leaving original file selection untouched', function (): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(['value' => [nativeGraphSource()]], JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[{"id":"original-file=","name":"original.txt","contentType":"text/plain","size":8,"isInline":false}]}'),
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[{"id":"copied-file="}]}'), new Response(204),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(202),
+    ], $history);
+    $read = $mailbox->conversation('source-conversation', new SyncScope('Inbox'), new SyncBudget(maxPages: 2, maxRequests: 2));
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Forward, $read, 'source=')]);
+
+    $preparation = $mailbox->prepareSubmission($message);
+    $result = $mailbox->submitPrepared($preparation, $message);
+
+    expect($read->complete)->toBeTrue()
+        ->and($read->messages[0]->body->content)->toBe('Original content')
+        ->and($read->files[0]['attachment']->id)->toBe('original-file=')
+        ->and($message->files)->toBe([])
+        ->and($result->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($history)->toHaveCount(9);
+    foreach ($history as $entry) {
+        $request = $entry['request'];
+        if ($request->getMethod() !== 'GET' && ! str_ends_with($request->getUri()->getPath(), '/createForward')) {
+            expect($request->getUri()->getPath())->toContain('/messages/new-draft%3D');
+        }
+    }
+});
+
+it('binds the operation source and trusted scope in retained native intent without hashing unrelated history', function (string $change): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], '{"value":[]}'), new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(202),
+    ], $history);
+    $message = nativeGraphMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+    $read = $message->context->conversation;
+    $source = MessageDto::fromMsGraph(array_replace(nativeGraphSource(), ['id' => 'other-source=']));
+    $scope = new SyncScope($change === 'folder' ? 'Archive' : 'Inbox', $change === 'cutoff' ? new DateTimeImmutable('2026-10-01T00:00:00Z') : null);
+    $changed = new ConversationRead(new SyncIdentity('ms-graph', $read->identity->context, $scope), 'source-conversation', [...$read->messages, $source], complete: true);
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext($change === 'operation' ? ReplyForwardOperation::Forward : ReplyForwardOperation::Reply, $changed, $change === 'source' ? 'other-source=' : 'source=')]);
+
+    if ($change === 'unrelated history') {
+        expect($mailbox->submitPrepared($preparation, $message)->outcome)->toBe(SubmissionOutcome::Accepted)
+            ->and($history)->toHaveCount(6);
+
+        return;
+    }
+    expect(fn () => $mailbox->submitPrepared($preparation, $message))->toThrow(InvalidArgumentException::class)
+        ->and(fn () => $mailbox->inspectSubmission($preparation, $message))->toThrow(InvalidArgumentException::class)
+        ->and($history)->toHaveCount(4);
+})->with(['operation', 'source', 'folder', 'cutoff', 'unrelated history']);
+
+it('checks the selected grant again before each native preparation send and inspection phase', function (string $phase, int $expectedRequests): void {
+    $history = [];
+    $tokens = new TestGrantTokenProvider(['grant' => [
+        'connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'private-token',
+    ]]);
+    $response = static function (int $status, mixed $payload, string $nextPhase) use ($tokens, $phase): Closure {
+        return static function () use ($status, $payload, $nextPhase, $tokens, $phase): Response {
+            if ($phase === $nextPhase) {
+                $tokens->grants['grant']['generation'] = '2';
+            }
+
+            return new Response($status, [], $payload === null ? '' : json_encode($payload, JSON_THROW_ON_ERROR));
+        };
+    };
+    $mailbox = nativeGraphMailbox([
+        $response(200, nativeGraphSource(), 'creation'),
+        $response(201, nativeGraphDraft(), 'file inspection'),
+        $response(200, ['value' => $phase === 'deletion' ? [['id' => 'copied=']] : []], $phase === 'deletion' ? 'deletion' : 'normalization'),
+        $response(200, nativeGraphDraft(), 'verification'),
+        $response(200, nativeGraphDraft(), 'send'),
+        $response(202, null, 'inspection'),
+    ], $history, $tokens);
+    $message = nativeGraphMessage();
+    if ($phase === 'preparation') {
+        $tokens->grants['grant']['generation'] = '2';
+    }
+
+    expect(function () use ($mailbox, $message, $phase): void {
+        $preparation = $mailbox->prepareSubmission($message);
+        if (in_array($phase, ['verification', 'send', 'inspection'], true)) {
+            $mailbox->submitPrepared($preparation, $message);
+        }
+        if ($phase === 'inspection') {
+            $mailbox->inspectSubmission($preparation, $message);
+        }
+    })->toThrow(GrantAccessDeniedException::class)
+        ->and($history)->toHaveCount($expectedRequests);
+})->with([
+    'preparation' => ['preparation', 0], 'creation' => ['creation', 1], 'file inspection' => ['file inspection', 2],
+    'deletion' => ['deletion', 3], 'normalization' => ['normalization', 3], 'verification' => ['verification', 4],
+    'send' => ['send', 5], 'inspection' => ['inspection', 6],
+]);
+
+it('preserves explicit native HTML recipients and supported harmless normalization through sent copy inspection', function (): void {
+    $history = [];
+    $message = nativeGraphMessage(['textBody' => null, 'htmlBody' => "<p>Résumé</p>\n<p>Chosen</p>",
+        'cc' => [new EmailAddressDto('Copy', 'copy@example.com')],
+        'bcc' => [new EmailAddressDto('Private', 'private@example.com')], 'headers' => ['X-Project' => 'Support']]);
+    $draft = array_replace(nativeGraphDraft(), [
+        'ccRecipients' => [['emailAddress' => ['name' => 'Copy', 'address' => 'copy@EXAMPLE.COM']]],
+        'bccRecipients' => [['emailAddress' => ['name' => 'Private', 'address' => 'private@example.com']]],
+        'body' => ['contentType' => 'HTML', 'content' => "<p>Résumé</p>\r\n<p>Chosen</p>"],
+        'internetMessageHeaders' => [['name' => 'X-MAILBOX-CORRELATION-ID', 'value' => 'native-operation'], ['name' => 'x-project', 'value' => 'Support']],
+    ]);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(202),
+        new Response(200, [], json_encode(array_replace($draft, ['isDraft' => false, 'sentDateTime' => '2026-10-29T12:30:00.1234567Z']), JSON_THROW_ON_ERROR)),
+    ], $history);
+
+    $preparation = $mailbox->prepareSubmission($message);
+    $sent = $mailbox->submitPrepared($preparation, $message);
+    $observed = $mailbox->inspectSubmission($preparation, $message);
+
+    expect($sent->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($observed->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved)
+        ->and($history[5]['request']->getMethod())->toBe('POST')
+        ->and($history[6]['request']->getHeaderLine('Prefer'))->toContain('outlook.body-content-type="html"');
+    $normalized = json_decode((string) $history[3]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+    expect($normalized['ccRecipients'])->toBe([['emailAddress' => ['name' => 'Copy', 'address' => 'copy@example.com']]])
+        ->and($normalized['bccRecipients'])->toBe([['emailAddress' => ['name' => 'Private', 'address' => 'private@example.com']]])
+        ->and($normalized['body'])->toBe(['contentType' => 'HTML', 'content' => "<p>Résumé</p>\n<p>Chosen</p>"]);
+});
+
+it('requires the retained native provider conversation when reconstructing a preparation for send or inspection', function (string $operation): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $changed = array_replace($draft, ['conversationId' => 'different-conversation', 'isDraft' => $operation === 'submitPrepared', 'sentDateTime' => '2026-10-29T12:30:00Z']);
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($changed, JSON_THROW_ON_ERROR)), new Response(202),
+    ], $history);
+    $message = nativeGraphMessage();
+    $preparation = $mailbox->prepareSubmission($message);
+    $incomplete = new SubmissionPreparation($preparation->context, $preparation->outcome, $preparation->correlationId,
+        $preparation->draftId, $preparation->status, $preparation->headers, $preparation->intentFingerprint());
+
+    expect(fn () => $mailbox->{$operation}($incomplete, $message))->toThrow(InvalidArgumentException::class)
+        ->and($history)->toHaveCount(4);
+})->with(['submitPrepared', 'inspectSubmission']);
+
+it('verifies the observed Graph HTML wrapper without accepting changed message content', function (string $change): void {
+    $history = [];
+    $html = '<p>Résumé é à ç</p><table><tr><td>Chosen</td></tr></table><p><a href="https://example.com/chosen">Details</a><img src="cid:chosen@example.com" alt="Chosen"></p>';
+    $observed = '<html><head>'."\r\n".'<meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body><p>Résumé é à ç</p><table><tbody><tr><td>Chosen</td></tr></tbody></table><p><a href="https://example.com/chosen">Details</a><img alt="Chosen" data-outlook-trace="F:0|T:1" src="cid:chosen@example.com"></p></body></html>';
+    $observed = match ($change) {
+        'text' => str_replace('<td>Chosen</td>', '<td>Changed</td>', $observed),
+        'link' => str_replace('https://example.com/chosen', 'https://example.com/changed', $observed),
+        'inline identity' => str_replace('cid:chosen@example.com', 'cid:changed@example.com', $observed),
+        'image label' => str_replace('alt="Chosen"', 'alt="Changed"', $observed),
+        'style' => str_replace('<td>', '<td style="display:none">', $observed),
+        'extra markup' => str_replace('</body>', '<p>Extra</p></body>', $observed),
+        'unexpected attribute' => str_replace('F:0|T:1', 'F:9|T:9', $observed),
+        'table grouping' => str_replace('</tbody>', '</tbody><tbody><tr><td></td></tr></tbody>', $observed),
+        'table attributes' => str_replace('<tbody>', '<tbody style="display:none">', $observed),
+        'malformed HTML' => str_replace('<img alt="Chosen"', '<img alt="Chosen" alt="Changed"', $observed),
+        'external declaration' => '<!DOCTYPE html SYSTEM "https://example.com/unapproved.dtd">'.$observed,
+        'excessive normalization' => str_replace('</body>', str_repeat(' ', 262144).'</body>', $observed),
+        default => $observed,
+    };
+    $message = nativeGraphMessage(['textBody' => null, 'htmlBody' => $html]);
+    $draft = array_replace(nativeGraphDraft(), ['body' => ['contentType' => 'html', 'content' => $observed]]);
+    $sent = array_replace($draft, ['isDraft' => false, 'sentDateTime' => '2026-11-02T23:57:00Z']);
+    $responses = [new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR))];
+    if ($change === 'wrapper') {
+        $responses[] = new Response(202);
+    }
+    $responses[] = new Response(200, [], json_encode($sent, JSON_THROW_ON_ERROR));
+    $mailbox = nativeGraphMailbox($responses, $history);
+    $preparation = $mailbox->prepareSubmission($message);
+
+    if ($change === 'wrapper') {
+        expect($mailbox->submitPrepared($preparation, $message)->outcome)->toBe(SubmissionOutcome::Accepted);
+        expect($mailbox->inspectSubmission($preparation, $message)->outcome)->toBe(SubmissionEvidenceOutcome::SentCopyObserved);
+    } else {
+        expect(fn () => $mailbox->submitPrepared($preparation, $message))->toThrow(ApiRequestException::class);
+        expect($mailbox->inspectSubmission($preparation, $message)->outcome)->toBe(SubmissionEvidenceOutcome::Inconclusive);
+    }
+    expect(collect($history)->filter(fn ($entry) => str_ends_with($entry['request']->getUri()->getPath(), '/send')))->toHaveCount($change === 'wrapper' ? 1 : 0);
+})->with(['wrapper', 'text', 'link', 'inline identity', 'image label', 'style', 'extra markup', 'unexpected attribute',
+    'table grouping', 'table attributes', 'malformed HTML', 'external declaration', 'excessive normalization']);
+
+it('retains the same native intent when a reconstructed scope uses an equivalent cutoff timezone', function (): void {
+    $history = [];
+    $draft = nativeGraphDraft();
+    $mailbox = nativeGraphMailbox([
+        new Response(200, [], json_encode(nativeGraphSource(), JSON_THROW_ON_ERROR)),
+        new Response(201, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(200, [], '{"value":[]}'),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)),
+        new Response(200, [], json_encode($draft, JSON_THROW_ON_ERROR)), new Response(202),
+    ], $history);
+    $read = nativeGraphMessage()->context->conversation;
+    $original = new ConversationRead(new SyncIdentity('ms-graph', $read->identity->context, new SyncScope('Inbox', new DateTimeImmutable('2026-10-01T00:00:00+00:00'))), $read->conversationId, $read->messages, complete: true);
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Reply, $original, 'source=')]);
+    $preparation = $mailbox->prepareSubmission($message);
+    $restored = new ConversationRead(new SyncIdentity('ms-graph', $read->identity->context, new SyncScope('Inbox', new DateTimeImmutable('2026-09-30T20:00:00-04:00'))), $read->conversationId, $read->messages, complete: true);
+    $message = nativeGraphMessage(['context' => new ReplyForwardContext(ReplyForwardOperation::Reply, $restored, 'source=')]);
+
+    expect($mailbox->submitPrepared($preparation, $message)->outcome)->toBe(SubmissionOutcome::Accepted)
+        ->and($history)->toHaveCount(6);
+});
+
+/** @param array<string, mixed> $changes */
+function nativeGraphMessage(array $changes = []): PreparedMessage
+{
+    $context = new GrantContext('connection', 'grant', '1', 'ms-graph', 'sender@example.com');
+    $conversation = new ConversationRead(new SyncIdentity('ms-graph', $context, new SyncScope('Inbox')), 'source-conversation', [MessageDto::fromMsGraph(nativeGraphSource())], complete: true);
+
+    return new PreparedMessage(...array_replace([
+        'sender' => new EmailAddressDto('Sender', 'sender@example.com'),
+        'to' => [new EmailAddressDto('Chosen', 'chosen@example.com')],
+        'subject' => 'Chosen subject', 'correlationId' => 'native-operation', 'textBody' => 'Chosen content',
+        'context' => new ReplyForwardContext(ReplyForwardOperation::Reply, $conversation, 'source='),
+    ], $changes));
+}
+
+/** @return array<string, mixed> */
+function nativeGraphSource(): array
+{
+    return ['id' => 'source=', 'conversationId' => 'source-conversation', 'parentFolderId' => 'Inbox', 'isDraft' => false,
+        'subject' => 'Original subject', 'body' => ['contentType' => 'text', 'content' => 'Original content'],
+        'replyTo' => [], 'internetMessageHeaders' => []];
+}
+
+/** @return array<string, mixed> */
+function nativeGraphDraft(): array
+{
+    return [
+        'id' => 'new-draft=', 'conversationId' => 'source-conversation', 'isDraft' => true, 'hasAttachments' => false, 'attachments' => [],
+        'from' => ['emailAddress' => ['name' => 'Sender', 'address' => 'sender@example.com']],
+        'toRecipients' => [['emailAddress' => ['name' => 'Chosen', 'address' => 'chosen@example.com']]],
+        'ccRecipients' => [], 'bccRecipients' => [], 'subject' => 'Chosen subject',
+        'body' => ['contentType' => 'text', 'content' => 'Chosen content'],
+        'internetMessageHeaders' => [['name' => 'x-mailbox-correlation-id', 'value' => 'native-operation']],
+    ];
+}
+
+/**
+ * @param  list<mixed>  $responses
+ * @param  array<int, mixed>  $history
+ */
+function nativeGraphMailbox(array $responses, array &$history, ?TestGrantTokenProvider $tokens = null): SupportsDraftSubmission
+{
+    $handler = HandlerStack::create(new MockHandler($responses));
+    $handler->push(Middleware::history($history));
+    $tokens ??= new TestGrantTokenProvider(['grant' => [
+        'connection' => 'connection', 'generation' => '1', 'mailboxes' => ['sender@example.com'], 'token' => 'private-token',
+    ]]);
+
+    return Mailbox::forGrant(new GrantContext('connection', 'grant', '1', 'ms-graph', 'sender@example.com'), $tokens, new Client(['handler' => $handler]));
+}

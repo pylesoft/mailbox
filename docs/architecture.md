@@ -194,7 +194,7 @@ The `tree` method returns a nested structure where each `FolderDto` contains its
 
 ## DTOs
 
-Every piece of data Mailbox returns to your application is a `final readonly` DTO. DTOs are plain PHP objects with public properties -- no magic, no mutation. They all implement `Arrayable` and `JsonSerializable`, so you can pass them directly to API responses or Blade views.
+Mailbox returns immutable DTOs with public properties. Public presentation DTOs implement `Arrayable` and `JsonSerializable` for API responses or Blade views. Protocol and recovery DTOs may have narrower serialization boundaries: keep private positions and explicit persistence exports in trusted host storage, as described in the [provider SDK guide](provider-sdk.md).
 
 | DTO | Purpose | Key properties |
 |---|---|---|

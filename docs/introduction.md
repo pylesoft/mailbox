@@ -1,8 +1,10 @@
 # Introduction
 
-Mailbox gives your Laravel application a single, expressive API for reading and managing email across multiple providers. Instead of scattering provider-specific HTTP calls throughout your codebase, you work with a clean abstraction that feels like any other Laravel service -- swap drivers, not code.
+Mailbox gives your Laravel application shared interfaces for reading and managing email across providers. Optional capabilities expose provider-specific submission and notification behavior while your host keeps authorization, storage and durable work.
 
 Whether you are building an invoicing pipeline that ingests attachments from a shared inbox, a support desk that routes messages by subject, or a background sync job that tracks folder changes, Mailbox handles the provider plumbing so you can focus on your domain logic.
+
+The [provider SDK guide](provider-sdk.md) covers explicit grants, optional persistence, prepared submission and recovery. Implemented local contracts and [live account acceptance](plans/mailbox-provider-sdk/live-acceptance.md) are separate evidence.
 
 ## A Familiar Pattern
 
@@ -115,6 +117,7 @@ php artisan mailbox:health --driver=ms-graph
 - [Installation](installation.md) -- requirements, Composer install, publishing config and migrations
 - [Configuration](configuration.md) -- driver settings, cache, retry, attachment storage
 - [Quickstart](quickstart.md) -- a working example in under five minutes
+- [Provider SDK](provider-sdk.md) -- capability differences, host storage/lifecycle boundaries and acceptance limits
 
 ### Authentication
 

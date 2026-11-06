@@ -1,14 +1,16 @@
 # Installation
 
-Mailbox installs like any standard Laravel package -- a single Composer command, a config publish, and a migration. The whole process takes about a minute, and you can verify everything with a built-in health check command before writing a single line of application code.
+Install Mailbox with Composer, then choose configured provider credentials or an explicit host-owned grant. Package tables are optional when your application supplies its own storage.
 
 ## Requirements
 
 | Dependency | Version |
 |---|---|
 | PHP | 8.2 or higher |
-| Laravel | 12.0 or higher |
-| Guzzle | 7.0 or higher (pulled in automatically) |
+| Laravel | 12.x or 13.x, with that framework's supported PHP version |
+| Guzzle | 7.x (pulled in automatically) |
+
+Production also installs the parser, MIME encoder and address validator directly. The [compatibility receipt](plans/mailbox-provider-sdk/compatibility.md) records actual runtime/dependency graphs; a declared constraint alone does not establish tested combinations or live acceptance.
 
 You will also need credentials for at least one mail provider:
 
@@ -33,7 +35,7 @@ This creates `config/mailbox.php` where you configure drivers, cache, retry beha
 
 ## Package Migrations
 
-Mailbox auto-loads its migration files and they create/normalize the tables it needs for connections, mailboxes, folders, OAuth tokens, messages, and attachments:
+Existing Eloquent integrations keep `mailbox.persistence.enabled=true`. Mailbox then registers additive migrations for connections, mailboxes, folders, OAuth tokens, messages and attachments:
 
 - `create_mailbox_connections_table`
 - `create_monitored_mailboxes_table`
@@ -44,6 +46,8 @@ Mailbox auto-loads its migration files and they create/normalize the tables it n
 - `rename_monitored_entities_to_mailbox_entities`
 
 ## Run the Migrations
+
+Run migrations through your application's normal deployment process only when using the package's Eloquent integration. If your host owns persistence, set `MAILBOX_PERSISTENCE_ENABLED=false` before boot and skip this step; use [host-owned storage and authorization](authentication/user-oauth.md) instead.
 
 ```bash
 php artisan migrate
@@ -99,7 +103,7 @@ You will see a table summarising the results:
  └───────────────────┴───────────┘
 ```
 
-If the overall status shows **Healthy**, you are ready to go. If not, double-check your environment variables and review the provider-specific setup guide:
+A **Healthy** result verifies the configured token/probe path. It does not establish send permissions, every shared-mailbox target, notification setup or live file acceptance. Review the selected mode's prerequisites and [open live gates](plans/mailbox-provider-sdk/live-acceptance.md):
 
 - [Microsoft Graph Setup](authentication/ms-graph.md)
 - [Gmail Setup](authentication/gmail.md)

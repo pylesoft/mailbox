@@ -6,7 +6,7 @@ By the end, you will have a working mental model of the Mailbox API and enough c
 
 ## Connect to a Mailbox
 
-Everything starts with a `MailboxResource`. You obtain one by passing an email address to the facade. Mailbox resolves the default driver from your `config/mailbox.php` and authenticates behind the scenes.
+This example uses configured application credentials or Workspace service-account delegation. Obtain a `MailboxResource` through the configured driver:
 
 ```php
 use Pyle\Mailbox\Facades\Mailbox;
@@ -14,7 +14,7 @@ use Pyle\Mailbox\Facades\Mailbox;
 $mailbox = Mailbox::mailbox('invoices@acme.com');
 ```
 
-That single line handles driver resolution, token acquisition, and API client setup. The returned `$mailbox` is your entry point for everything that follows.
+The resource uses that driver's configured credentials when making requests. For delegated users, use [explicit host-owned grants](authentication/user-oauth.md#reading-with-an-explicit-grant) through `Mailbox::forGrant()`; selecting a mailbox address does not select a stored user grant.
 
 If your application manages multiple providers, you can select a driver explicitly:
 

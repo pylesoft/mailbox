@@ -12,6 +12,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * @property int $id
  * @property int|null $mailbox_connection_id
+ * @property string|null $grant_id
+ * @property string|null $lifecycle_generation
+ * @property string|null $issuer
+ * @property string|null $client_id
+ * @property string|null $grant_revision
+ * @property string|null $nonce_hash
+ * @property list<string>|null $grant_revision_history
  * @property string $provider
  * @property string|null $external_user_id
  * @property string|null $email
@@ -32,6 +39,13 @@ class MailboxOAuthToken extends Model
 
     protected $fillable = [
         'mailbox_connection_id',
+        'grant_id',
+        'lifecycle_generation',
+        'issuer',
+        'client_id',
+        'grant_revision',
+        'nonce_hash',
+        'grant_revision_history',
         'provider',
         'external_user_id',
         'email',
@@ -49,12 +63,22 @@ class MailboxOAuthToken extends Model
     protected $casts = [
         'access_token' => 'encrypted',
         'refresh_token' => 'encrypted',
+        'nonce_hash' => 'encrypted',
+        'grant_revision_history' => 'encrypted:array',
         'scopes' => 'array',
         'meta' => 'array',
         'expires_at' => 'immutable_datetime',
         'last_refreshed_at' => 'immutable_datetime',
         'revoked_at' => 'immutable_datetime',
     ];
+
+    protected $hidden = ['access_token', 'refresh_token', 'nonce_hash', 'grant_revision_history'];
+
+    /** @return array<string, mixed> */
+    public function __debugInfo(): array
+    {
+        return $this->attributesToArray();
+    }
 
     /** @return BelongsTo<MailboxConnection, $this> */
     public function connection(): BelongsTo

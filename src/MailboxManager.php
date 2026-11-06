@@ -4,18 +4,23 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox;
 
+use GuzzleHttp\Client;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Manager;
 use Pyle\Mailbox\Contracts\FolderResource;
+use Pyle\Mailbox\Contracts\GrantTokenProvider;
 use Pyle\Mailbox\Contracts\MailboxDriver;
 use Pyle\Mailbox\Contracts\MailboxDriverResolver;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MailboxResourceResolver;
+use Pyle\Mailbox\Contracts\SupportsGrantMailbox;
 use Pyle\Mailbox\DTOs\ConnectionTestResult;
+use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\HealthCheckResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\DriverNotConfiguredException;
+use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Models\Folder;
 use Pyle\Mailbox\Models\Mailbox;
 use Pyle\Mailbox\Models\MailboxConnection;
@@ -36,6 +41,17 @@ class MailboxManager extends Manager implements MailboxDriverResolver, MailboxRe
     public function mailbox(string $emailAddress): MailboxResource
     {
         return $this->driver()->mailbox($emailAddress);
+    }
+
+    public function forGrant(GrantContext $context, GrantTokenProvider $tokens, ?Client $httpClient = null): MailboxResource
+    {
+        $driver = $this->createDriver($context->driver);
+
+        if (! $driver instanceof SupportsGrantMailbox) {
+            throw new UnsupportedCapabilityException(sprintf('Driver [%s] does not support explicit grants.', $context->driver));
+        }
+
+        return $driver->forGrant($context, $tokens, $httpClient);
     }
 
     public function forMailbox(Mailbox $mailbox): MailboxResource

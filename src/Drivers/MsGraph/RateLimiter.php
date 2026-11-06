@@ -18,7 +18,7 @@ class RateLimiter
     ) {}
 
     /** @param callable():ResponseInterface $callback */
-    public function forMailbox(string $driver, string $mailbox, callable $callback): ResponseInterface
+    public function forMailbox(string $driver, string $mailbox, #[\SensitiveParameter] callable $callback): ResponseInterface
     {
         $normalizedDriver = strtolower(trim($driver)) !== '' ? strtolower(trim($driver)) : 'unknown';
         $normalizedMailbox = strtolower(trim($mailbox)) !== '' ? strtolower(trim($mailbox)) : 'global';

@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use Pest\Expectation;
+use Pyle\Mailbox\Tests\SdkTestCase;
 use Pyle\Mailbox\Tests\TestCase;
 
 uses(TestCase::class)->in('Feature', 'Unit', 'Arch');
+uses(SdkTestCase::class)->in('Sdk');
 
 expect()->extend('toHaveReturnTypes', function (): Expectation {
     /** @var string $namespace */

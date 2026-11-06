@@ -4,6 +4,8 @@ Mailbox writes all of its log output to a dedicated channel so that API request 
 
 Out of the box, Mailbox registers a `mailbox` log channel automatically. You do not need to configure anything to start seeing logs.
 
+Provider transport logs omit URL queries, and mapped errors omit raw provider bodies, bearer headers and unsafe exception chains. The authenticated transport disables Guzzle wire debugging. Status, method, resource path and retry information remain available for diagnosis. Do not log the raw `deltaLink` property or its array/JSON serialization: those values remain private persistence state even though native client and result debug dumps are redacted.
+
 ## The Default Channel
 
 When your application boots, Mailbox checks whether a `mailbox` channel exists in `config/logging.php`. If it does not, the package registers one with the following defaults:

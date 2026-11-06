@@ -19,6 +19,8 @@ use Pyle\Mailbox\Enums\ConnectionStatus;
  * @property int $id
  * @property string $name
  * @property string $driver
+ * @property string|null $selected_grant_id
+ * @property string|null $lifecycle_generation
  * @property ConnectionStatus $status
  * @property array<string, mixed>|null $config
  * @property CarbonImmutable|null $last_connected_at
@@ -35,6 +37,8 @@ class MailboxConnection extends Model
     protected $fillable = [
         'name',
         'driver',
+        'selected_grant_id',
+        'lifecycle_generation',
         'status',
         'config',
         'last_connected_at',

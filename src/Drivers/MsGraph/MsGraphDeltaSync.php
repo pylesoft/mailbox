@@ -22,7 +22,7 @@ class MsGraphDeltaSync
         $this->collector = new MsGraphDeltaCollector($client);
     }
 
-    public function syncFolder(string $mailbox, string $folderId, ?string $deltaToken = null): DeltaResultDto
+    public function syncFolder(string $mailbox, string $folderId, #[\SensitiveParameter] ?string $deltaToken = null): DeltaResultDto
     {
         $startedAt = microtime(true);
 

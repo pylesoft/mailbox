@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-use Pyle\Mailbox\Drivers\Gmail\GmailClient;
 use Pyle\Mailbox\Drivers\Gmail\GmailDeltaSync;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
+use Pyle\Mailbox\Tests\Support\FakeGmailClient;
 
 it('performs initial gmail delta sync', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -35,7 +35,7 @@ it('performs initial gmail delta sync', function (): void {
 });
 
 it('handles stale gmail history id with full sync requirement', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -57,7 +57,7 @@ it('handles stale gmail history id with full sync requirement', function (): voi
 });
 
 it('handles stale gmail history id when client throws resource not found', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 
@@ -83,7 +83,7 @@ it('handles stale gmail history id when client throws resource not found', funct
 });
 
 it('handles incremental gmail history pages', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         private int $historyCalls = 0;
 
@@ -139,7 +139,7 @@ it('handles incremental gmail history pages', function (): void {
 });
 
 it('skips deleted gmail messages during incremental hydration', function (): void {
-    $client = new class extends GmailClient
+    $client = new class extends FakeGmailClient
     {
         public function __construct() {}
 

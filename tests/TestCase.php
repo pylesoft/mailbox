@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Tests;
 
+use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Pyle\Mailbox\MailboxServiceProvider;
+use Pyle\Mailbox\Tests\Support\ParallelTestingBootstrap;
 use Pyle\Mailbox\Tests\Support\ParallelTestingDatabase;
 
 abstract class TestCase extends Orchestra
@@ -14,6 +16,14 @@ abstract class TestCase extends Orchestra
     use RefreshDatabase;
 
     protected static ?string $parallelDatabasePath = null;
+
+    protected function resolveApplication(): Application
+    {
+        $app = parent::resolveApplication();
+        ParallelTestingBootstrap::configure($app);
+
+        return $app;
+    }
 
     protected function getPackageProviders($app): array
     {

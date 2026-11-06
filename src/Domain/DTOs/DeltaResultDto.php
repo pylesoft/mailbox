@@ -26,4 +26,16 @@ final readonly class DeltaResultDto implements Arrayable, JsonSerializable
         public ?string $deltaLink,
         public bool $fullSyncRequired,
     ) {}
+
+    /** @return array<string, mixed> */
+    public function __debugInfo(): array
+    {
+        return [
+            'created' => $this->created,
+            'updated' => $this->updated,
+            'deleted' => $this->deleted,
+            'deltaLink' => $this->deltaLink === null ? null : '[REDACTED]',
+            'fullSyncRequired' => $this->fullSyncRequired,
+        ];
+    }
 }

@@ -7,6 +7,7 @@ namespace Pyle\Mailbox\Http\Controllers;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Pyle\Mailbox\Exceptions\OAuthEnrollmentException;
 use Pyle\Mailbox\Services\OAuth\MsGraphUserOAuthService;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
@@ -17,17 +18,21 @@ class MsGraphOAuthController extends Controller
         private readonly MsGraphUserOAuthService $oauthService,
     ) {}
 
-    public function redirect(Request $request): RedirectResponse
+    public function redirect(Request $request): Response|RedirectResponse
     {
         $connectionId = $request->integer('mailbox_connection_id');
         $returnTo = $request->query('return_to');
         $userReference = $request->query('user_reference');
 
-        $url = $this->oauthService->authorizationUrl(
-            connectionId: $connectionId > 0 ? $connectionId : null,
-            returnTo: is_string($returnTo) ? $returnTo : null,
-            userReference: is_string($userReference) ? $userReference : null,
-        );
+        try {
+            $url = $this->oauthService->authorizationUrl(
+                connectionId: $connectionId > 0 ? $connectionId : null,
+                returnTo: is_string($returnTo) ? $returnTo : null,
+                userReference: is_string($userReference) ? $userReference : null,
+            );
+        } catch (OAuthEnrollmentException $exception) {
+            return $this->failureResponse('oauth_setup_required', null, 400, $exception->getMessage());
+        }
 
         return redirect()->away($url);
     }
