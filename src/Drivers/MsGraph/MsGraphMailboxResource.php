@@ -17,8 +17,8 @@ use Pyle\Mailbox\Contracts\SupportsDraftAttachmentPreparation;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmission;
 use Pyle\Mailbox\Contracts\SupportsDraftSubmissionInspection;
 use Pyle\Mailbox\Contracts\SupportsFolderCatalogue;
-use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
+use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphFolderDeltaBatch;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSharedMailboxLive;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptionInspection;
 use Pyle\Mailbox\Drivers\MsGraph\Contracts\SupportsGraphSubscriptions;
@@ -45,7 +45,7 @@ use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
-class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsFolderCatalogue, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptionInspection, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
+class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsFolderCatalogue, SupportsGraphFolderDeltaBatch, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptionInspection, SupportsGraphSubscriptions, SupportsInitialSync
 {
     public function __construct(
         private readonly GraphClient $client,
@@ -194,9 +194,9 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
      * @param  array<int, SyncCheckpoint>  $checkpoints
      * @return array<int, ChangePage|MailboxException>
      */
-    public function incrementalSyncBatch(#[\SensitiveParameter] array $checkpoints, SyncBudget $budget): array
+    public function incrementalSyncBatch(#[\SensitiveParameter] array $checkpoints, int $maxItemsPerFolder = 100, int $maxResponseBytes = 8_388_608): array
     {
-        return $this->boundedSync()->incrementalPages($checkpoints, $budget);
+        return $this->boundedSync()->incrementalPages($checkpoints, $maxItemsPerFolder, $maxResponseBytes);
     }
 
     private function boundedSync(): MsGraphBoundedSync

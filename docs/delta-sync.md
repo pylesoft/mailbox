@@ -133,6 +133,8 @@ A `SyncScope` with a folder ID covers that exact provider folder, without its ch
 
 Graph delta returns unfiltered message-ID candidates. Although `importSince` remains bound to the state, the SDK deliberately does not push it into a `receivedDateTime` delta filter: Microsoft documents a 5,000-message ceiling for filtered delta. Recheck content, folder membership and the original import policy before updating the host projection. A completed checkpoint means the unfiltered delta round finished; it does not assert that every candidate satisfies the host's cutoff.
 
+For an explicit-grant resource returned by `Mailbox::forGrant()`, check `instanceof SupportsGraphFolderDeltaBatch` in the `Pyle\Mailbox\Drivers\MsGraph\Contracts` namespace to read up to three checkpointed folders in one HTTP request. Pass the checkpoints keyed by integer folder keys. A successful batch envelope returns a `ChangePage` or `MailboxException` for each key. A request-level failure throws an exception. `maxItemsPerFolder` limits each page, and `maxResponseBytes` limits the complete response. Resume any continuation with `incrementalSync()` and that folder's original checkpoint.
+
 ### Optional selection metadata
 
 Fresh Graph delta requests select `id`, `conversationId`, `parentFolderId`, `isDraft`, `receivedDateTime` and `sentDateTime`. `ChangePage::selectionMetadata` maps exact provider message IDs to `MessageDto` hints containing only these six provider fields. Bodies, headers and files are not included. For an ID from `$page->upserts`, you may read its hint:

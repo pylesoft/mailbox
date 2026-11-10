@@ -40,7 +40,7 @@ final readonly class MsGraphBoundedSync
      * @param  array<int, SyncCheckpoint>  $checkpoints
      * @return array<int, ChangePage|MailboxException>
      */
-    public function incrementalPages(#[\SensitiveParameter] array $checkpoints, SyncBudget $budget): array
+    public function incrementalPages(#[\SensitiveParameter] array $checkpoints, int $maxItemsPerFolder, int $maxResponseBytes): array
     {
         if (count($checkpoints) > 3) {
             throw new \InvalidArgumentException('A Graph delta batch can cover at most three folders.');
@@ -61,9 +61,9 @@ final readonly class MsGraphBoundedSync
                 $results[$key] = $exception;
             }
         }
-        $pageBudget = new SyncBudget(maxItems: $budget->maxItems, maxRequests: 1, maxResponseBytes: $budget->maxResponseBytes);
-        $responses = new ResponseBudget($budget->maxResponseBytes, 64 * 1024 * 1024);
-        $payloads = $this->client->getBoundedDeltaBatch($endpoints, $responses, min(1000, $budget->maxItems), $this->context->mailbox);
+        $pageBudget = new SyncBudget(maxItems: $maxItemsPerFolder, maxRequests: 1, maxResponseBytes: $maxResponseBytes);
+        $responses = new ResponseBudget($maxResponseBytes, 64 * 1024 * 1024);
+        $payloads = $this->client->getBoundedDeltaBatch($endpoints, $responses, min(1000, $maxItemsPerFolder), $this->context->mailbox);
         foreach ($payloads as $key => $payload) {
             $checkpoint = $checkpoints[$key];
             try {
