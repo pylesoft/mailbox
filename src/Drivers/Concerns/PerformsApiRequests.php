@@ -142,6 +142,13 @@ trait PerformsApiRequests
             $options['query'] = null;
         }
         $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => [...$headers, 'Accept-Encoding' => 'identity']], $mailbox, retry: false);
+
+        return $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, $associative);
+    }
+
+    /** @return array<string, mixed>|\stdClass */
+    private function decodeBoundedResponse(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, #[\SensitiveParameter] string $endpoint, ?string $mailbox, bool $associative): array|\stdClass
+    {
         $stream = $response->getBody();
         $body = '';
 
@@ -523,14 +530,14 @@ trait PerformsApiRequests
         }
     }
 
-    private function assertIdentityResponse(ResponseInterface $response): void
+    private function assertIdentityResponse(#[\SensitiveParameter] ResponseInterface $response): void
     {
         if (! in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
             throw new ApiRequestException('The bounded provider read requires identity HTTP content encoding.');
         }
     }
 
-    private function responseLength(ResponseInterface $response): ?int
+    private function responseLength(#[\SensitiveParameter] ResponseInterface $response): ?int
     {
         $values = $response->getHeader('Content-Length');
         if ($values === []) {
@@ -588,7 +595,12 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $options */
     private function requestRaw(string $method, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options = [], ?string $mailbox = null, bool $retry = true): ResponseInterface
     {
-        $target = $this->resolveTarget($endpoint, $mailbox);
+        return $this->requestResolvedTarget($method, $this->resolveTarget($endpoint, $mailbox), $endpoint, $options, $mailbox, $retry);
+    }
+
+    /** @param array<string, mixed> $options */
+    private function requestResolvedTarget(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, bool $retry): ResponseInterface
+    {
         $endpoint = $this->redactedEndpoint($endpoint);
         $mailboxKey = $this->mailboxKey($mailbox);
 

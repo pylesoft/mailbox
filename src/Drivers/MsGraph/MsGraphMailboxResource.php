@@ -42,6 +42,7 @@ use Pyle\Mailbox\DTOs\SyncCheckpoint;
 use Pyle\Mailbox\DTOs\SyncContinuation;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 
 class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsFolderCatalogue, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptionInspection, SupportsGraphSubscriptions, SupportsIncrementalSync, SupportsInitialSync
@@ -187,6 +188,15 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
     public function incrementalSync(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation = null): ChangePage
     {
         return $this->boundedSync()->page($scope, $budget, $checkpoint, $continuation);
+    }
+
+    /**
+     * @param  array<int, SyncCheckpoint>  $checkpoints
+     * @return array<int, ChangePage|MailboxException>
+     */
+    public function incrementalSyncBatch(#[\SensitiveParameter] array $checkpoints, SyncBudget $budget): array
+    {
+        return $this->boundedSync()->incrementalPages($checkpoints, $budget);
     }
 
     private function boundedSync(): MsGraphBoundedSync

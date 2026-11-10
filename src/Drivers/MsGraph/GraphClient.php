@@ -9,6 +9,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Uri;
 use Illuminate\Support\Facades\Event;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
@@ -73,6 +74,99 @@ class GraphClient
         }
 
         return $response;
+    }
+
+    /**
+     * @param  array<int, string>  $endpoints
+     * @return array<int, \stdClass|MailboxException>
+     */
+    public function getBoundedDeltaBatch(#[\SensitiveParameter] array $endpoints, ResponseBudget $budget, int $pageSize, string $mailbox): array
+    {
+        if ($this->grantAuthorization === null || count($endpoints) > 3 || $pageSize < 1 || $pageSize > 1000) {
+            throw new \InvalidArgumentException('Graph folder delta batches require a grant, up to three folders and a bounded page size.');
+        }
+        if ($endpoints === []) {
+            return [];
+        }
+
+        $requests = [];
+        $basePath = (new Uri($this->apiBaseUri))->getPath();
+        $preference = ($this->prefersImmutableIds() ? 'IdType="ImmutableId", ' : '').'odata.maxpagesize='.$pageSize;
+        foreach ($endpoints as $id => $endpoint) {
+            $target = new Uri($this->resolveTarget($endpoint, $mailbox));
+            $path = substr($target->getPath(), strlen($basePath));
+            if (! preg_match("~^users/[^/]+/mailFolders(?:/[^/]+|[(]'[^/]+'[)])/messages/delta$~iD", $path) || $target->getQuery() === '') {
+                throw new ApiRequestException('A Graph delta batch can only contain folder delta continuations.');
+            }
+            $requests[] = ['id' => (string) $id, 'method' => 'GET', 'url' => '/'.$path.'?'.$target->getQuery(),
+                'headers' => ['Prefer' => $preference, 'Accept' => 'application/json']];
+        }
+
+        $endpoint = '/$batch';
+        try {
+            $response = $this->requestResolvedTarget('POST', $this->resolveApiTarget($endpoint), $endpoint, ['query' => null, 'json' => ['requests' => $requests],
+                'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']],
+                $mailbox, retry: false);
+            $payload = $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, false);
+        } catch (RequestException $exception) {
+            $this->throwMappedException($exception, $mailbox, $mailbox, $endpoint, 1);
+        }
+        if (! $payload instanceof \stdClass || ! is_array($payload->responses ?? null) || ! array_is_list($payload->responses)) {
+            throw new ApiRequestException('Graph returned an invalid delta batch envelope.');
+        }
+
+        $steps = [];
+        foreach ($payload->responses as $entry) {
+            if ($entry instanceof \stdClass && is_string($entry->id ?? null) && array_key_exists($entry->id, $endpoints)) {
+                $steps[$entry->id] = array_key_exists($entry->id, $steps) ? null : $entry;
+            }
+        }
+
+        $results = [];
+        foreach ($endpoints as $id => $unused) {
+            if (! array_key_exists($id, $steps)) {
+                $results[$id] = new ApiRequestException('Graph omitted a delta batch step.');
+
+                continue;
+            }
+            $entry = $steps[$id];
+            $status = $entry->status ?? null;
+            if ($entry === null || ! is_int($status)) {
+                $results[$id] = new ApiRequestException('Graph returned an invalid delta batch step.');
+
+                continue;
+            }
+            try {
+                $headers = ($entry->headers ?? null) instanceof \stdClass ? array_change_key_case(get_object_vars($entry->headers)) : [];
+                $results[$id] = $this->deltaBatchBody($status, $entry->body ?? null, $headers['retry-after'] ?? null, $mailbox);
+            } catch (MailboxException $exception) {
+                $results[$id] = $exception;
+            }
+        }
+
+        return $results;
+    }
+
+    private function deltaBatchBody(int $status, #[\SensitiveParameter] mixed $body, #[\SensitiveParameter] mixed $retry, string $mailbox): \stdClass
+    {
+        if ($status === 200) {
+            if (! $body instanceof \stdClass) {
+                throw new ApiRequestException('Graph returned an invalid delta batch step.');
+            }
+
+            return $body;
+        }
+        if ($status === 410 || ($body instanceof \stdClass && in_array($status, [400, 404], true)
+            && $this->graphSyncResetCode(json_encode($body, JSON_THROW_ON_ERROR)) !== null)) {
+            throw new ApiRequestException('Graph delta checkpoint expired.', status: $status, providerCode: 'syncStateNotFound');
+        }
+        if ($status < 400 || $status > 599) {
+            throw new ApiRequestException('Graph returned an unexpected delta batch status.');
+        }
+        $endpoint = '/$batch';
+        $this->throwMappedException(new RequestException('Graph delta batch step failed with HTTP '.$status.'.',
+            new Request('GET', $endpoint), new Response($status, ['Retry-After' => is_int($retry) || is_string($retry) && ctype_digit($retry) ? (string) $retry : '1'])),
+            $mailbox, $mailbox, $endpoint, 1);
     }
 
     /**
@@ -271,7 +365,7 @@ class GraphClient
      * @param  array<string, mixed>  $options
      * @return array<string, mixed>
      */
-    protected function buildRequestOptions(array $options, string $mailboxKey): array
+    protected function buildRequestOptions(#[\SensitiveParameter] array $options, string $mailboxKey): array
     {
         return array_merge($options, [
             'headers' => array_merge($this->defaultHeaders($mailboxKey), $options['headers'] ?? []),

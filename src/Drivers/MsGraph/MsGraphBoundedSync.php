@@ -16,6 +16,7 @@ use Pyle\Mailbox\DTOs\SyncIdentity;
 use Pyle\Mailbox\DTOs\SyncScope;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
+use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\ResponseBudget;
@@ -31,6 +32,52 @@ final readonly class MsGraphBoundedSync
     public function __construct(private GraphClient $client, private GrantContext $context) {}
 
     public function page(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncCheckpoint $checkpoint, #[\SensitiveParameter] ?SyncContinuation $continuation): ChangePage
+    {
+        return $this->read($scope, $budget, $checkpoint, $continuation);
+    }
+
+    /**
+     * @param  array<int, SyncCheckpoint>  $checkpoints
+     * @return array<int, ChangePage|MailboxException>
+     */
+    public function incrementalPages(#[\SensitiveParameter] array $checkpoints, SyncBudget $budget): array
+    {
+        if (count($checkpoints) > 3) {
+            throw new \InvalidArgumentException('A Graph delta batch can cover at most three folders.');
+        }
+
+        $results = [];
+        $endpoints = [];
+        foreach ($checkpoints as $key => $checkpoint) {
+            try {
+                $scope = $checkpoint->identity->scope;
+                if ($scope->folderId === null) {
+                    throw new InvalidSyncStateException('A Graph delta batch checkpoint must cover one folder.');
+                }
+                $identity = new SyncIdentity('ms-graph', $this->context, $scope);
+                $checkpoint->identity->assertMatches($identity);
+                $endpoints[$key] = $this->checkpointFolders($identity, $checkpoint)[0]['deltaLink'];
+            } catch (MailboxException $exception) {
+                $results[$key] = $exception;
+            }
+        }
+        $pageBudget = new SyncBudget(maxItems: $budget->maxItems, maxRequests: 1, maxResponseBytes: $budget->maxResponseBytes);
+        $responses = new ResponseBudget($budget->maxResponseBytes, 64 * 1024 * 1024);
+        $payloads = $this->client->getBoundedDeltaBatch($endpoints, $responses, min(1000, $budget->maxItems), $this->context->mailbox);
+        foreach ($payloads as $key => $payload) {
+            $checkpoint = $checkpoints[$key];
+            try {
+                $results[$key] = $this->read($checkpoint->identity->scope, $pageBudget, $checkpoint, null, $payload);
+            } catch (MailboxException $exception) {
+                $results[$key] = $exception;
+            }
+        }
+
+        return $results;
+    }
+
+    private function read(SyncScope $scope, SyncBudget $budget, #[\SensitiveParameter] ?SyncCheckpoint $checkpoint,
+        #[\SensitiveParameter] ?SyncContinuation $continuation, #[\SensitiveParameter] \stdClass|MailboxException|null $prefetched = null): ChangePage
     {
         $identity = new SyncIdentity('ms-graph', $this->context, $scope);
         $checkpoint?->identity->assertMatches($identity);
@@ -83,7 +130,10 @@ final readonly class MsGraphBoundedSync
             $endpoint = $folder['nextLink'] ?? $base;
             $remaining = $budget->maxItems - $items;
             try {
-                $payload = $this->client->getBoundedDeltaPage($endpoint, $responses, min(1000, $remaining), $this->context->mailbox, $folder['nextLink'] === null);
+                if ($prefetched instanceof MailboxException) {
+                    throw $prefetched;
+                }
+                $payload = $prefetched ?? $this->client->getBoundedDeltaPage($endpoint, $responses, min(1000, $remaining), $this->context->mailbox, $folder['nextLink'] === null);
             } catch (ResponseLimitExceededException) {
                 return $this->result($identity, $state, $changes, 'response_limit', selectionMetadata: $selectionMetadata);
             } catch (ApiRequestException $e) {

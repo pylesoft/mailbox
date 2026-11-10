@@ -8,8 +8,11 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Contracts\SupportsIncrementalSync;
 use Pyle\Mailbox\Contracts\SupportsInitialSync;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphMailboxResource;
+use Pyle\Mailbox\DTOs\ChangePage;
 use Pyle\Mailbox\DTOs\GrantContext;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\SyncBudget;
@@ -22,9 +25,119 @@ use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\InvalidSyncStateException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
+use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Facades\Mailbox;
 use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
+
+it('batches independent folder deltas with opaque cursors and handles bodyless 429 and 410 steps', function (): void {
+    $history = [];
+    $next = graphSyncLink('FolderA', 'opaque%2bnext%2Ftoken', next: true);
+    $mailbox = graphSyncResource([new Response(200, [], json_encode(['responses' => [
+        ['id' => '9', 'status' => 429, 'headers' => ['retry-after' => '13']],
+        ['id' => '3', 'status' => 200, 'body' => ['value' => [['id' => 'new-message']], '@odata.nextLink' => $next]],
+        ['id' => '7', 'status' => 410],
+    ]], JSON_THROW_ON_ERROR)), new Response(200, [], json_encode(['value' => [], '@odata.deltaLink' => graphSyncLink('FolderA', 'finished')], JSON_THROW_ON_ERROR))], $history);
+    assert($mailbox instanceof MsGraphMailboxResource);
+    $scope = new SyncScope('FolderA');
+    $checkpoint = graphSyncCheckpoint($scope);
+    $pages = $mailbox->incrementalSyncBatch([3 => $checkpoint, 7 => graphSyncCheckpoint(new SyncScope('FolderB')),
+        9 => graphSyncCheckpoint(new SyncScope('FolderC'))], new SyncBudget(maxItems: 25));
+
+    expect($history)->toHaveCount(1)
+        ->and($history[0]['request']->getMethod())->toBe('POST')
+        ->and($history[0]['request']->getUri()->getPath())->toBe('/v1.0/$batch')
+        ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer selected-token')
+        ->and($pages[3]->upserts)->toBe(['new-message'])
+        ->and($pages[3]->checkpoint)->toBeNull()
+        ->and($pages[7])->toBeInstanceOf(ChangePage::class)
+        ->and($pages[7]->resetRequired)->toBeTrue()
+        ->and($pages[9])->toBeInstanceOf(RateLimitException::class)
+        ->and($pages[9]->retryAfter)->toBe(13);
+    $requests = json_decode((string) $history[0]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR)['requests'];
+    expect(array_column($requests, 'id'))->toBe(['3', '7', '9'])
+        ->and($requests[0]['url'])->toBe('/users/same%40example.com/mailFolders/FolderA/messages/delta?$deltatoken=old-baseline')
+        ->and($requests[0]['headers']['Prefer'])->toContain('IdType="ImmutableId"', 'odata.maxpagesize=25');
+
+    $page = $mailbox->incrementalSync($scope, new SyncBudget, $checkpoint, $pages[3]->continuation);
+    expect($page->checkpoint)->not->toBeNull()->and((string) $history[1]['request']->getUri())->toBe($next);
+});
+
+it('rejects duplicate and missing batch steps without discarding an independent success when extra entries arrive', function (): void {
+    $history = [];
+    $step = ['id' => '1', 'status' => 200, 'body' => ['value' => [], '@odata.deltaLink' => graphSyncLink('FolderA', 'new')]];
+    $mailbox = graphSyncResource([new Response(200, [], json_encode(['responses' => [$step, $step,
+        ['id' => '2', 'status' => 200, 'body' => ['value' => [], '@odata.deltaLink' => graphSyncLink('FolderB', 'new')]],
+        ['id' => 'unknown', 'status' => 200],
+    ]], JSON_THROW_ON_ERROR))], $history);
+    assert($mailbox instanceof MsGraphMailboxResource);
+    $pages = $mailbox->incrementalSyncBatch([1 => graphSyncCheckpoint(new SyncScope('FolderA')), 2 => graphSyncCheckpoint(new SyncScope('FolderB')),
+        3 => graphSyncCheckpoint(new SyncScope('FolderC'))], new SyncBudget);
+
+    expect($history)->toHaveCount(1)->and($pages[1])->toBeInstanceOf(ApiRequestException::class)
+        ->and($pages[2]->checkpoint)->not->toBeNull()->and($pages[3])->toBeInstanceOf(ApiRequestException::class);
+});
+
+it('rejects a successful Graph batch step without an object body', function (): void {
+    $history = [];
+    $mailbox = graphSyncResource([new Response(200, [], '{"responses":[{"id":"1","status":200,"body":[]}]}')], $history);
+    assert($mailbox instanceof MsGraphMailboxResource);
+
+    $pages = $mailbox->incrementalSyncBatch([1 => graphSyncCheckpoint(new SyncScope('FolderA'))], new SyncBudget);
+
+    expect($pages[1])->toBeInstanceOf(ApiRequestException::class);
+});
+
+it('redacts private Graph batch data from exception trace arguments', function (Response $response): void {
+    $history = [];
+    $mailbox = graphSyncResource([$response], $history);
+    assert($mailbox instanceof MsGraphMailboxResource);
+    $checkpoint = graphSyncCheckpoint(new SyncScope('FolderA'));
+    $previous = ini_set('zend.exception_ignore_args', '0');
+
+    try {
+        try {
+            $failure = $mailbox->incrementalSyncBatch([1 => $checkpoint], new SyncBudget)[1];
+        } catch (ApiRequestException $exception) {
+            $failure = $exception;
+        }
+        expect($failure)->toBeInstanceOf(ApiRequestException::class);
+        $trace = array_filter($failure->getTrace(), static fn (array $frame): bool => str_starts_with($frame['class'] ?? '', 'Pyle\\Mailbox\\'));
+        $arguments = array_merge(...array_column($trace, 'args'));
+        $diagnostic = json_encode(array_map(static fn (mixed $argument): mixed => $argument instanceof ResponseInterface ? $argument->getHeaders() : $argument, $arguments), JSON_PARTIAL_OUTPUT_ON_ERROR);
+        foreach (['private-batch-outer-header', 'private-batch-step-header', 'private-batch-step-body', 'old-baseline'] as $secret) {
+            expect($diagnostic)->not->toContain($secret);
+        }
+    } finally {
+        ini_set('zend.exception_ignore_args', $previous === false ? '1' : $previous);
+    }
+})->with([
+    'rejected envelope' => [new Response(200, ['Content-Length' => 'invalid', 'X-Private' => 'private-batch-outer-header'], '{}')],
+    'failed step' => [new Response(200, [], '{"responses":[{"id":"1","status":400,"headers":{"Retry-After":"private-batch-step-header"},"body":{"error":{"message":"private-batch-step-body"}}}]}')],
+]);
+
+it('redacts the Graph batch cursor when the grant token is rejected before HTTP', function (): void {
+    $history = [];
+    $tokens = new TestGrantTokenProvider([
+        'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['same@example.com'], 'token' => ''],
+    ]);
+    $mailbox = graphSyncResource([], $history, $tokens);
+    assert($mailbox instanceof MsGraphMailboxResource);
+    $checkpoint = graphSyncCheckpoint(new SyncScope('FolderA'));
+    $previous = ini_set('zend.exception_ignore_args', '0');
+
+    try {
+        $mailbox->incrementalSyncBatch([1 => $checkpoint], new SyncBudget);
+        $this->fail('An invalid grant token was accepted.');
+    } catch (GrantAccessDeniedException $exception) {
+        $trace = array_filter($exception->getTrace(), static fn (array $frame): bool => str_starts_with($frame['class'] ?? '', 'Pyle\\Mailbox\\'));
+
+        expect(json_encode($trace, JSON_PARTIAL_OUTPUT_ON_ERROR))->not->toContain('old-baseline');
+        expect($history)->toBeEmpty()->and($tokens->tokenReads)->toBe(1);
+    } finally {
+        ini_set('zend.exception_ignore_args', $previous === false ? '1' : $previous);
+    }
+});
 
 it('resumes Graph folder deltas through documented opaque next and delta links', function (): void {
     $history = [];
