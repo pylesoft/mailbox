@@ -8,11 +8,13 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\FnStream;
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\StreamDecoratorTrait;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Drivers\MsGraph\BatchRequest;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMessageQuery;
@@ -29,21 +31,38 @@ it('holds the Graph slot through the response read and close beyond the admissio
     $slot = 'mailbox:lock:ms-graph:'.$mailbox.':slot:1';
     $blockedWhileReading = null;
     $blockedWhileClosing = null;
-    $source = Utils::streamFor($payload);
-    $body = FnStream::decorate($source, [
-        'read' => function (int $length) use ($slot, $source, &$blockedWhileReading): string {
-            if ($blockedWhileReading === null) {
-                $this->travel(31)->seconds();
-                $blockedWhileReading = ! Cache::lock($slot, 1)->get();
-            }
+    $observeRead = function () use ($slot, &$blockedWhileReading): void {
+        if ($blockedWhileReading === null) {
+            $this->travel(31)->seconds();
+            $blockedWhileReading = ! Cache::lock($slot, 1)->get();
+        }
+    };
+    $observeClose = static function () use ($slot, &$blockedWhileClosing): void {
+        $blockedWhileClosing = ! Cache::lock($slot, 1)->get();
+    };
+    $body = new class(Utils::streamFor($payload), $observeRead, $observeClose) implements StreamInterface
+    {
+        use StreamDecoratorTrait;
 
-            return $source->read($length);
-        },
-        'close' => function () use ($slot, $source, &$blockedWhileClosing): void {
-            $blockedWhileClosing = ! Cache::lock($slot, 1)->get();
-            $source->close();
-        },
-    ]);
+        public function __construct(
+            private StreamInterface $stream,
+            private Closure $onRead,
+            private Closure $onClose,
+        ) {}
+
+        public function read(int $length): string
+        {
+            ($this->onRead)();
+
+            return $this->stream->read($length);
+        }
+
+        public function close(): void
+        {
+            ($this->onClose)();
+            $this->stream->close();
+        }
+    };
     $history = [];
     $graph = lifetimeGraphClient([new Response(200, [], $body)], $history);
 
