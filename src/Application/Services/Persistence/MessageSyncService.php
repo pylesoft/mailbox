@@ -74,6 +74,13 @@ class MessageSyncService
         foreach (['from_email_addresses', 'subject_contains'] as $filter) {
             $filters[$filter] = $this->normalizeStringArray($filters[$filter] ?? null);
         }
+        foreach (['has_attachments', 'is_read'] as $filter) {
+            if (isset($filters[$filter])) {
+                $filters[$filter] = (bool) $filters[$filter];
+            } else {
+                unset($filters[$filter]);
+            }
+        }
         ksort($filters);
         $folder = $this->parseFolderReference($request->folderReference());
         if ($driver === 'ms-graph' && $folder !== null) {

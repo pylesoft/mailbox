@@ -34,6 +34,17 @@ it('compares poll requests using the SDK defaults without conflating different r
         ->and($service->pollRequestKey([...$options, 'filters' => ['lookback_hours' => 12]], 'ms-graph'))->not->toBe($key)
         ->and($service->pollRequestKey([...$options, 'filters' => ['received_after' => '2026-11-12T00:00:00+00:00']], 'ms-graph'))->not->toBe($key)
         ->and($service->pollRequestKey([], 'ms-graph'))->not->toBe($key);
+
+    foreach (['has_attachments', 'is_read'] as $filter) {
+        $enabled = $service->pollRequestKey([...$options, 'filters' => [$filter => true]], 'ms-graph');
+        $disabled = $service->pollRequestKey([...$options, 'filters' => [$filter => false]], 'ms-graph');
+
+        expect($service->pollRequestKey([...$options, 'filters' => [$filter => 1]], 'ms-graph'))->toBe($enabled)
+            ->and($service->pollRequestKey([...$options, 'filters' => [$filter => '0']], 'ms-graph'))->toBe($disabled)
+            ->and($service->pollRequestKey([...$options, 'filters' => [$filter => null]], 'ms-graph'))->toBe($key)
+            ->and($disabled)->not->toBe($key)
+            ->and($disabled)->not->toBe($enabled);
+    }
 });
 
 it('persists valid query outcomes and retains exact provider correlations without a clean timestamp', function (): void {
