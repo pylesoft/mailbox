@@ -22,6 +22,20 @@ use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
 require_once __DIR__.'/Support/MessagePersistenceTestSupport.php';
 
+it('compares poll requests using the SDK defaults without conflating different reads', function (): void {
+    $service = new MessageSyncService;
+    $options = ['folder_reference' => 'inbox'];
+    $key = $service->pollRequestKey($options, 'ms-graph');
+    $sent = $service->pollRequestKey(['folder_reference' => 'wk:sent', 'filters' => ['subject_contains' => [' Invoice '], 'from_email_addresses' => [' sender@example.com ']]], 'ms-graph');
+
+    expect($service->pollRequestKey(['filters' => ['mail_folder_id' => 'wk:inbox', 'limit' => '100', 'page_size' => 25, 'lookback_hours' => 6]], 'ms-graph'))->toBe($key)
+        ->and($service->pollRequestKey(['folder_reference' => 'sentitems', 'filters' => ['subject_contains' => ['Invoice'], 'from_email_addresses' => ['sender@example.com']]], 'ms-graph'))->toBe($sent)
+        ->and($service->pollRequestKey([...$options, 'include_attachments' => false], 'ms-graph'))->not->toBe($key)
+        ->and($service->pollRequestKey([...$options, 'filters' => ['lookback_hours' => 12]], 'ms-graph'))->not->toBe($key)
+        ->and($service->pollRequestKey([...$options, 'filters' => ['received_after' => '2026-11-12T00:00:00+00:00']], 'ms-graph'))->not->toBe($key)
+        ->and($service->pollRequestKey([], 'ms-graph'))->not->toBe($key);
+});
+
 it('persists valid query outcomes and retains exact provider correlations without a clean timestamp', function (): void {
     $mailbox = createTestMailbox('Partial', 'reader@example.com', 'Reader');
     $resource = syncResultResource('ms-graph', [['value' => [
