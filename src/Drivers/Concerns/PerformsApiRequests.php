@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\Concerns;
 
+use Closure;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
@@ -31,6 +32,8 @@ trait PerformsApiRequests
 {
     private Client $client;
 
+    private int $requestTimeoutSeconds;
+
     private int $maxRetries;
 
     private int $retryBackoffBase;
@@ -43,6 +46,7 @@ trait PerformsApiRequests
     protected function bootApiClient(array $config, ?Client $client, string $baseUri): void
     {
         $this->apiBaseUri = $baseUri;
+        $this->requestTimeoutSeconds = max(1, (int) ($config['timeout'] ?? 30));
         $this->client = $client ?? new Client([
             'base_uri' => $baseUri,
             'timeout' => (int) ($config['timeout'] ?? 30),
@@ -117,8 +121,11 @@ trait PerformsApiRequests
                     $this->throwMappedException($e, $mailbox, $mailboxKey, $safeEndpoint, $attempt);
                 } catch (ApiRequestException|ProviderTransportException $e) {
                     $previous = $e->getPrevious();
-                    if ($retry && ($previous instanceof ConnectException || ($previous instanceof RequestException && $previous->getResponse() === null))
-                        && $this->retryTransportFailure($previous, 'GET', $safeEndpoint, $mailboxKey, $attempt, $startedAt)) {
+                    $transport = $previous instanceof ConnectException || ($previous instanceof RequestException && $previous->getResponse() === null)
+                        ? $previous
+                        : ($this->driverKey() === 'ms-graph' && $e instanceof ProviderTransportException ? $e : null);
+                    if ($retry && $transport !== null
+                        && $this->retryTransportFailure($transport, 'GET', $safeEndpoint, $mailboxKey, $attempt, $startedAt)) {
                         continue;
                     }
                     throw $e;
@@ -141,13 +148,14 @@ trait PerformsApiRequests
         if ($query === [] && str_contains($endpoint, '?')) {
             $options['query'] = null;
         }
-        $response = $this->requestRaw('GET', $endpoint, [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => [...$headers, 'Accept-Encoding' => 'identity']], $mailbox, retry: false);
 
-        return $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, $associative);
+        return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
+            [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => [...$headers, 'Accept-Encoding' => 'identity']], $mailbox,
+            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, $associative, $deadline));
     }
 
     /** @return array<string, mixed>|\stdClass */
-    private function decodeBoundedResponse(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, #[\SensitiveParameter] string $endpoint, ?string $mailbox, bool $associative): array|\stdClass
+    private function decodeBoundedResponse(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, #[\SensitiveParameter] string $endpoint, ?string $mailbox, bool $associative, ?int $deadline): array|\stdClass
     {
         $stream = $response->getBody();
         $body = '';
@@ -162,15 +170,7 @@ trait PerformsApiRequests
                 $size = 0;
                 while (true) {
                     $budget->assertMemoryAvailable(strlen($body) + 32768);
-                    try {
-                        $chunk = $stream->read(min(8192, $budget->remaining()) + 1);
-                    } catch (\RuntimeException) {
-                        throw new ProviderTransportException(
-                            message: 'The provider response stream was interrupted.',
-                            endpoint: $this->redactedEndpoint($endpoint),
-                            mailbox: $mailbox,
-                        );
-                    }
+                    $chunk = $this->readResponseChunk($stream, min(8192, $budget->remaining()) + 1, $endpoint, $mailbox, $deadline);
                     if ($chunk === '') {
                         if ($stream->eof()) {
                             break;
@@ -213,6 +213,14 @@ trait PerformsApiRequests
         try {
             $decoded = json_decode($body, $associative, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException) {
+            if ($this->driverKey() === 'ms-graph' && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300
+                && $response->getStatusCode() !== 204) {
+                throw new ProviderTransportException(
+                    message: 'Graph returned invalid JSON for a bounded read.',
+                    endpoint: $this->redactedEndpoint($endpoint),
+                    mailbox: $mailbox,
+                );
+            }
             throw new ApiRequestException('The provider returned invalid JSON for a bounded read.');
         }
 
@@ -324,9 +332,9 @@ trait PerformsApiRequests
 
     /**
      * @param  array<string, mixed>  $options
-     * @param  (\Closure(): void)|null  $beforeRequest
+     * @param  (Closure(): void)|null  $beforeRequest
      */
-    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?\Closure $beforeRequest = null, ?ResponseBudget $budget = null, ?int $maxSuccessResponseBytes = null): ProviderWriteResponse
+    private function exchangeOnce(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] array $options, string $mailboxKey, int $maxResponseBytes, bool $authenticated = true, ?Closure $beforeRequest = null, ?ResponseBudget $budget = null, ?int $maxSuccessResponseBytes = null): ProviderWriteResponse
     {
         $budget?->assertMemoryAvailable(65_536);
         $attempted = false;
@@ -465,7 +473,14 @@ trait PerformsApiRequests
             throw new \InvalidArgumentException('A streamed response byte limit must be positive.');
         }
         $budget->assertMemoryAvailable(65536);
-        $response = $this->requestRaw('GET', $endpoint, ['stream' => true, 'http_errors' => true, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox, retry: false);
+
+        return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
+            ['stream' => true, 'http_errors' => true, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox,
+            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): StreamInterface => $this->copyBoundedStream($response, $budget, $maxBytes, $endpoint, $mailbox, $deadline));
+    }
+
+    private function copyBoundedStream(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, int $maxBytes, #[\SensitiveParameter] string $endpoint, ?string $mailbox, ?int $deadline): StreamInterface
+    {
         $source = $response->getBody();
         $temporary = null;
         $size = 0;
@@ -483,15 +498,7 @@ trait PerformsApiRequests
             }
             while (true) {
                 $budget->assertMemoryAvailable(65536);
-                try {
-                    $chunk = $source->read(min(8192, $budget->remaining()) + 1);
-                } catch (\RuntimeException) {
-                    throw new ProviderTransportException(
-                        message: 'The provider response stream was interrupted.',
-                        endpoint: $this->redactedEndpoint($endpoint),
-                        mailbox: $mailbox,
-                    );
-                }
+                $chunk = $this->readResponseChunk($source, min(8192, $budget->remaining()) + 1, $endpoint, $mailbox, $deadline);
                 if ($chunk === '') {
                     if ($source->eof()) {
                         break;
@@ -604,73 +611,161 @@ trait PerformsApiRequests
         $endpoint = $this->redactedEndpoint($endpoint);
         $mailboxKey = $this->mailboxKey($mailbox);
 
-        return $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $endpoint, $target, $options, $mailbox, $mailboxKey, $retry): ResponseInterface {
-            $attempt = 0;
-            $reauthAttempted = false;
+        if ($this->driverKey() === 'ms-graph' && $method === 'GET'
+            && ! ($options['stream'] ?? $this->client->getConfig('stream') ?? false)) {
+            $timeout = max(1, (int) ($options['timeout'] ?? $this->client->getConfig('timeout') ?? $this->requestTimeoutSeconds));
 
-            while (true) {
-                $attempt++;
-                $startedAt = microtime(true);
+            return $this->sendResolvedRequest($method, $target, $endpoint, $options, $mailbox, $mailboxKey, $retry, $timeout + $this->requestTimeoutSeconds + 5);
+        }
 
+        return $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey,
+            fn (): ResponseInterface => $this->sendResolvedRequest($method, $target, $endpoint, $options, $mailbox, $mailboxKey, $retry));
+    }
+
+    /**
+     * @template T
+     *
+     * @param  array<string, mixed>  $options
+     * @param  Closure(ResponseInterface, ?int):T  $consume
+     * @return T
+     */
+    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume): mixed
+    {
+        if ($this->driverKey() !== 'ms-graph') {
+            return $consume($this->requestResolvedTarget($method, $target, $endpoint, $options, $mailbox, retry: false), null);
+        }
+
+        $endpoint = $this->redactedEndpoint($endpoint);
+        $mailboxKey = $this->mailboxKey($mailbox);
+        $timeout = $options['timeout'] ?? $this->requestTimeoutSeconds;
+        $timeout = is_int($timeout) ? max(1, $timeout) : $this->requestTimeoutSeconds;
+        $options['timeout'] = $timeout;
+        $options['read_timeout'] = $timeout;
+
+        // A socket read can use its full timeout after starting just before the deadline.
+        $lease = 2 * $timeout + $this->requestTimeoutSeconds + 5;
+
+        return $this->rateLimiter->withMailboxSlot($this->driverKey(), $mailboxKey, function () use ($method, $target, $endpoint, $options, $mailbox, $mailboxKey, $timeout, $consume) {
+            $deadline = hrtime(true) + $timeout * 1_000_000_000;
+            $response = $this->sendResolvedRequest($method, $target, $endpoint, $options, $mailbox, $mailboxKey, retry: false);
+            try {
+                $this->assertReadDeadline($deadline, $endpoint, $mailbox);
+            } catch (ProviderTransportException $exception) {
                 try {
-                    return $this->sendRequest($method, $target, $options, $mailboxKey, $attempt, $startedAt);
-                } catch (ConnectException $e) {
-                    $curlErrorNumber = $e->getHandlerContext()['errno'] ?? null;
-                    $diagnostic = is_int($curlErrorNumber) && $curlErrorNumber > 0 && $curlErrorNumber <= 999
-                        ? ' (cURL error '.$curlErrorNumber.')' : '';
-                    $e = new ConnectException($this->providerLabel().' connection failed'.$diagnostic.'.', new Request($method, $endpoint));
-                    if ($retry && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
-                        continue;
-                    }
-
-                    if (! $retry && $method === 'GET') {
-                        throw new ProviderTransportException(
-                            message: $e->getMessage(),
-                            endpoint: $endpoint,
-                            mailbox: $mailbox,
-                            attemptsExhausted: $attempt,
-                            previous: $e,
-                        );
-                    }
-
-                    throw $this->wrapUnexpectedThrowable($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt);
-                } catch (RequestException $e) {
-                    $response = $e->getResponse();
-                    $status = $response?->getStatusCode();
-                    $response?->getBody()->close();
-                    $e = new RequestException(
-                        $this->providerLabel().' request failed'.($status === null ? '.' : ' with HTTP '.$status.'.'),
-                        new Request($method, $endpoint),
-                        $response === null ? null : new Response($response->getStatusCode(), ['Retry-After' => (string) $this->retryAfterSeconds($e)]),
-                    );
-                    $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
-
-                    if ($retry && $e->getResponse() === null && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
-                        continue;
-                    }
-
-                    if (! $retry && $method === 'GET' && $response === null) {
-                        throw new ProviderTransportException(
-                            message: $e->getMessage(),
-                            endpoint: $endpoint,
-                            mailbox: $mailbox,
-                            attemptsExhausted: $attempt,
-                            previous: $e,
-                        );
-                    }
-
-                    if ($retry && $this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
-                        continue;
-                    }
-
-                    $this->throwMappedException($e, $mailbox, $mailboxKey, $endpoint, $attempt);
-                } catch (GrantAccessDeniedException|GrantRefreshException $e) {
-                    throw $e;
-                } catch (\Throwable $e) {
-                    throw $this->wrapUnexpectedThrowable(new \RuntimeException($this->providerLabel().' request failed ('.$e::class.').'), $method, $endpoint, $mailbox, $mailboxKey, $attempt);
+                    $response->getBody()->close();
+                } finally {
+                    throw $exception;
                 }
             }
-        });
+
+            return $consume($response, $deadline);
+        }, $lease);
+    }
+
+    private function readResponseChunk(#[\SensitiveParameter] StreamInterface $stream, int $length, #[\SensitiveParameter] string $endpoint, ?string $mailbox, ?int $deadline): string
+    {
+        $this->assertReadDeadline($deadline, $endpoint, $mailbox);
+        try {
+            $chunk = $stream->read($length);
+        } catch (\RuntimeException) {
+            throw new ProviderTransportException(
+                message: 'The provider response stream was interrupted.',
+                endpoint: $this->redactedEndpoint($endpoint),
+                mailbox: $mailbox,
+            );
+        }
+        $this->assertReadDeadline($deadline, $endpoint, $mailbox);
+
+        return $chunk;
+    }
+
+    private function assertReadDeadline(?int $deadline, #[\SensitiveParameter] string $endpoint, ?string $mailbox): void
+    {
+        if ($deadline !== null && hrtime(true) >= $deadline) {
+            throw new ProviderTransportException(
+                message: 'The provider response exceeded its read deadline.',
+                endpoint: $this->redactedEndpoint($endpoint),
+                mailbox: $mailbox,
+            );
+        }
+    }
+
+    /** @param array<string, mixed> $options */
+    private function sendResolvedRequest(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, string $mailboxKey, bool $retry, ?int $leasePerAttempt = null): ResponseInterface
+    {
+        $attempt = 0;
+        $reauthAttempted = false;
+
+        while (true) {
+            $attempt++;
+            $startedAt = microtime(true);
+
+            try {
+                $send = fn (): ResponseInterface => $this->sendRequest($method, $target, $options, $mailboxKey, $attempt, $startedAt);
+
+                return $leasePerAttempt === null
+                    ? $send()
+                    : $this->rateLimiter->withMailboxSlot($this->driverKey(), $mailboxKey, $send, $leasePerAttempt);
+            } catch (ConnectException $e) {
+                $curlErrorNumber = $e->getHandlerContext()['errno'] ?? null;
+                $diagnostic = is_int($curlErrorNumber) && $curlErrorNumber > 0 && $curlErrorNumber <= 999
+                    ? ' (cURL error '.$curlErrorNumber.')' : '';
+                $e = new ConnectException($this->providerLabel().' connection failed'.$diagnostic.'.', new Request($method, $endpoint));
+                if ($retry && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
+                    continue;
+                }
+
+                if (! $retry && $method === 'GET') {
+                    throw new ProviderTransportException(
+                        message: $e->getMessage(),
+                        endpoint: $endpoint,
+                        mailbox: $mailbox,
+                        attemptsExhausted: $attempt,
+                        previous: $e,
+                    );
+                }
+
+                throw $this->wrapUnexpectedThrowable($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt);
+            } catch (RequestException $e) {
+                $response = $e->getResponse();
+                $status = $response?->getStatusCode();
+                $response?->getBody()->close();
+                $e = new RequestException(
+                    $this->providerLabel().' request failed'.($status === null ? '.' : ' with HTTP '.$status.'.'),
+                    new Request($method, $endpoint),
+                    $response === null ? null : new Response($response->getStatusCode(), ['Retry-After' => (string) $this->retryAfterSeconds($e)]),
+                );
+                $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+
+                if ($retry && $e->getResponse() === null && $this->retryTransportFailure($e, $method, $endpoint, $mailboxKey, $attempt, $startedAt)) {
+                    continue;
+                }
+
+                if (! $retry && $method === 'GET' && $response === null) {
+                    throw new ProviderTransportException(
+                        message: $e->getMessage(),
+                        endpoint: $endpoint,
+                        mailbox: $mailbox,
+                        attemptsExhausted: $attempt,
+                        previous: $e,
+                    );
+                }
+
+                if ($retry && $this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
+                    continue;
+                }
+
+                $this->throwMappedException($e, $mailbox, $mailboxKey, $endpoint, $attempt);
+            } catch (GrantAccessDeniedException|GrantRefreshException $e) {
+                throw $e;
+            } catch (\Throwable $e) {
+                if ($leasePerAttempt !== null && $e instanceof RateLimitException) {
+                    throw $e;
+                }
+
+                throw $this->wrapUnexpectedThrowable(new \RuntimeException($this->providerLabel().' request failed ('.$e::class.').'), $method, $endpoint, $mailbox, $mailboxKey, $attempt);
+            }
+        }
     }
 
     /** @param array<string, mixed> $options */

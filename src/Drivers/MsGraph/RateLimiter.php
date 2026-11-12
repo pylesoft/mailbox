@@ -20,6 +20,19 @@ class RateLimiter
     /** @param callable():ResponseInterface $callback */
     public function forMailbox(string $driver, string $mailbox, #[\SensitiveParameter] callable $callback): ResponseInterface
     {
+        return $this->withMailboxSlot($driver, $mailbox, $callback);
+    }
+
+    /**
+     * @internal
+     *
+     * @template T
+     *
+     * @param  callable():T  $callback
+     * @return T
+     */
+    public function withMailboxSlot(string $driver, string $mailbox, #[\SensitiveParameter] callable $callback, ?int $leaseSeconds = null): mixed
+    {
         $normalizedDriver = strtolower(trim($driver)) !== '' ? strtolower(trim($driver)) : 'unknown';
         $normalizedMailbox = strtolower(trim($mailbox)) !== '' ? strtolower(trim($mailbox)) : 'global';
 
@@ -35,7 +48,7 @@ class RateLimiter
             for ($index = 1; $index <= $maxSlots; $index++) {
                 $candidate = Cache::lock(
                     sprintf('mailbox:lock:%s:%s:slot:%d', $normalizedDriver, $normalizedMailbox, $index),
-                    $timeout,
+                    max($timeout, $leaseSeconds ?? $timeout),
                 );
 
                 if ($candidate->get()) {

@@ -11,6 +11,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Uri;
 use Illuminate\Support\Facades\Event;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Drivers\Concerns\PerformsApiRequests;
 use Pyle\Mailbox\DTOs\GrantContext;
@@ -104,10 +105,9 @@ class GraphClient
 
         $endpoint = '/$batch';
         try {
-            $response = $this->requestResolvedTarget('POST', $this->resolveApiTarget($endpoint), $endpoint, ['query' => null, 'json' => ['requests' => $requests],
-                'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']],
-                $mailbox, retry: false);
-            $payload = $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, false);
+            $payload = $this->consumeBoundedResponse('POST', $this->resolveApiTarget($endpoint), $endpoint, ['query' => null, 'json' => ['requests' => $requests],
+                'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox,
+                fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, false, $deadline));
         } catch (RequestException $exception) {
             $this->throwMappedException($exception, $mailbox, $mailbox, $endpoint, 1);
         }
@@ -202,14 +202,20 @@ class GraphClient
 
     public function messageHeaderBlock(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, string $mailbox): string
     {
-        $response = $this->requestRaw('GET', $endpoint.'/$value', ['stream' => true, 'http_errors' => false,
-            'decode_content' => false, 'headers' => ['Accept' => 'message/rfc822', 'Accept-Encoding' => 'identity'],
-            'timeout' => 20, 'read_timeout' => 20, 'connect_timeout' => 5], $mailbox, retry: false);
+        $endpoint .= '/$value';
+
+        return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
+            ['stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept' => 'message/rfc822', 'Accept-Encoding' => 'identity'],
+                'timeout' => 20, 'connect_timeout' => 5], $mailbox,
+            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): string => $this->readMessageHeaderBlock($response, $budget, $endpoint, $mailbox, $deadline));
+    }
+
+    private function readMessageHeaderBlock(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, #[\SensitiveParameter] string $endpoint, string $mailbox, ?int $deadline): string
+    {
         $source = $response->getBody();
-        $deadline = hrtime(true) + 20_000_000_000;
         try {
             if ($response->getStatusCode() >= 400) {
-                $safeEndpoint = $this->redactedEndpoint($endpoint.'/$value');
+                $safeEndpoint = $this->redactedEndpoint($endpoint);
                 $error = new RequestException('Graph MIME header read failed.', new Request('GET', $safeEndpoint),
                     new Response($response->getStatusCode(), ['Retry-After' => $response->getHeaderLine('Retry-After')]));
                 $this->throwMappedException($error, $mailbox, $this->mailboxKey($mailbox), $safeEndpoint, 1);
@@ -221,10 +227,10 @@ class GraphClient
             }
             $bytes = '';
             while (true) {
-                if ($budget->remaining() === 0 || hrtime(true) >= $deadline) {
+                if ($budget->remaining() === 0) {
                     throw new ResponseLimitExceededException('Graph MIME headers exceeded the read budget.');
                 }
-                $part = $source->read(min(8192, $budget->remaining()));
+                $part = $this->readResponseChunk($source, min(8192, $budget->remaining()), $endpoint, $mailbox, $deadline);
                 if ($part === '') {
                     throw new MailboxException('Graph returned unfinished MIME headers.');
                 }
