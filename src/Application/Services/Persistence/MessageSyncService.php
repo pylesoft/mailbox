@@ -11,6 +11,7 @@ use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\SupportsExactMessageRead;
 use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
+use Pyle\Mailbox\Drivers\MsGraph\FolderIdResolver;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\MessageQueryResult;
 use Pyle\Mailbox\DTOs\MessageSyncResult;
@@ -49,6 +50,45 @@ class MessageSyncService
     public function syncMailboxResult(Mailbox $mailbox, array $options = [], ?Closure $guardedWrite = null): MessageSyncResult
     {
         return $this->sync($mailbox, $options, true, $guardedWrite);
+    }
+
+    /**
+     * Compare sync options within one polling window. The caller must compare mailbox authority separately.
+     *
+     * @param  array<string, mixed>  $options
+     */
+    public function pollRequestKey(array $options, string $driver): string
+    {
+        $request = MessageSyncRequest::from($options, $this->ruleTree);
+        $filters = $this->queryFiltersWithDefaults($request);
+        unset($filters['mail_folder_id'], $filters['lookback_hours']);
+        $filters['page_size'] = (int) $filters['page_size'];
+        $filters['limit'] = (int) $filters['limit'];
+        if (empty($filters['received_after'])) {
+            unset($filters['received_after']);
+            $filters['lookback_hours'] = $this->lookbackHours($request->filters());
+        }
+        if (! isset($filters['received_before'])) {
+            unset($filters['received_before']);
+        }
+        foreach (['from_email_addresses', 'subject_contains'] as $filter) {
+            $filters[$filter] = $this->normalizeStringArray($filters[$filter] ?? null);
+            sort($filters[$filter], SORT_STRING);
+        }
+        foreach (['has_attachments', 'is_read'] as $filter) {
+            if (isset($filters[$filter])) {
+                $filters[$filter] = (bool) $filters[$filter];
+            } else {
+                unset($filters[$filter]);
+            }
+        }
+        ksort($filters);
+        $folder = $this->parseFolderReference($request->folderReference());
+        if ($driver === 'ms-graph' && $folder !== null) {
+            $folder = FolderIdResolver::resolve($folder);
+        }
+
+        return hash('sha256', serialize([$folder, $request->persistAttachments(), $request->ruleTree(), $filters]));
     }
 
     /**
@@ -186,6 +226,16 @@ class MessageSyncService
      */
     private function buildQueryFilters(MessageSyncRequest $request, Carbon $referenceTime): array
     {
+        $filters = $this->queryFiltersWithDefaults($request);
+        $filters['received_before'] ??= $referenceTime->toIso8601String();
+        $filters['received_after'] = $this->receivedAfterFilter($filters, $referenceTime);
+
+        return $filters;
+    }
+
+    /** @return array<string, mixed> */
+    private function queryFiltersWithDefaults(MessageSyncRequest $request): array
+    {
         $savedFilters = $request->filters();
         $ruleTree = $request->ruleTree();
 
@@ -197,8 +247,6 @@ class MessageSyncService
             ...$savedFilters,
             'page_size' => $savedFilters['page_size'] ?? 25,
             'limit' => $savedFilters['limit'] ?? 100,
-            'received_before' => $savedFilters['received_before'] ?? $referenceTime->toIso8601String(),
-            'received_after' => $this->receivedAfterFilter($savedFilters, $referenceTime),
         ];
     }
 
@@ -221,11 +269,13 @@ class MessageSyncService
             return (string) $savedFilters['received_after'];
         }
 
-        if (! empty($savedFilters['lookback_hours']) && is_numeric($savedFilters['lookback_hours'])) {
-            return $referenceTime->copy()->subHours((int) $savedFilters['lookback_hours'])->toIso8601String();
-        }
+        return $referenceTime->copy()->subHours($this->lookbackHours($savedFilters))->toIso8601String();
+    }
 
-        return $referenceTime->copy()->subHours(6)->toIso8601String();
+    /** @param array<string, mixed> $filters */
+    private function lookbackHours(array $filters): int
+    {
+        return ! empty($filters['lookback_hours']) && is_numeric($filters['lookback_hours']) ? (int) $filters['lookback_hours'] : 6;
     }
 
     private function fetchMessages(MailboxResource $mailbox, MessageSyncPlan $plan, bool $isolateHeaders): MessageQueryResult

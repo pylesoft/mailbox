@@ -22,6 +22,43 @@ use Pyle\Mailbox\Tests\Support\TestGrantTokenProvider;
 
 require_once __DIR__.'/Support/MessagePersistenceTestSupport.php';
 
+it('compares poll requests using the SDK defaults without conflating different reads', function (): void {
+    $service = new MessageSyncService;
+    $options = ['folder_reference' => 'inbox'];
+    $key = $service->pollRequestKey($options, 'ms-graph');
+    $sent = $service->pollRequestKey(['folder_reference' => 'wk:sent', 'filters' => ['subject_contains' => [' Invoice '], 'from_email_addresses' => [' sender@example.com ']]], 'ms-graph');
+
+    expect($service->pollRequestKey(['filters' => ['mail_folder_id' => 'wk:inbox', 'limit' => '100', 'page_size' => 25, 'lookback_hours' => 6]], 'ms-graph'))->toBe($key)
+        ->and($service->pollRequestKey(['folder_reference' => 'sentitems', 'filters' => ['subject_contains' => ['Invoice'], 'from_email_addresses' => ['sender@example.com']]], 'ms-graph'))->toBe($sent)
+        ->and($service->pollRequestKey([...$options, 'include_attachments' => false], 'ms-graph'))->not->toBe($key)
+        ->and($service->pollRequestKey([...$options, 'filters' => ['lookback_hours' => 12]], 'ms-graph'))->not->toBe($key)
+        ->and($service->pollRequestKey([...$options, 'filters' => ['received_after' => '2026-11-12T00:00:00+00:00']], 'ms-graph'))->not->toBe($key)
+        ->and($service->pollRequestKey([], 'ms-graph'))->not->toBe($key);
+
+    foreach (['has_attachments', 'is_read'] as $filter) {
+        $enabled = $service->pollRequestKey([...$options, 'filters' => [$filter => true]], 'ms-graph');
+        $disabled = $service->pollRequestKey([...$options, 'filters' => [$filter => false]], 'ms-graph');
+
+        expect($service->pollRequestKey([...$options, 'filters' => [$filter => 1]], 'ms-graph'))->toBe($enabled)
+            ->and($service->pollRequestKey([...$options, 'filters' => [$filter => '0']], 'ms-graph'))->toBe($disabled)
+            ->and($service->pollRequestKey([...$options, 'filters' => [$filter => null]], 'ms-graph'))->toBe($key)
+            ->and($disabled)->not->toBe($key)
+            ->and($disabled)->not->toBe($enabled);
+    }
+});
+
+it('shares the poll key when sender and subject alternatives are reordered', function (): void {
+    $service = new MessageSyncService;
+    $filters = [
+        'from_email_addresses' => ['b@example.com', 'a@example.com'],
+        'subject_contains' => ['Invoice', 'Confirmation'],
+    ];
+    $key = $service->pollRequestKey(['filters' => $filters], 'ms-graph');
+
+    expect($service->pollRequestKey(['filters' => array_map(array_reverse(...), $filters)], 'ms-graph'))->toBe($key)
+        ->and($service->pollRequestKey(['filters' => [...$filters, 'subject_contains' => ['Invoice', 'Receipt']]], 'ms-graph'))->not->toBe($key);
+});
+
 it('persists valid query outcomes and retains exact provider correlations without a clean timestamp', function (): void {
     $mailbox = createTestMailbox('Partial', 'reader@example.com', 'Reader');
     $resource = syncResultResource('ms-graph', [['value' => [

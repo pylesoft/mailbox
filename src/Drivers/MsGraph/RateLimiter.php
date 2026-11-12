@@ -25,6 +25,7 @@ class RateLimiter
 
         $maxSlots = max(1, (int) ($this->config['max_concurrent_per_mailbox'] ?? config('mailbox.max_concurrent_per_mailbox', 4)));
         $timeout = (int) ($this->config['concurrency_lock_timeout'] ?? config('mailbox.concurrency_lock_timeout', 30));
+        $lease = $callback instanceof MailboxSlotAttempt ? max($timeout, $callback->leaseSeconds) : $timeout;
         $pollIntervalMicros = 100_000;
 
         $startedAt = microtime(true);
@@ -35,7 +36,7 @@ class RateLimiter
             for ($index = 1; $index <= $maxSlots; $index++) {
                 $candidate = Cache::lock(
                     sprintf('mailbox:lock:%s:%s:slot:%d', $normalizedDriver, $normalizedMailbox, $index),
-                    $timeout,
+                    $lease,
                 );
 
                 if ($candidate->get()) {
