@@ -50,6 +50,9 @@ class GraphClient
         ?Client $client = null,
         private readonly ?GrantAuthorization $grantAuthorization = null,
     ) {
+        if ($client === null && function_exists('curl_exec')) {
+            $this->boundedGraphTransport = new BoundedGraphTransport;
+        }
         $this->bootApiClient(
             $this->config,
             $client,
@@ -107,7 +110,8 @@ class GraphClient
         try {
             $payload = $this->consumeBoundedResponse('POST', $this->resolveApiTarget($endpoint), $endpoint, ['query' => null, 'json' => ['requests' => $requests],
                 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox,
-                fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, false, $deadline));
+                fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, false, $deadline),
+                $budget, $budget->remaining());
         } catch (RequestException $exception) {
             $this->throwMappedException($exception, $mailbox, $mailbox, $endpoint, 1);
         }
@@ -207,7 +211,8 @@ class GraphClient
         return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
             ['stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => ['Accept' => 'message/rfc822', 'Accept-Encoding' => 'identity'],
                 'timeout' => 20, 'connect_timeout' => 5], $mailbox,
-            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): string => $this->readMessageHeaderBlock($response, $budget, $endpoint, $mailbox, $deadline));
+            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): string => $this->readMessageHeaderBlock($response, $budget, $endpoint, $mailbox, $deadline),
+            $budget, $budget->remaining(), mimeHeadersOnly: true);
     }
 
     private function readMessageHeaderBlock(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, #[\SensitiveParameter] string $endpoint, string $mailbox, ?int $deadline): string

@@ -20,24 +20,12 @@ class RateLimiter
     /** @param callable():ResponseInterface $callback */
     public function forMailbox(string $driver, string $mailbox, #[\SensitiveParameter] callable $callback): ResponseInterface
     {
-        return $this->withMailboxSlot($driver, $mailbox, $callback);
-    }
-
-    /**
-     * @internal
-     *
-     * @template T
-     *
-     * @param  callable():T  $callback
-     * @return T
-     */
-    public function withMailboxSlot(string $driver, string $mailbox, #[\SensitiveParameter] callable $callback, ?int $leaseSeconds = null): mixed
-    {
         $normalizedDriver = strtolower(trim($driver)) !== '' ? strtolower(trim($driver)) : 'unknown';
         $normalizedMailbox = strtolower(trim($mailbox)) !== '' ? strtolower(trim($mailbox)) : 'global';
 
         $maxSlots = max(1, (int) ($this->config['max_concurrent_per_mailbox'] ?? config('mailbox.max_concurrent_per_mailbox', 4)));
         $timeout = (int) ($this->config['concurrency_lock_timeout'] ?? config('mailbox.concurrency_lock_timeout', 30));
+        $lease = $callback instanceof MailboxSlotAttempt ? max($timeout, $callback->leaseSeconds) : $timeout;
         $pollIntervalMicros = 100_000;
 
         $startedAt = microtime(true);
@@ -48,7 +36,7 @@ class RateLimiter
             for ($index = 1; $index <= $maxSlots; $index++) {
                 $candidate = Cache::lock(
                     sprintf('mailbox:lock:%s:%s:slot:%d', $normalizedDriver, $normalizedMailbox, $index),
-                    max($timeout, $leaseSeconds ?? $timeout),
+                    $lease,
                 );
 
                 if ($candidate->get()) {

@@ -12,6 +12,7 @@ use GuzzleHttp\Psr7\Utils;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
+use Psr\Http\Message\ResponseInterface;
 use Pyle\Mailbox\Drivers\MsGraph\BatchRequest;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMessageQuery;
@@ -51,6 +52,7 @@ it('holds the Graph slot through the response read and close beyond the admissio
         'JSON' => $graph->getBoundedObject($endpoint, $budget, mailbox: $mailbox),
         'attachment' => $graph->streamBounded($endpoint.'/$value', $budget, 1024, $mailbox)->close(),
         'MIME' => $graph->messageHeaderBlock($endpoint, $budget, $mailbox),
+        'one attempt' => $graph->requestOnce('GET', $endpoint, mailbox: $mailbox),
     };
 
     expect($blockedWhileReading)->toBeTrue()
@@ -60,6 +62,7 @@ it('holds the Graph slot through the response read and close beyond the admissio
     'bounded JSON' => ['JSON', '{}'],
     'bounded attachment' => ['attachment', 'file bytes'],
     'MIME headers' => ['MIME', "Subject: test\r\n\r\nbody"],
+    'one-attempt GET' => ['one attempt', '{}'],
 ]);
 
 it('releases the Graph slot before backing off after a failed read', function (bool $bounded): void {
@@ -139,12 +142,57 @@ it('rejects a Graph page with valid JSON of the wrong shape without replaying it
         ->and($history)->toHaveCount(1);
 });
 
+it('uses the supplied rate limiter for bounded and buffered Graph reads', function (string $mode): void {
+    $limiter = new class([]) extends RateLimiter
+    {
+        public int $calls = 0;
+
+        public function forMailbox(string $driver, string $mailbox, callable $callback): ResponseInterface
+        {
+            $this->calls++;
+
+            return new Response(200, [], '{"custom":true}');
+        }
+    };
+    $history = [];
+    $graph = lifetimeGraphClient([], $history, limiter: $limiter);
+    $endpoint = 'users/reader%40example.com/messages/message';
+    $mailbox = 'reader@example.com';
+
+    $result = match ($mode) {
+        'bounded' => (array) $graph->getBoundedObject($endpoint, new ResponseBudget(1024), mailbox: $mailbox),
+        'buffered' => $graph->get($endpoint, mailbox: $mailbox),
+        'one attempt' => json_decode($graph->requestOnce('GET', $endpoint, mailbox: $mailbox)->body(), true, flags: JSON_THROW_ON_ERROR),
+    };
+
+    expect($result)->toBe(['custom' => true])->and($limiter->calls)->toBe(1)->and($history)->toBe([]);
+})->with(['bounded', 'buffered', 'one attempt']);
+
+it('returns a failed one-attempt Graph read without replay', function (): void {
+    $history = [];
+    $graph = lifetimeGraphClient([new Response(502, ['Retry-After' => '60'], '{}'), new Response(200, [], '{}')], $history);
+    $response = $graph->requestOnce('GET', 'users/reader%40example.com/messages/message', mailbox: 'reader@example.com');
+
+    expect($response->status)->toBe(502)
+        ->and($response->headers['retry-after'])->toBe(['60'])
+        ->and($history)->toHaveCount(1);
+});
+
+it('uses a finite timeout for buffered Graph requests that disable the HTTP timeout', function (): void {
+    $history = [];
+    $graph = lifetimeGraphClient([new Response(200, [], '{}')], $history, ['timeout' => 7]);
+
+    $graph->request('GET', 'users/reader%40example.com/messages/message', ['timeout' => 0], 'reader@example.com');
+
+    expect($history[0]['options']['timeout'])->toBe(7);
+});
+
 /**
  * @param  list<Response>  $responses
  * @param  array<int, array<string, mixed>>  $history
  * @param  array<string, mixed>  $config
  */
-function lifetimeGraphClient(array $responses, array &$history, array $config = []): GraphClient
+function lifetimeGraphClient(array $responses, array &$history, array $config = [], ?RateLimiter $limiter = null): GraphClient
 {
     $config += ['max_concurrent_per_mailbox' => 1, 'concurrency_lock_timeout' => 30];
     $stack = HandlerStack::create(new MockHandler($responses));
@@ -157,5 +205,5 @@ function lifetimeGraphClient(array $responses, array &$history, array $config = 
         }
     };
 
-    return new GraphClient($config, $tokens, new RateLimiter($config), new Client(['handler' => $stack]));
+    return new GraphClient($config, $tokens, $limiter ?? new RateLimiter($config), new Client(['handler' => $stack]));
 }

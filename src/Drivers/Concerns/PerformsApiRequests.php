@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\Log;
 use JsonException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
+use Pyle\Mailbox\Drivers\MsGraph\BoundedGraphTransport;
+use Pyle\Mailbox\Drivers\MsGraph\MailboxSlotAttempt;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\GrantAccessDeniedException;
 use Pyle\Mailbox\Exceptions\GrantRefreshException;
@@ -31,6 +33,8 @@ use Pyle\Mailbox\Support\ResponseBudget;
 trait PerformsApiRequests
 {
     private Client $client;
+
+    private ?BoundedGraphTransport $boundedGraphTransport = null;
 
     private int $requestTimeoutSeconds;
 
@@ -151,7 +155,8 @@ trait PerformsApiRequests
 
         return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
             [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => [...$headers, 'Accept-Encoding' => 'identity']], $mailbox,
-            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, $associative, $deadline));
+            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, $associative, $deadline),
+            $budget, $budget->remaining());
     }
 
     /** @return array<string, mixed>|\stdClass */
@@ -338,48 +343,57 @@ trait PerformsApiRequests
     {
         $budget?->assertMemoryAvailable(65_536);
         $attempted = false;
-        try {
-            $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, function () use ($method, $target, $options, $mailboxKey, $authenticated, $beforeRequest, &$attempted): ResponseInterface {
-                $client = $this->client;
-                $requestOptions = $options;
-                if ($authenticated) {
-                    $requestOptions = $this->buildRequestOptions($options, $mailboxKey);
-                } else {
-                    $configuration = $client->getConfig();
-                    foreach (['headers', 'auth', 'cookies', 'query', 'body', 'json', 'multipart', 'form_params'] as $name) {
-                        unset($configuration[$name]);
-                    }
-                    $configuration['headers'] = [];
-                    if (isset($configuration['curl']) && is_array($configuration['curl'])) {
-                        foreach (['CURLOPT_USERPWD', 'CURLOPT_USERNAME', 'CURLOPT_PASSWORD', 'CURLOPT_HTTPAUTH', 'CURLOPT_XOAUTH2_BEARER',
-                            'CURLOPT_LOGIN_OPTIONS', 'CURLOPT_NETRC', 'CURLOPT_NETRC_FILE', 'CURLOPT_COOKIE', 'CURLOPT_COOKIEFILE',
-                            'CURLOPT_COOKIEJAR', 'CURLOPT_COOKIELIST', 'CURLOPT_COOKIESESSION', 'CURLOPT_HTTPHEADER',
-                            'CURLOPT_USERAGENT', 'CURLOPT_REFERER', 'CURLOPT_ENCODING', 'CURLOPT_ACCEPT_ENCODING', 'CURLOPT_HTTP_CONTENT_DECODING',
-                            'CURLOPT_URL', 'CURLOPT_CURLU', 'CURLOPT_PORT', 'CURLOPT_REQUEST_TARGET', 'CURLOPT_FOLLOWLOCATION',
-                            'CURLOPT_CUSTOMREQUEST', 'CURLOPT_HTTPGET', 'CURLOPT_POST', 'CURLOPT_PUT', 'CURLOPT_NOBODY', 'CURLOPT_UPLOAD',
-                            'CURLOPT_POSTFIELDS', 'CURLOPT_POSTFIELDSIZE', 'CURLOPT_POSTFIELDSIZE_LARGE', 'CURLOPT_MIMEPOST', 'CURLOPT_HTTPPOST',
-                            'CURLOPT_READFUNCTION', 'CURLOPT_READDATA', 'CURLOPT_INFILE', 'CURLOPT_INFILESIZE', 'CURLOPT_INFILESIZE_LARGE',
-                            'CURLOPT_VERBOSE', 'CURLOPT_STDERR', 'CURLOPT_HEADER', 'CURLOPT_RETURNTRANSFER'] as $option) {
-                            if (defined($option)) {
-                                unset($configuration['curl'][constant($option)]);
-                            }
+        $request = function (#[\SensitiveParameter] array $options) use ($method, $target, $mailboxKey, $authenticated, $beforeRequest, &$attempted): ResponseInterface {
+            $client = $this->client;
+            $requestOptions = $options;
+            if ($authenticated) {
+                $requestOptions = $this->buildRequestOptions($options, $mailboxKey);
+            } else {
+                $configuration = $client->getConfig();
+                foreach (['headers', 'auth', 'cookies', 'query', 'body', 'json', 'multipart', 'form_params'] as $name) {
+                    unset($configuration[$name]);
+                }
+                $configuration['headers'] = [];
+                if (isset($configuration['curl']) && is_array($configuration['curl'])) {
+                    foreach (['CURLOPT_USERPWD', 'CURLOPT_USERNAME', 'CURLOPT_PASSWORD', 'CURLOPT_HTTPAUTH', 'CURLOPT_XOAUTH2_BEARER',
+                        'CURLOPT_LOGIN_OPTIONS', 'CURLOPT_NETRC', 'CURLOPT_NETRC_FILE', 'CURLOPT_COOKIE', 'CURLOPT_COOKIEFILE',
+                        'CURLOPT_COOKIEJAR', 'CURLOPT_COOKIELIST', 'CURLOPT_COOKIESESSION', 'CURLOPT_HTTPHEADER',
+                        'CURLOPT_USERAGENT', 'CURLOPT_REFERER', 'CURLOPT_ENCODING', 'CURLOPT_ACCEPT_ENCODING', 'CURLOPT_HTTP_CONTENT_DECODING',
+                        'CURLOPT_URL', 'CURLOPT_CURLU', 'CURLOPT_PORT', 'CURLOPT_REQUEST_TARGET', 'CURLOPT_FOLLOWLOCATION',
+                        'CURLOPT_CUSTOMREQUEST', 'CURLOPT_HTTPGET', 'CURLOPT_POST', 'CURLOPT_PUT', 'CURLOPT_NOBODY', 'CURLOPT_UPLOAD',
+                        'CURLOPT_POSTFIELDS', 'CURLOPT_POSTFIELDSIZE', 'CURLOPT_POSTFIELDSIZE_LARGE', 'CURLOPT_MIMEPOST', 'CURLOPT_HTTPPOST',
+                        'CURLOPT_READFUNCTION', 'CURLOPT_READDATA', 'CURLOPT_INFILE', 'CURLOPT_INFILESIZE', 'CURLOPT_INFILESIZE_LARGE',
+                        'CURLOPT_VERBOSE', 'CURLOPT_STDERR', 'CURLOPT_HEADER', 'CURLOPT_RETURNTRANSFER'] as $option) {
+                        if (defined($option)) {
+                            unset($configuration['curl'][constant($option)]);
                         }
                     }
-                    $client = new Client($configuration);
                 }
-                foreach (array_keys($requestOptions['headers']) as $name) {
-                    if (is_string($name) && strcasecmp($name, 'Accept-Encoding') === 0) {
-                        unset($requestOptions['headers'][$name]);
-                    }
+                $client = new Client($configuration);
+            }
+            foreach (array_keys($requestOptions['headers']) as $name) {
+                if (is_string($name) && strcasecmp($name, 'Accept-Encoding') === 0) {
+                    unset($requestOptions['headers'][$name]);
                 }
-                $requestOptions['headers']['Accept-Encoding'] = 'identity';
-                $beforeRequest?->__invoke();
-                $attempted = true;
+            }
+            $requestOptions['headers']['Accept-Encoding'] = 'identity';
+            $beforeRequest?->__invoke();
+            $attempted = true;
 
-                return $client->request($method, $target, array_merge($requestOptions, [
-                    'allow_redirects' => false, 'debug' => false, 'http_errors' => false, 'stream' => true, 'decode_content' => false,
-                ]));
-            });
+            return $client->request($method, $target, array_merge($requestOptions, [
+                'allow_redirects' => false, 'debug' => false, 'http_errors' => false, 'stream' => true, 'decode_content' => false,
+            ]));
+        };
+
+        try {
+            if ($this->driverKey() === 'ms-graph' && strtoupper($method) === 'GET') {
+                return $this->consumeGraphResponse($mailboxKey, $options, $request,
+                    fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): ProviderWriteResponse => $this->decodeExchangeResponse(
+                        $response, $maxResponseBytes, $budget, $maxSuccessResponseBytes, $deadline),
+                    $budget, $maxResponseBytes, allowTruncated: true, maxSuccessBytes: $maxSuccessResponseBytes);
+            }
+
+            $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, fn (): ResponseInterface => $request($options));
         } catch (\Throwable $e) {
             if (! $attempted) {
                 if ($e instanceof GrantAccessDeniedException || $e instanceof GrantRefreshException || $e instanceof RateLimitException) {
@@ -393,6 +407,11 @@ trait PerformsApiRequests
             }
         }
 
+        return $this->decodeExchangeResponse($response, $maxResponseBytes, $budget, $maxSuccessResponseBytes, null);
+    }
+
+    private function decodeExchangeResponse(#[\SensitiveParameter] ResponseInterface $response, int $maxResponseBytes, ?ResponseBudget $budget, ?int $maxSuccessResponseBytes, ?int $deadline): ProviderWriteResponse
+    {
         $headers = [];
         foreach (['date', 'retry-after', 'request-id', 'x-request-id', 'client-request-id', 'x-ms-request-id', 'x-guploader-uploadid'] as $name) {
             $values = $response->getHeader($name);
@@ -415,7 +434,9 @@ trait PerformsApiRequests
             }
             while (true) {
                 $budget?->assertMemoryAvailable(strlen($body) + 32_768);
+                $this->assertReadDeadline($deadline, '', null);
                 $chunk = $stream->read(min(8192, $maxResponseBytes - strlen($body) + 1));
+                $this->assertReadDeadline($deadline, '', null);
                 if ($chunk === '' && $stream->eof()) {
                     break;
                 }
@@ -476,7 +497,8 @@ trait PerformsApiRequests
 
         return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
             ['stream' => true, 'http_errors' => true, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox,
-            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): StreamInterface => $this->copyBoundedStream($response, $budget, $maxBytes, $endpoint, $mailbox, $deadline));
+            fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): StreamInterface => $this->copyBoundedStream($response, $budget, $maxBytes, $endpoint, $mailbox, $deadline),
+            $budget, min($maxBytes, $budget->remaining()));
     }
 
     private function copyBoundedStream(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, int $maxBytes, #[\SensitiveParameter] string $endpoint, ?string $mailbox, ?int $deadline): StreamInterface
@@ -613,9 +635,12 @@ trait PerformsApiRequests
 
         if ($this->driverKey() === 'ms-graph' && $method === 'GET'
             && ! ($options['stream'] ?? $this->client->getConfig('stream') ?? false)) {
-            $timeout = max(1, (int) ($options['timeout'] ?? $this->client->getConfig('timeout') ?? $this->requestTimeoutSeconds));
+            $timeout = (float) ($options['timeout'] ?? $this->client->getConfig('timeout') ?? $this->requestTimeoutSeconds);
+            if ($timeout <= 0) {
+                $timeout = $options['timeout'] = $this->requestTimeoutSeconds;
+            }
 
-            return $this->sendResolvedRequest($method, $target, $endpoint, $options, $mailbox, $mailboxKey, $retry, $timeout + $this->requestTimeoutSeconds + 5);
+            return $this->sendResolvedRequest($method, $target, $endpoint, $options, $mailbox, $mailboxKey, $retry, (int) ceil($timeout) + $this->requestTimeoutSeconds + 5);
         }
 
         return $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey,
@@ -629,7 +654,7 @@ trait PerformsApiRequests
      * @param  Closure(ResponseInterface, ?int):T  $consume
      * @return T
      */
-    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume): mixed
+    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false): mixed
     {
         if ($this->driverKey() !== 'ms-graph') {
             return $consume($this->requestResolvedTarget($method, $target, $endpoint, $options, $mailbox, retry: false), null);
@@ -637,29 +662,43 @@ trait PerformsApiRequests
 
         $endpoint = $this->redactedEndpoint($endpoint);
         $mailboxKey = $this->mailboxKey($mailbox);
+
+        return $this->consumeGraphResponse($mailboxKey, $options,
+            fn (#[\SensitiveParameter] array $requestOptions): ResponseInterface => $this->sendResolvedRequest($method, $target, $endpoint, $requestOptions, $mailbox, $mailboxKey, retry: false),
+            $consume, $budget, $maxBytes, $mimeHeadersOnly);
+    }
+
+    /**
+     * @template T
+     *
+     * @param  array<string, mixed>  $options
+     * @param  Closure(array<string, mixed>):ResponseInterface  $request
+     * @param  Closure(ResponseInterface, ?int):T  $consume
+     * @return T
+     */
+    private function consumeGraphResponse(string $mailboxKey, #[\SensitiveParameter] array $options, #[\SensitiveParameter] Closure $request, #[\SensitiveParameter] Closure $consume, ?ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $allowTruncated = false, ?int $maxSuccessBytes = null): mixed
+    {
         $timeout = $options['timeout'] ?? $this->requestTimeoutSeconds;
         $timeout = is_int($timeout) ? max(1, $timeout) : $this->requestTimeoutSeconds;
         $options['timeout'] = $timeout;
         $options['read_timeout'] = $timeout;
+        $options = $this->boundedGraphTransport?->options($options, $maxBytes, $budget, $mimeHeadersOnly, $allowTruncated, $maxSuccessBytes) ?? $options;
 
-        // A socket read can use its full timeout after starting just before the deadline.
+        // Injected clients and hosts without cURL depend on their handler's timeout semantics.
         $lease = 2 * $timeout + $this->requestTimeoutSeconds + 5;
+        $result = null;
+        $response = $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, new MailboxSlotAttempt($lease,
+            function () use ($options, $request, $timeout, $consume, &$result): ResponseInterface {
+                $deadline = hrtime(true) + $timeout * 1_000_000_000;
+                $response = $request($options);
+                $result = ['response' => $response, 'value' => $consume($response, $deadline)];
 
-        return $this->rateLimiter->withMailboxSlot($this->driverKey(), $mailboxKey, function () use ($method, $target, $endpoint, $options, $mailbox, $mailboxKey, $timeout, $consume) {
-            $deadline = hrtime(true) + $timeout * 1_000_000_000;
-            $response = $this->sendResolvedRequest($method, $target, $endpoint, $options, $mailbox, $mailboxKey, retry: false);
-            try {
-                $this->assertReadDeadline($deadline, $endpoint, $mailbox);
-            } catch (ProviderTransportException $exception) {
-                try {
-                    $response->getBody()->close();
-                } finally {
-                    throw $exception;
-                }
-            }
+                return $response;
+            }));
 
-            return $consume($response, $deadline);
-        }, $lease);
+        return $result !== null && $response === $result['response']
+            ? $result['value']
+            : $consume($response, null);
     }
 
     private function readResponseChunk(#[\SensitiveParameter] StreamInterface $stream, int $length, #[\SensitiveParameter] string $endpoint, ?string $mailbox, ?int $deadline): string
@@ -705,7 +744,7 @@ trait PerformsApiRequests
 
                 return $leasePerAttempt === null
                     ? $send()
-                    : $this->rateLimiter->withMailboxSlot($this->driverKey(), $mailboxKey, $send, $leasePerAttempt);
+                    : $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, new MailboxSlotAttempt($leasePerAttempt, $send));
             } catch (ConnectException $e) {
                 $curlErrorNumber = $e->getHandlerContext()['errno'] ?? null;
                 $diagnostic = is_int($curlErrorNumber) && $curlErrorNumber > 0 && $curlErrorNumber <= 999
@@ -761,6 +800,9 @@ trait PerformsApiRequests
             } catch (\Throwable $e) {
                 if ($leasePerAttempt !== null && $e instanceof RateLimitException) {
                     throw $e;
+                }
+                if ($this->boundedGraphTransport !== null && $e instanceof ResponseLimitExceededException) {
+                    throw new ResponseLimitExceededException('The provider response exceeded the remaining byte budget.');
                 }
 
                 throw $this->wrapUnexpectedThrowable(new \RuntimeException($this->providerLabel().' request failed ('.$e::class.').'), $method, $endpoint, $mailbox, $mailboxKey, $attempt);
