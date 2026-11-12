@@ -73,6 +73,7 @@ class MessageSyncService
         }
         foreach (['from_email_addresses', 'subject_contains'] as $filter) {
             $filters[$filter] = $this->normalizeStringArray($filters[$filter] ?? null);
+            sort($filters[$filter], SORT_STRING);
         }
         foreach (['has_attachments', 'is_read'] as $filter) {
             if (isset($filters[$filter])) {

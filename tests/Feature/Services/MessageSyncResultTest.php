@@ -47,6 +47,18 @@ it('compares poll requests using the SDK defaults without conflating different r
     }
 });
 
+it('shares the poll key when sender and subject alternatives are reordered', function (): void {
+    $service = new MessageSyncService;
+    $filters = [
+        'from_email_addresses' => ['b@example.com', 'a@example.com'],
+        'subject_contains' => ['Invoice', 'Confirmation'],
+    ];
+    $key = $service->pollRequestKey(['filters' => $filters], 'ms-graph');
+
+    expect($service->pollRequestKey(['filters' => array_map(array_reverse(...), $filters)], 'ms-graph'))->toBe($key)
+        ->and($service->pollRequestKey(['filters' => [...$filters, 'subject_contains' => ['Invoice', 'Receipt']]], 'ms-graph'))->not->toBe($key);
+});
+
 it('persists valid query outcomes and retains exact provider correlations without a clean timestamp', function (): void {
     $mailbox = createTestMailbox('Partial', 'reader@example.com', 'Reader');
     $resource = syncResultResource('ms-graph', [['value' => [
