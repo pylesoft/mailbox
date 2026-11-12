@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace Pyle\Mailbox\Drivers\MsGraph;
 
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Handler\CurlHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
 use GuzzleHttp\Psr7\FnStream;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Utils;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Pyle\Mailbox\Exceptions\ProviderTransportException;
 use Pyle\Mailbox\Exceptions\ResponseLimitExceededException;
 use Pyle\Mailbox\Support\ResponseBudget;
 use RuntimeException;
@@ -25,6 +28,11 @@ final class BoundedGraphTransport
     public function __construct()
     {
         $this->curl = new CurlHandler;
+    }
+
+    public static function mayContainSyncReset(int $status): bool
+    {
+        return in_array($status, [400, 404, 410], true);
     }
 
     /**
@@ -40,6 +48,7 @@ final class BoundedGraphTransport
         $stop = false;
         $overflow = false;
         $tail = '';
+        $received = null;
         $rejectHttpError = ($options['http_errors'] ?? false) === true;
 
         $sink = FnStream::decorate($body, [
@@ -69,13 +78,15 @@ final class BoundedGraphTransport
             },
         ]);
 
-        $options['on_headers'] = static function (#[\SensitiveParameter] ResponseInterface $response) use ($rejectHttpError, $mimeHeadersOnly, $maxSuccessBytes, $extra, &$remaining, &$stop): void {
+        $options['on_headers'] = static function (#[\SensitiveParameter] ResponseInterface $response) use ($rejectHttpError, $mimeHeadersOnly, $allowTruncated, $maxSuccessBytes, $extra, &$remaining, &$stop, &$received): void {
             $status = $response->getStatusCode();
             if ($status < 200) {
                 return;
             }
 
-            if (($rejectHttpError && $status >= 400) || ($mimeHeadersOnly && $status !== 200)
+            $received = $response;
+            if (($status >= 400 && ($rejectHttpError || (! $allowTruncated && ! self::mayContainSyncReset($status))))
+                || ($mimeHeadersOnly && $status !== 200)
                 || ! in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
                 $stop = true;
                 throw new RuntimeException('The Graph response body is not needed for this status.');
@@ -85,8 +96,8 @@ final class BoundedGraphTransport
             }
         };
 
-        $options['handler'] = HandlerStack::create(function (#[\SensitiveParameter] RequestInterface $request, #[\SensitiveParameter] array $options) use ($sink, $budget, $allowTruncated, &$stop, &$overflow, &$written): PromiseInterface {
-            return ($this->curl)($request, $options)->otherwise(static function (#[\SensitiveParameter] mixed $failure) use ($sink, $budget, $allowTruncated, &$stop, &$overflow, &$written): ResponseInterface|PromiseInterface {
+        $options['handler'] = HandlerStack::create(function (#[\SensitiveParameter] RequestInterface $request, #[\SensitiveParameter] array $options) use ($sink, $budget, $allowTruncated, &$stop, &$overflow, &$written, &$received): PromiseInterface {
+            return ($this->curl)($request, $options)->otherwise(static function (#[\SensitiveParameter] mixed $failure) use ($sink, $budget, $allowTruncated, &$stop, &$overflow, &$written, &$received): ResponseInterface|PromiseInterface {
                 if ($stop && $failure instanceof RequestException && $failure->getResponse() instanceof ResponseInterface) {
                     $sink->rewind();
 
@@ -99,6 +110,20 @@ final class BoundedGraphTransport
                 }
                 if ($overflow) {
                     throw new ResponseLimitExceededException('The provider response exceeded the remaining byte budget.');
+                }
+
+                if ($received !== null && ($failure instanceof ConnectException || $failure instanceof RequestException)
+                    && ($failure->getHandlerContext()['http_code'] ?? null) === $received->getStatusCode()) {
+                    if ($allowTruncated) {
+                        return $received;
+                    }
+                    $status = $received->getStatusCode();
+                    if ($status >= 200 && $status < 300) {
+                        throw new ProviderTransportException('The Graph response transfer was interrupted.');
+                    }
+                    if ($status >= 400 && $failure instanceof ConnectException) {
+                        throw new RequestException('The Graph error response transfer was interrupted.', new Request($failure->getRequest()->getMethod(), '/'), $received);
+                    }
                 }
 
                 return Create::rejectionFor($failure);

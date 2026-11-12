@@ -168,6 +168,24 @@ it('uses the supplied rate limiter for bounded and buffered Graph reads', functi
     expect($result)->toBe(['custom' => true])->and($limiter->calls)->toBe(1)->and($history)->toBe([]);
 })->with(['bounded', 'buffered', 'one attempt']);
 
+it('does not reread a consumed Graph body when the limiter clones the response', function (): void {
+    $limiter = new class([]) extends RateLimiter
+    {
+        public function forMailbox(string $driver, string $mailbox, callable $callback): ResponseInterface
+        {
+            return parent::forMailbox($driver, $mailbox, $callback)->withHeader('X-Custom', 'test');
+        }
+    };
+    $history = [];
+    $graph = lifetimeGraphClient([new Response(200, [], '{"value":[]}')], $history, limiter: $limiter);
+    $budget = new ResponseBudget(1024);
+
+    expect($graph->getBoundedObject('users/reader%40example.com/messages', $budget, mailbox: 'reader@example.com')->value)
+        ->toBe([])
+        ->and($budget->remaining())->toBe(1012)
+        ->and($history)->toHaveCount(1);
+});
+
 it('returns a failed one-attempt Graph read without replay', function (): void {
     $history = [];
     $graph = lifetimeGraphClient([new Response(502, ['Retry-After' => '60'], '{}'), new Response(200, [], '{}')], $history);

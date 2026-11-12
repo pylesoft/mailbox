@@ -163,6 +163,14 @@ trait PerformsApiRequests
     private function decodeBoundedResponse(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, #[\SensitiveParameter] string $endpoint, ?string $mailbox, bool $associative, ?int $deadline): array|\stdClass
     {
         $stream = $response->getBody();
+        $status = $response->getStatusCode();
+        if ($status >= 400 && $this->driverKey() === 'ms-graph' && ! BoundedGraphTransport::mayContainSyncReset($status)) {
+            try {
+                $stream->close();
+            } finally {
+                $this->throwBoundedHttpError($response, $endpoint);
+            }
+        }
         $body = '';
 
         try {
@@ -200,26 +208,15 @@ trait PerformsApiRequests
 
         $budget->assertJsonDecodeMemory($body);
 
-        if ($response->getStatusCode() >= 400) {
-            $endpoint = $this->redactedEndpoint($endpoint);
-            $message = $this->providerLabel().' request failed with HTTP '.$response->getStatusCode().'.';
-            if ($this->driverKey() === 'ms-graph' && in_array($response->getStatusCode(), [400, 404, 410], true)
-                && $this->graphSyncResetCode($body) !== null) {
-                throw new ApiRequestException($message, status: $response->getStatusCode(), endpoint: $endpoint, providerCode: 'syncStateNotFound');
-            }
-            $request = new Request('GET', $endpoint);
-            $failure = new RequestException($message, $request, $response);
-            $failure = new RequestException($message, $request, new Response($response->getStatusCode(), [
-                'Retry-After' => (string) $this->retryAfterSeconds($failure),
-            ]));
-            throw $failure;
+        if ($status >= 400) {
+            $syncReset = $this->driverKey() === 'ms-graph' && $this->graphSyncResetCode($body) !== null;
+            $this->throwBoundedHttpError($response, $endpoint, $syncReset);
         }
 
         try {
             $decoded = json_decode($body, $associative, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException) {
-            if ($this->driverKey() === 'ms-graph' && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300
-                && $response->getStatusCode() !== 204) {
+            if ($this->driverKey() === 'ms-graph' && $status >= 200 && $status < 300 && $status !== 204) {
                 throw new ProviderTransportException(
                     message: 'Graph returned invalid JSON for a bounded read.',
                     endpoint: $this->redactedEndpoint($endpoint),
@@ -234,6 +231,22 @@ trait PerformsApiRequests
         }
 
         return $decoded;
+    }
+
+    private function throwBoundedHttpError(#[\SensitiveParameter] ResponseInterface $response, #[\SensitiveParameter] string $endpoint, bool $syncReset = false): never
+    {
+        $status = $response->getStatusCode();
+        $endpoint = $this->redactedEndpoint($endpoint);
+        $message = $this->providerLabel().' request failed with HTTP '.$status.'.';
+        if ($syncReset) {
+            throw new ApiRequestException($message, status: $status, endpoint: $endpoint, providerCode: 'syncStateNotFound');
+        }
+
+        $request = new Request('GET', $endpoint);
+        $failure = new RequestException($message, $request, $response);
+        throw new RequestException($message, $request, new Response($status, [
+            'Retry-After' => (string) $this->retryAfterSeconds($failure),
+        ]));
     }
 
     private function graphSyncResetCode(#[\SensitiveParameter] string $body): ?string
@@ -429,7 +442,7 @@ trait PerformsApiRequests
         $stream = $response->getBody();
         $body = '';
         try {
-            if (! in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
+            if (! $stream->isReadable() || ! in_array(strtolower(trim($response->getHeaderLine('Content-Encoding'))), ['', 'identity'], true)) {
                 return new ProviderWriteResponse($response->getStatusCode(), $headers);
             }
             while (true) {
@@ -696,7 +709,7 @@ trait PerformsApiRequests
                 return $response;
             }));
 
-        return $result !== null && $response === $result['response']
+        return $result !== null && $response->getBody() === $result['response']->getBody()
             ? $result['value']
             : $consume($response, null);
     }
@@ -800,6 +813,9 @@ trait PerformsApiRequests
             } catch (\Throwable $e) {
                 if ($leasePerAttempt !== null && $e instanceof RateLimitException) {
                     throw $e;
+                }
+                if ($this->boundedGraphTransport !== null && $e instanceof ProviderTransportException) {
+                    throw new ProviderTransportException('The Graph response transfer was interrupted.', $endpoint, $mailbox, $attempt);
                 }
                 if ($this->boundedGraphTransport !== null && $e instanceof ResponseLimitExceededException) {
                     throw new ResponseLimitExceededException('The provider response exceeded the remaining byte budget.');

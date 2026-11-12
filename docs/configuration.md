@@ -248,6 +248,8 @@ These settings control how Mailbox handles transient failures, rate limits, and 
 | `max_concurrent_per_mailbox` | -- | `4` | Maximum number of simultaneous API requests allowed per mailbox. Mailbox uses cache-based locks to enforce this across all workers and processes. Prevents a single mailbox from exhausting your provider's rate limit. |
 | `concurrency_lock_timeout` | -- | `30` | Maximum time in seconds to wait for a concurrency slot before throwing a `RateLimitException`. If all slots are busy for longer than this, the request fails. |
 
+With the default limiter, bounded Microsoft Graph reads hold a mailbox slot until the response body closes and release it before retry backoff. With the default Graph client and cURL, the per-request timeout covers the full HTTP transfer, including response headers. Injected HTTP clients and installations without cURL use the timeout behavior of their HTTP handler.
+
 ### Queue Retry Strategy
 
 ```php
