@@ -669,7 +669,7 @@ trait PerformsApiRequests
      * @param  Closure(ResponseInterface, ?int):T  $consume
      * @return T
      */
-    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $refreshToken = false): mixed
+    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $refreshToken = false): mixed
     {
         if ($this->driverKey() !== 'ms-graph') {
             return $consume($this->requestResolvedTarget($method, $target, $endpoint, $options, $mailbox, retry: false), null);
@@ -684,7 +684,7 @@ trait PerformsApiRequests
             try {
                 return $this->consumeGraphResponse($mailboxKey, $options,
                     fn (#[\SensitiveParameter] array $requestOptions): ResponseInterface => $this->sendResolvedRequest($method, $target, $endpoint, $requestOptions, $mailbox, $mailboxKey, retry: false, propagateUnauthorized: $refreshToken),
-                    $consume, $budget, $maxBytes);
+                    $consume, $budget, $maxBytes, $mimeHeadersOnly);
             } catch (RequestException $exception) {
                 if (! $refreshToken || $exception->getResponse()?->getStatusCode() !== 401) {
                     throw $exception;
