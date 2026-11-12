@@ -40,7 +40,16 @@ jobs:
             ${{ runner.os }}-php-${{ matrix.php }}-composer-latest-
             ${{ runner.os }}-php-${{ matrix.php }}-composer-
 
-      - run: composer update --with "laravel/framework:${{ matrix.laravel }}" --no-interaction --prefer-dist --no-progress
+      - name: Install latest compatible dependencies
+        env:
+          LARAVEL_VERSION: ${{ matrix.laravel }}
+        run: |
+          constraints=(--with "laravel/framework:$LARAVEL_VERSION")
+          if [[ "$LARAVEL_VERSION" == '13.*' ]]; then
+            # Pest 5 still expects flat test filenames, which ParaTest 7.28 changed to groups.
+            constraints+=(--with 'brianium/paratest:<7.28')
+          fi
+          composer update "${constraints[@]}" --no-interaction --prefer-dist --no-progress
       - run: vendor/bin/pest --parallel --processes=2
 
   qa-static-style:
