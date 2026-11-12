@@ -48,6 +48,8 @@ trait PerformsApiRequests
 
     private bool $queueReleaseAllowed = true;
 
+    private bool $queueManagedPollReads = false;
+
     /** @param array<string, mixed> $config */
     protected function bootApiClient(array $config, ?Client $client, string $baseUri): void
     {
@@ -101,8 +103,9 @@ trait PerformsApiRequests
      * @param  array<string, string>  $headers
      * @return array<string, mixed>|\stdClass
      */
-    private function readBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $retry, bool $associative, array $headers = [], bool $queueManagedRetry = false): array|\stdClass
+    private function readBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $retry, bool $associative, array $headers = []): array|\stdClass
     {
+        $retry = $retry && ! $this->queueManagedPollReads;
         $queueReleaseAllowed = $this->queueReleaseAllowed;
         $this->queueReleaseAllowed = false;
         $attempt = 0;
@@ -118,10 +121,10 @@ trait PerformsApiRequests
                 $attempt++;
                 $startedAt = microtime(true);
                 try {
-                    return $this->requestBounded($endpoint, $budget, $query, $mailbox, $associative, $headers, $queueManagedRetry);
+                    return $this->requestBounded($endpoint, $budget, $query, $mailbox, $associative, $headers);
                 } catch (RequestException $e) {
                     $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
-                    $refreshToken = $queueManagedRetry && $e->getResponse()?->getStatusCode() === 401;
+                    $refreshToken = $this->queueManagedPollReads && $e->getResponse()?->getStatusCode() === 401;
                     if (($retry || $refreshToken) && $this->shouldRetryRequest($e, 'GET', $safeEndpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
                         continue;
                     }
@@ -148,7 +151,7 @@ trait PerformsApiRequests
      * @param  array<string, string>  $headers
      * @return array<string, mixed>|\stdClass
      */
-    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $associative, array $headers, bool $queueManagedRetry): array|\stdClass
+    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $associative, array $headers): array|\stdClass
     {
         $budget->assertMemoryAvailable(65536);
         $options = $query === [] ? [] : ['query' => $query];
@@ -159,7 +162,7 @@ trait PerformsApiRequests
         return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
             [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => [...$headers, 'Accept-Encoding' => 'identity']], $mailbox,
             fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, $associative, $deadline),
-            $budget, $budget->remaining(), waitForSlot: ! $queueManagedRetry);
+            $budget, $budget->remaining());
     }
 
     /** @return array<string, mixed>|\stdClass */
@@ -646,7 +649,7 @@ trait PerformsApiRequests
         $mailboxKey = $this->mailboxKey($mailbox);
 
         if ($this->driverKey() === 'ms-graph' && $method === 'GET'
-            && ! ($options['stream'] ?? $this->client->getConfig('stream') ?? false)) {
+            && ($this->queueManagedPollReads || ! ($options['stream'] ?? $this->client->getConfig('stream') ?? false))) {
             $timeout = (float) ($options['timeout'] ?? $this->client->getConfig('timeout') ?? $this->requestTimeoutSeconds);
             if ($timeout <= 0) {
                 $timeout = $options['timeout'] = $this->requestTimeoutSeconds;
@@ -666,7 +669,7 @@ trait PerformsApiRequests
      * @param  Closure(ResponseInterface, ?int):T  $consume
      * @return T
      */
-    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $waitForSlot = true): mixed
+    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false): mixed
     {
         if ($this->driverKey() !== 'ms-graph') {
             return $consume($this->requestResolvedTarget($method, $target, $endpoint, $options, $mailbox, retry: false), null);
@@ -677,7 +680,7 @@ trait PerformsApiRequests
 
         return $this->consumeGraphResponse($mailboxKey, $options,
             fn (#[\SensitiveParameter] array $requestOptions): ResponseInterface => $this->sendResolvedRequest($method, $target, $endpoint, $requestOptions, $mailbox, $mailboxKey, retry: false),
-            $consume, $budget, $maxBytes, $mimeHeadersOnly, waitForSlot: $waitForSlot);
+            $consume, $budget, $maxBytes, $mimeHeadersOnly);
     }
 
     /**
@@ -688,7 +691,7 @@ trait PerformsApiRequests
      * @param  Closure(ResponseInterface, ?int):T  $consume
      * @return T
      */
-    private function consumeGraphResponse(string $mailboxKey, #[\SensitiveParameter] array $options, #[\SensitiveParameter] Closure $request, #[\SensitiveParameter] Closure $consume, ?ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $allowTruncated = false, ?int $maxSuccessBytes = null, bool $waitForSlot = true): mixed
+    private function consumeGraphResponse(string $mailboxKey, #[\SensitiveParameter] array $options, #[\SensitiveParameter] Closure $request, #[\SensitiveParameter] Closure $consume, ?ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $allowTruncated = false, ?int $maxSuccessBytes = null): mixed
     {
         $timeout = $options['timeout'] ?? $this->requestTimeoutSeconds;
         $timeout = is_int($timeout) ? max(1, $timeout) : $this->requestTimeoutSeconds;
@@ -706,7 +709,7 @@ trait PerformsApiRequests
                 $result = ['response' => $response, 'value' => $consume($response, $deadline)];
 
                 return $response;
-            }, $waitForSlot));
+            }, waitForSlot: ! $this->queueManagedPollReads));
 
         return $result !== null && $response->getBody() === $result['response']->getBody()
             ? $result['value']
@@ -744,6 +747,8 @@ trait PerformsApiRequests
     /** @param array<string, mixed> $options */
     private function sendResolvedRequest(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, string $mailboxKey, bool $retry, ?int $leasePerAttempt = null): ResponseInterface
     {
+        $refreshToken = $retry && $this->queueManagedPollReads;
+        $retry = $retry && ! $this->queueManagedPollReads;
         $attempt = 0;
         $reauthAttempted = false;
 
@@ -756,7 +761,7 @@ trait PerformsApiRequests
 
                 return $leasePerAttempt === null
                     ? $send()
-                    : $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, new MailboxSlotAttempt($leasePerAttempt, $send));
+                    : $this->rateLimiter->forMailbox($this->driverKey(), $mailboxKey, new MailboxSlotAttempt($leasePerAttempt, $send, waitForSlot: ! $this->queueManagedPollReads));
             } catch (ConnectException $e) {
                 $curlErrorNumber = $e->getHandlerContext()['errno'] ?? null;
                 $diagnostic = is_int($curlErrorNumber) && $curlErrorNumber > 0 && $curlErrorNumber <= 999
@@ -802,7 +807,8 @@ trait PerformsApiRequests
                     );
                 }
 
-                if ($retry && $this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
+                if (($retry || ($refreshToken && $status === 401))
+                    && $this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
                     continue;
                 }
 

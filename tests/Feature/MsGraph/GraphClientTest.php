@@ -16,8 +16,25 @@ use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
 use Pyle\Mailbox\Drivers\MsGraph\TokenManager;
 use Pyle\Mailbox\Events\RateLimitHit;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
+use Pyle\Mailbox\Exceptions\AuthenticationException;
 use Pyle\Mailbox\Exceptions\MailboxAccessDeniedException;
 use Pyle\Mailbox\Exceptions\RateLimitException;
+use Pyle\Mailbox\Support\ResponseBudget;
+
+it('refreshes a Graph token once during a queue-owned poll read', function (bool $bounded): void {
+    $handler = new MockHandler([new Response(401), new Response(401), new Response(200)]);
+    $client = new Client(['handler' => HandlerStack::create($handler), 'base_uri' => 'https://graph.microsoft.com/v1.0/']);
+    $token = Mockery::mock(TokenManager::class);
+    $token->shouldReceive('getToken')->twice()->andReturn('token', 'refreshed');
+    $token->shouldReceive('invalidateToken')->once();
+    $graph = (new GraphClient([], $token, new RateLimiter([]), $client))->forQueueManagedPollReads();
+    $endpoint = 'users/reader%40example.com/messages';
+
+    expect(fn () => $bounded
+        ? $graph->getBoundedObject($endpoint, new ResponseBudget(4096), retry: true)
+        : $graph->get($endpoint.'/message/attachments'))->toThrow(AuthenticationException::class);
+    expect($handler)->toHaveCount(1);
+})->with(['message list' => [true], 'attachment list' => [false]]);
 
 it('retries on 429 then succeeds', function (): void {
     Event::fake([RateLimitHit::class]);

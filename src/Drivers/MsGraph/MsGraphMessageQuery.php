@@ -190,18 +190,12 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
     }
 
     /** @internal */
-    public function getQueueManagedResult(): MessageQueryResult
-    {
-        return $this->execute(true, queueManagedRetry: true);
-    }
-
-    /** @internal */
     public function getRecoveryPage(#[\SensitiveParameter] ?string $continuation): MessageQueryResult
     {
-        return $this->execute(true, queueManagedRetry: true, recoveryPage: true, continuation: $continuation);
+        return $this->execute(true, recoveryPage: true, continuation: $continuation);
     }
 
-    private function execute(bool $isolateHeaders, bool $queueManagedRetry = false, bool $recoveryPage = false, #[\SensitiveParameter] ?string $continuation = null): MessageQueryResult
+    private function execute(bool $isolateHeaders, bool $recoveryPage = false, #[\SensitiveParameter] ?string $continuation = null): MessageQueryResult
     {
         $pageSize = $this->pageSizeOverride ?? (int) config('mailbox.default_page_size', 50);
         $applyClientFiltersPerPage = $this->searchQuery !== null
@@ -256,9 +250,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
 
             if ($isolateHeaders) {
                 try {
-                    $payload = $queueManagedRetry
-                        ? $this->client->getQueueManagedPollObject($endpoint, $budget, $query, $this->mailbox)
-                        : $this->client->getBoundedObject($endpoint, $budget, $query, $this->mailbox, retry: true);
+                    $payload = $this->client->getBoundedObject($endpoint, $budget, $query, $this->mailbox, retry: true);
                 } catch (ApiRequestException $exception) {
                     if ($continuation !== null && ($exception->status === 410 || $exception->providerCode === 'syncStateNotFound')) {
                         throw new InvalidRecoveryContinuationException('Graph no longer accepts the recovery continuation.', previous: $exception);
@@ -338,7 +330,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
                     ? $this->client->continuationEndpoint($response['@odata.nextLink'], $scope, $this->mailbox)
                     : null;
                 if ($next !== null && isset($seenPageSignatures[$next.'|'])) {
-                    throw new ApiRequestException('The provider returned a cyclic continuation.');
+                    throw new InvalidRecoveryContinuationException('The provider returned a cyclic recovery continuation.');
                 }
 
                 return new MessageQueryResult($collected->values(), $rejections, exhausted: $next === null, nextContinuation: $next);

@@ -15,6 +15,7 @@ use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\SupportsExactMessageRead;
 use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
 use Pyle\Mailbox\Drivers\MsGraph\FolderIdResolver;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphMailboxResource;
 use Pyle\Mailbox\Drivers\MsGraph\MsGraphMessageQuery;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\MessageQueryResult;
@@ -86,6 +87,9 @@ class MessageSyncService
         $link = $continuation === null ? null : $this->recoveryLink($continuation, $context);
         $plan = $this->buildPlan($request, Carbon::now('UTC'));
         $resource = MailboxFacade::forMailbox($mailbox);
+        if ($resource instanceof MsGraphMailboxResource) {
+            $resource = $resource->forQueueManagedPollReads();
+        }
         $query = $this->messageQuery($resource, $plan);
         if (! $query instanceof MsGraphMessageQuery) {
             throw new UnsupportedCapabilityException('Recovery paging requires Microsoft Graph.');
@@ -163,9 +167,11 @@ class MessageSyncService
         $this->ensureMailboxHasDriver($mailbox);
         $plan = $this->buildPlan($request, Carbon::now('UTC'));
         $mailboxResource = MailboxFacade::forMailbox($mailbox);
+        if ($isolateHeaders && ($options['queue_managed_retry'] ?? false) === true && $mailboxResource instanceof MsGraphMailboxResource) {
+            $mailboxResource = $mailboxResource->forQueueManagedPollReads();
+        }
         $query = $this->messageQuery($mailboxResource, $plan);
         $outcome = match (true) {
-            $isolateHeaders && $query instanceof MsGraphMessageQuery && ($options['queue_managed_retry'] ?? false) === true => $query->getQueueManagedResult(),
             $isolateHeaders && $query instanceof SupportsMessageQueryResults => $query->getResult(),
             default => new MessageQueryResult($query->get(), collect(), false),
         };

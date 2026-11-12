@@ -71,6 +71,14 @@ foreach ($result->persisted as $entry) {
 
 Partial results leave `last_synced_at` unchanged. A result without rejections retains the existing timestamp behavior; this timestamp does not attest complete mailbox coverage. `exhausted` follows the native query result. For a custom query without `SupportsMessageQueryResults`, the service uses strict `get()` and reports `exhausted=false` because completion is unknown. Operational and persistence errors still propagate. Result serialization and debug output expose counts and completion only.
 
+### Resuming an Outlook Poll
+
+Use `syncMailboxRecoveryPage()` to recover messages in a fixed received-date window after a polling failure. Pass explicit `received_after` and `received_before` filters, the original folder and filters, and `null` as the first continuation. Each call persists one complete Graph page. The ordinary message limit does not trim recovery pages, and recovery does not advance `last_synced_at`.
+
+After retaining the page's messages and rejections, save `nextContinuation` privately with the same options. Pass it to the next call until it is `null`. The continuation is bound to the mailbox, authorization, and query. It is omitted from result JSON and debug output. If `InvalidRecoveryContinuationException` is thrown, restart the same window and use the existing message identity to deduplicate the replay. Keep the source folder stable while paging. Moves and deletions can change which messages Graph returns.
+
+Recovery uses queue-managed Graph reads. Scheduled callers can opt in to the same policy for `syncMailboxResult()` with `'queue_managed_retry' => true`. Mailbox attempts to acquire a slot without waiting and propagates transient failures from list and attachment reads so the caller can choose the next retry time. Graph retry hints are available on the rate-limit and server exceptions when supplied by the provider.
+
 ### Recovering One Retained Candidate
 
 You may retry a retained provider ID through the same sync rules and persistence:

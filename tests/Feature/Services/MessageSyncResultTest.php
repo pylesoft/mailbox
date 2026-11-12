@@ -8,6 +8,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Contracts\Queue\Job;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Psr\Http\Message\StreamInterface;
@@ -188,7 +189,7 @@ it('keeps a cyclic or out-of-scope Graph page from becoming a recovery continuat
     $first = $service->syncMailboxRecoveryPage($mailbox, $options, null);
 
     expect(fn () => $service->syncMailboxRecoveryPage($mailbox, $options, $first->nextContinuation))
-        ->toThrow(ApiRequestException::class);
+        ->toThrow($cycle ? InvalidRecoveryContinuationException::class : ApiRequestException::class);
     $this->assertDatabaseCount('mailbox_messages', 0);
 })->with(['cycle' => [true], 'wrong mailbox' => [false]]);
 
@@ -217,6 +218,43 @@ it('returns Graph Retry-After to the queue after one provider attempt', function
     'unavailable with delay' => [503, '180', 180],
     'gateway without delay' => [502, null, null],
 ]);
+
+it('returns attachment read failures to the polling queue without releasing the job', function (string $stage, bool $recovery): void {
+    $mailbox = createTestMailbox('Queue-owned attachments', 'reader@example.com', 'Reader');
+    $job = Mockery::mock(Job::class);
+    $job->shouldNotReceive('release');
+    $this->app->instance('queue.job', $job);
+    $attachment = ['id' => 'file', 'name' => 'invoice.pdf', 'contentType' => 'application/pdf', 'size' => 4];
+    $responses = [['value' => [['id' => 'message', 'hasAttachments' => true, 'receivedDateTime' => '2026-11-12T01:00:00Z']]]];
+    if ($stage !== 'list') {
+        $responses[] = ['value' => [$attachment]];
+    }
+    if ($stage === 'stream') {
+        $responses[] = $attachment;
+    }
+    $responses[] = new Response(429, ['Retry-After' => '30'], '{}');
+    $history = [];
+    expectMailboxFacadeForMailbox($mailbox, syncResultResource('ms-graph', $responses, $history));
+    $service = new MessageSyncService;
+
+    try {
+        if ($recovery) {
+            $service->syncMailboxRecoveryPage($mailbox, ['filters' => [
+                'received_after' => '2026-11-12T00:00:00Z',
+                'received_before' => '2026-11-12T06:00:00Z',
+            ]], null);
+        } else {
+            $service->syncMailboxResult($mailbox, ['queue_managed_retry' => true]);
+        }
+        test()->fail('The attachment failure should return control to the queue.');
+    } catch (RateLimitException $exception) {
+        expect($exception->retryAfter)->toBe(30)
+            ->and($exception->localContention)->toBeFalse();
+    }
+
+    expect($history)->toHaveCount(count($responses))
+        ->and($mailbox->fresh()->last_synced_at)->toBeNull();
+})->with(['list', 'metadata', 'stream'])->with(['scheduled' => [false], 'recovery' => [true]]);
 
 it('reads an HTTP date in Graph Retry-After without waiting inside the worker', function (): void {
     $mailbox = createTestMailbox('Queue retry date', 'reader@example.com', 'Reader');

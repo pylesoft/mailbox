@@ -65,13 +65,13 @@ class GraphClient
         return 'ms-graph';
     }
 
-    /** @param array<string, mixed> $query */
-    public function getQueueManagedPollObject(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, string $mailbox): \stdClass
+    /** @internal */
+    public function forQueueManagedPollReads(): self
     {
-        /** @var \stdClass $response */
-        $response = $this->readBounded($endpoint, $budget, $query, $mailbox, retry: false, associative: false, queueManagedRetry: true);
+        $client = clone $this;
+        $client->queueManagedPollReads = true;
 
-        return $response;
+        return $client;
     }
 
     public function getBoundedDeltaPage(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, int $pageSize, ?string $mailbox, bool $initial): \stdClass

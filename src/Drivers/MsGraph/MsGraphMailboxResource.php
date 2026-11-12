@@ -48,7 +48,7 @@ use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 class MsGraphMailboxResource implements MailboxResource, SupportsConversationRead, SupportsDraftAttachmentPreparation, SupportsDraftSubmission, SupportsDraftSubmissionInspection, SupportsFolderCatalogue, SupportsGraphFolderDeltaBatch, SupportsGraphSharedMailboxLive, SupportsGraphSubscriptionInspection, SupportsGraphSubscriptions, SupportsInitialSync
 {
     public function __construct(
-        private readonly GraphClient $client,
+        private GraphClient $client,
         private readonly BatchRequest $batch,
         private readonly MsGraphDeltaSync $deltaSync,
         private readonly string $emailAddress,
@@ -58,6 +58,15 @@ class MsGraphMailboxResource implements MailboxResource, SupportsConversationRea
         if ($grantContext !== null && $grantContext->driver !== 'ms-graph') {
             throw new \InvalidArgumentException('A Microsoft Graph mailbox resource requires a Microsoft Graph authorization context.');
         }
+    }
+
+    /** @internal */
+    public function forQueueManagedPollReads(): self
+    {
+        $resource = clone $this;
+        $resource->client = $this->client->forQueueManagedPollReads();
+
+        return $resource;
     }
 
     /** @return array{provider: string, mailbox: string} */
