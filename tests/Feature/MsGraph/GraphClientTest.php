@@ -10,6 +10,7 @@ use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Queue\Job;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Pyle\Mailbox\Drivers\MsGraph\GraphClient;
 use Pyle\Mailbox\Drivers\MsGraph\RateLimiter;
@@ -35,6 +36,37 @@ it('refreshes a Graph token once during a queue-owned poll read', function (bool
         : $graph->get($endpoint.'/message/attachments'))->toThrow(AuthenticationException::class);
     expect($handler)->toHaveCount(1);
 })->with(['message list' => [true], 'attachment list' => [false]]);
+
+it('refreshes a Graph token once before retrying a queue-owned attachment download', function (int $status): void {
+    $handler = new MockHandler([new Response(401), new Response($status, [], 'attachment'), new Response(200)]);
+    $history = [];
+    $stack = HandlerStack::create($handler);
+    $stack->push(Middleware::history($history));
+    $client = new Client(['handler' => $stack, 'base_uri' => 'https://graph.microsoft.com/v1.0/']);
+    $mailbox = 'reader@example.com';
+    $token = Mockery::mock(TokenManager::class);
+    $token->shouldReceive('getToken')->twice()->andReturn('token', 'refreshed');
+    $token->shouldReceive('invalidateToken')->once()->andReturnUsing(static function () use ($mailbox): void {
+        $slot = Cache::lock('mailbox:lock:ms-graph:'.$mailbox.':slot:1', 1);
+        expect($slot->get())->toBeTrue();
+        $slot->release();
+    });
+    $graph = (new GraphClient([], $token, new RateLimiter(['max_concurrent_per_mailbox' => 1]), $client))->forQueueManagedPollReads();
+    $budget = new ResponseBudget(4096);
+    $download = fn () => $graph->streamBounded('users/reader%40example.com/messages/message/attachments/file/$value', $budget, 4096, $mailbox);
+
+    if ($status === 200) {
+        $stream = $download();
+        expect($stream->getContents())->toBe('attachment');
+        $stream->close();
+    } else {
+        expect($download)->toThrow(AuthenticationException::class);
+    }
+
+    expect($handler)->toHaveCount(1)
+        ->and($history[0]['request']->getHeaderLine('Authorization'))->toBe('Bearer token')
+        ->and($history[1]['request']->getHeaderLine('Authorization'))->toBe('Bearer refreshed');
+})->with(['refreshed token works' => [200], 'refreshed token rejected' => [401]]);
 
 it('retries on 429 then succeeds', function (): void {
     Event::fake([RateLimitHit::class]);

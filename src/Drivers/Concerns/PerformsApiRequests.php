@@ -513,7 +513,7 @@ trait PerformsApiRequests
         return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
             ['stream' => true, 'http_errors' => true, 'decode_content' => false, 'headers' => ['Accept-Encoding' => 'identity']], $mailbox,
             fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): StreamInterface => $this->copyBoundedStream($response, $budget, $maxBytes, $endpoint, $mailbox, $deadline),
-            $budget, min($maxBytes, $budget->remaining()));
+            $budget, min($maxBytes, $budget->remaining()), refreshToken: $this->queueManagedPollReads);
     }
 
     private function copyBoundedStream(#[\SensitiveParameter] ResponseInterface $response, ResponseBudget $budget, int $maxBytes, #[\SensitiveParameter] string $endpoint, ?string $mailbox, ?int $deadline): StreamInterface
@@ -669,7 +669,7 @@ trait PerformsApiRequests
      * @param  Closure(ResponseInterface, ?int):T  $consume
      * @return T
      */
-    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false): mixed
+    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $refreshToken = false): mixed
     {
         if ($this->driverKey() !== 'ms-graph') {
             return $consume($this->requestResolvedTarget($method, $target, $endpoint, $options, $mailbox, retry: false), null);
@@ -678,9 +678,24 @@ trait PerformsApiRequests
         $endpoint = $this->redactedEndpoint($endpoint);
         $mailboxKey = $this->mailboxKey($mailbox);
 
-        return $this->consumeGraphResponse($mailboxKey, $options,
-            fn (#[\SensitiveParameter] array $requestOptions): ResponseInterface => $this->sendResolvedRequest($method, $target, $endpoint, $requestOptions, $mailbox, $mailboxKey, retry: false),
-            $consume, $budget, $maxBytes, $mimeHeadersOnly);
+        $reauthAttempted = false;
+        for ($attempt = 1; ; $attempt++) {
+            $startedAt = microtime(true);
+            try {
+                return $this->consumeGraphResponse($mailboxKey, $options,
+                    fn (#[\SensitiveParameter] array $requestOptions): ResponseInterface => $this->sendResolvedRequest($method, $target, $endpoint, $requestOptions, $mailbox, $mailboxKey, retry: false, propagateUnauthorized: $refreshToken),
+                    $consume, $budget, $maxBytes);
+            } catch (RequestException $exception) {
+                if (! $refreshToken || $exception->getResponse()?->getStatusCode() !== 401) {
+                    throw $exception;
+                }
+
+                $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+                if (! $this->shouldRetryRequest($exception, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
+                    $this->throwMappedException($exception, $mailbox, $mailboxKey, $endpoint, $attempt);
+                }
+            }
+        }
     }
 
     /**
@@ -745,7 +760,7 @@ trait PerformsApiRequests
     }
 
     /** @param array<string, mixed> $options */
-    private function sendResolvedRequest(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, string $mailboxKey, bool $retry, ?int $leasePerAttempt = null): ResponseInterface
+    private function sendResolvedRequest(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, string $mailboxKey, bool $retry, ?int $leasePerAttempt = null, bool $propagateUnauthorized = false): ResponseInterface
     {
         $refreshToken = $retry && $this->queueManagedPollReads;
         $retry = $retry && ! $this->queueManagedPollReads;
@@ -810,6 +825,10 @@ trait PerformsApiRequests
                 if (($retry || ($refreshToken && $status === 401))
                     && $this->shouldRetryRequest($e, $method, $endpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
                     continue;
+                }
+
+                if ($propagateUnauthorized && $status === 401) {
+                    throw $e;
                 }
 
                 $this->throwMappedException($e, $mailbox, $mailboxKey, $endpoint, $attempt);
