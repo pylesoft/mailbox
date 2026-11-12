@@ -5,15 +5,21 @@ declare(strict_types=1);
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Psr\Http\Message\StreamInterface;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\DTOs\AttachmentDto;
 use Pyle\Mailbox\DTOs\GrantContext;
+use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
+use Pyle\Mailbox\Exceptions\InvalidRecoveryContinuationException;
 use Pyle\Mailbox\Exceptions\MailboxException;
+use Pyle\Mailbox\Exceptions\ProviderServerException;
+use Pyle\Mailbox\Exceptions\RateLimitException;
 use Pyle\Mailbox\Exceptions\ResourceNotFoundException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
@@ -77,6 +83,173 @@ it('persists valid query outcomes and retains exact provider correlations withou
         ->and($result->exhausted)->toBeTrue()
         ->and($mailbox->fresh()->last_synced_at)->toBeNull();
     expect(json_encode($result))->not->toContain('same@example.com', 'bad', 'providerMessageId');
+});
+
+it('recovers complete Graph pages with frozen bounds even above the ordinary poll limit', function (): void {
+    $mailbox = createTestMailbox('Recovery pages', 'reader@example.com', 'Reader');
+    $link = 'https://graph.microsoft.com/v1.0/users/reader%40example.com/mailFolders/inbox/messages?$skiptoken=opaque%2Btoken';
+    $message = static fn (string $id): array => [
+        'id' => $id,
+        'subject' => 'Invoice',
+        'receivedDateTime' => '2026-11-12T01:00:00Z',
+    ];
+    $history = [];
+    $resource = syncResultResource('ms-graph', [
+        ['value' => [$message('a'), $message('b')], '@odata.nextLink' => $link],
+        ['value' => [[...$message('bad'), 'ccRecipients' => [['emailAddress' => ['name' => 'Name only']]]]], '@odata.nextLink' => str_replace('opaque', 'another', $link)],
+        ['value' => [$message('b'), $message('c'), [...$message('excluded'), 'subject' => 'Report']]],
+    ], $history);
+    expectMailboxFacadeForMailbox($mailbox, $resource, $resource, $resource);
+    $service = new MessageSyncService;
+    $options = [
+        'folder_reference' => 'inbox',
+        'filters' => [
+            'received_after' => '2026-11-12T00:00:00Z',
+            'received_before' => '2026-11-12T06:00:00Z',
+            'page_size' => 2,
+            'limit' => 1,
+        ],
+        'rule_tree' => ['operator' => 'AND', 'conditions' => [['field' => 'subject', 'operator' => 'contains', 'value' => 'Invoice']]],
+    ];
+
+    $first = $service->syncMailboxRecoveryPage($mailbox, $options, null);
+    expect($first->messages->pluck('provider_message_id')->all())->toBe(['a', 'b'])
+        ->and($first->nextContinuation)->not->toBeNull()->not->toContain('opaque')
+        ->and($first->continuationFingerprint)->toBe(hash('sha256', $link))
+        ->and($first->exhausted)->toBeFalse()
+        ->and(json_encode($first))->not->toContain($first->nextContinuation);
+    expect($history)->toHaveCount(1);
+    parse_str($history[0]['request']->getUri()->getQuery(), $query);
+    expect($query['$top'])->toBe('2')
+        ->and($query['$filter'])->toContain('2026-11-12T00:00:00+00:00', '2026-11-12T06:00:00+00:00', "contains(subject,'Invoice')");
+
+    $rejected = $service->syncMailboxRecoveryPage($mailbox, $options, $first->nextContinuation);
+    expect((string) $history[1]['request']->getUri())->toBe($link);
+    expect($rejected->messages)->toBeEmpty()
+        ->and($rejected->rejections->sole()->providerMessageId)->toBe('bad')
+        ->and($rejected->exhausted)->toBeFalse();
+
+    $last = $service->syncMailboxRecoveryPage($mailbox, $options, $rejected->nextContinuation);
+    expect($last->messages->pluck('provider_message_id')->all())->toBe(['b', 'c'])
+        ->and($last->excludedProviderMessageIds->all())->toBe(['excluded'])
+        ->and($last->nextContinuation)->toBeNull()
+        ->and($last->continuationFingerprint)->toBeNull()
+        ->and($last->exhausted)->toBeTrue()
+        ->and($mailbox->fresh()->last_synced_at)->toBeNull();
+    $this->assertDatabaseCount('mailbox_messages', 3);
+});
+
+it('rejects a modified or differently scoped recovery continuation before a Graph request', function (): void {
+    $mailbox = createTestMailbox('Recovery scope', 'reader@example.com', 'Reader');
+    $link = 'https://graph.microsoft.com/v1.0/users/reader%40example.com/messages?$skiptoken=next';
+    $resource = syncResultResource('ms-graph', [['value' => [], '@odata.nextLink' => $link]]);
+    expectMailboxFacadeForMailbox($mailbox, $resource);
+    $service = new MessageSyncService;
+    $options = ['filters' => ['received_after' => '2026-11-12T00:00:00Z', 'received_before' => '2026-11-12T06:00:00Z']];
+    $first = $service->syncMailboxRecoveryPage($mailbox, $options, null);
+
+    expect(fn () => $service->syncMailboxRecoveryPage($mailbox, $options, $link))->toThrow(InvalidRecoveryContinuationException::class)
+        ->and(fn () => $service->syncMailboxRecoveryPage($mailbox, [...$options, 'folder_reference' => 'inbox'], $first->nextContinuation))
+        ->toThrow(InvalidRecoveryContinuationException::class);
+    $mailbox->connection->lifecycle_generation = 'another-generation';
+    expect(fn () => $service->syncMailboxRecoveryPage($mailbox, $options, $first->nextContinuation))->toThrow(InvalidRecoveryContinuationException::class);
+});
+
+it('distinguishes an expired recovery continuation from an ordinary Graph failure', function (): void {
+    $mailbox = createTestMailbox('Recovery expiry', 'reader@example.com', 'Reader');
+    $link = 'https://graph.microsoft.com/v1.0/users/reader%40example.com/messages?$skiptoken=next';
+    $resource = syncResultResource('ms-graph', [
+        ['value' => [], '@odata.nextLink' => $link],
+        new Response(410, [], '{}'),
+        new Response(400, [], '{}'),
+    ]);
+    expectMailboxFacadeForMailbox($mailbox, $resource, $resource, $resource);
+    $service = new MessageSyncService;
+    $options = ['filters' => ['received_after' => '2026-11-12T00:00:00Z', 'received_before' => '2026-11-12T06:00:00Z']];
+    $first = $service->syncMailboxRecoveryPage($mailbox, $options, null);
+
+    expect(fn () => $service->syncMailboxRecoveryPage($mailbox, $options, $first->nextContinuation))
+        ->toThrow(InvalidRecoveryContinuationException::class)
+        ->and(fn () => $service->syncMailboxRecoveryPage($mailbox, $options, $first->nextContinuation))
+        ->toThrow(ApiRequestException::class);
+});
+
+it('keeps a cyclic or out-of-scope Graph page from becoming a recovery continuation', function (bool $cycle): void {
+    $mailbox = createTestMailbox('Recovery invalid next link', 'reader@example.com', 'Reader');
+    $link = 'https://graph.microsoft.com/v1.0/users/reader%40example.com/messages?$skiptoken=next';
+    $badLink = $cycle ? $link : str_replace('reader', 'other', $link);
+    $resource = syncResultResource('ms-graph', [
+        ['value' => [], '@odata.nextLink' => $link],
+        ['value' => [['id' => 'uncommitted']], '@odata.nextLink' => $badLink],
+    ]);
+    expectMailboxFacadeForMailbox($mailbox, $resource, $resource);
+    $service = new MessageSyncService;
+    $options = ['filters' => ['received_after' => '2026-11-12T00:00:00Z', 'received_before' => '2026-11-12T06:00:00Z']];
+    $first = $service->syncMailboxRecoveryPage($mailbox, $options, null);
+
+    expect(fn () => $service->syncMailboxRecoveryPage($mailbox, $options, $first->nextContinuation))
+        ->toThrow(ApiRequestException::class);
+    $this->assertDatabaseCount('mailbox_messages', 0);
+})->with(['cycle' => [true], 'wrong mailbox' => [false]]);
+
+it('returns Graph Retry-After to the queue after one provider attempt', function (int $status, ?string $hint, ?int $seconds): void {
+    $mailbox = createTestMailbox('Queue retry', 'reader@example.com', 'Reader');
+    $history = [];
+    $resource = syncResultResource('ms-graph', [
+        new Response($status, $hint === null ? [] : ['Retry-After' => $hint], '{}'),
+        ['value' => []],
+    ], $history);
+    expectMailboxFacadeForMailbox($mailbox, $resource);
+
+    try {
+        (new MessageSyncService)->syncMailboxResult($mailbox, ['queue_managed_retry' => true]);
+        test()->fail('The transient Graph response should return control to the queue.');
+    } catch (ProviderServerException|RateLimitException $exception) {
+        expect($exception)->toBeInstanceOf($status === 429 ? RateLimitException::class : ProviderServerException::class)
+            ->and($exception->retryAfter)->toBe($seconds);
+        if ($exception instanceof RateLimitException) {
+            expect($exception->localContention)->toBeFalse();
+        }
+    }
+    expect($history)->toHaveCount(1);
+})->with([
+    'throttled' => [429, '30', 30],
+    'unavailable with delay' => [503, '180', 180],
+    'gateway without delay' => [502, null, null],
+]);
+
+it('reads an HTTP date in Graph Retry-After without waiting inside the worker', function (): void {
+    $mailbox = createTestMailbox('Queue retry date', 'reader@example.com', 'Reader');
+    $resource = syncResultResource('ms-graph', [new Response(503, ['Retry-After' => gmdate(DATE_RFC7231, time() + 120)], '{}')]);
+    expectMailboxFacadeForMailbox($mailbox, $resource);
+
+    try {
+        (new MessageSyncService)->syncMailboxResult($mailbox, ['queue_managed_retry' => true]);
+        test()->fail('The Graph response should return the retry date to the queue.');
+    } catch (ProviderServerException $exception) {
+        expect($exception->retryAfter)->toBeGreaterThan(60)->toBeLessThanOrEqual(120);
+    }
+});
+
+it('does not wait or send a provider request when the queue managed poll has no slot', function (): void {
+    $mailbox = createTestMailbox('Queue contention', 'reader@example.com', 'Reader');
+    config(['mailbox.max_concurrent_per_mailbox' => 1, 'mailbox.concurrency_lock_timeout' => 30]);
+    $lock = Cache::lock('mailbox:lock:ms-graph:reader@example.com:slot:1', 2);
+    expect($lock->get())->toBeTrue();
+    $history = [];
+    $resource = syncResultResource('ms-graph', [['value' => []]], $history);
+    expectMailboxFacadeForMailbox($mailbox, $resource);
+
+    try {
+        (new MessageSyncService)->syncMailboxResult($mailbox, ['queue_managed_retry' => true]);
+        test()->fail('Queue-managed polling should immediately yield a contended slot.');
+    } catch (RateLimitException $exception) {
+        expect($exception->localContention)->toBeTrue()
+            ->and($exception->retryAfter)->toBe(30);
+    } finally {
+        $lock->release();
+    }
+    expect($history)->toBeEmpty();
 });
 
 it('recovers an old explicit message while retaining current folder and explicit filter eligibility', function (string $driver, array $options, bool $included): void {
@@ -355,15 +528,22 @@ it('preserves stored attachment bytes when authority changes during a replacemen
         ->and($mailbox->fresh()->last_synced_at->equalTo($syncedAt))->toBeTrue();
 });
 
-/** @param list<array<string, mixed>|Response|Throwable> $responses */
-function syncResultResource(string $driver, array $responses): MailboxResource
+/**
+ * @param  list<array<string, mixed>|Response|Throwable>  $responses
+ * @param  array<int, mixed>|null  $history
+ */
+function syncResultResource(string $driver, array $responses, ?array &$history = null): MailboxResource
 {
     $handler = new MockHandler(array_map(static fn (array|Response|Throwable $response): Response|Throwable => is_array($response)
         ? new Response(200, [], json_encode($response, JSON_THROW_ON_ERROR)) : $response, $responses));
+    $stack = HandlerStack::create($handler);
+    if ($history !== null) {
+        $stack->push(Middleware::history($history));
+    }
     $tokens = new TestGrantTokenProvider([
         'grant' => ['connection' => 'connection', 'generation' => '1', 'mailboxes' => ['reader@example.com'], 'token' => 'selected-token'],
     ]);
 
     return MailboxFacade::forGrant(new GrantContext('connection', 'grant', '1', $driver, 'reader@example.com'), $tokens,
-        new Client(['handler' => HandlerStack::create($handler), 'base_uri' => $driver === 'gmail' ? 'https://gmail.googleapis.com/gmail/v1/' : 'https://graph.microsoft.com/v1.0/']));
+        new Client(['handler' => $stack, 'base_uri' => $driver === 'gmail' ? 'https://gmail.googleapis.com/gmail/v1/' : 'https://graph.microsoft.com/v1.0/']));
 }

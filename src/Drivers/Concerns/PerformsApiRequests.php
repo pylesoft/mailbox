@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Pyle\Mailbox\Drivers\Concerns;
 
 use Closure;
+use DateTimeImmutable;
+use DateTimeZone;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
@@ -99,7 +101,7 @@ trait PerformsApiRequests
      * @param  array<string, string>  $headers
      * @return array<string, mixed>|\stdClass
      */
-    private function readBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $retry, bool $associative, array $headers = []): array|\stdClass
+    private function readBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $retry, bool $associative, array $headers = [], bool $queueManagedRetry = false): array|\stdClass
     {
         $queueReleaseAllowed = $this->queueReleaseAllowed;
         $this->queueReleaseAllowed = false;
@@ -116,10 +118,11 @@ trait PerformsApiRequests
                 $attempt++;
                 $startedAt = microtime(true);
                 try {
-                    return $this->requestBounded($endpoint, $budget, $query, $mailbox, $associative, $headers);
+                    return $this->requestBounded($endpoint, $budget, $query, $mailbox, $associative, $headers, $queueManagedRetry);
                 } catch (RequestException $e) {
                     $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
-                    if ($retry && $this->shouldRetryRequest($e, 'GET', $safeEndpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
+                    $refreshToken = $queueManagedRetry && $e->getResponse()?->getStatusCode() === 401;
+                    if (($retry || $refreshToken) && $this->shouldRetryRequest($e, 'GET', $safeEndpoint, $mailbox, $mailboxKey, $attempt, $durationMs, $reauthAttempted)) {
                         continue;
                     }
                     $this->throwMappedException($e, $mailbox, $mailboxKey, $safeEndpoint, $attempt);
@@ -145,7 +148,7 @@ trait PerformsApiRequests
      * @param  array<string, string>  $headers
      * @return array<string, mixed>|\stdClass
      */
-    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $associative, array $headers = []): array|\stdClass
+    private function requestBounded(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, ?string $mailbox, bool $associative, array $headers, bool $queueManagedRetry): array|\stdClass
     {
         $budget->assertMemoryAvailable(65536);
         $options = $query === [] ? [] : ['query' => $query];
@@ -156,7 +159,7 @@ trait PerformsApiRequests
         return $this->consumeBoundedResponse('GET', $this->resolveTarget($endpoint, $mailbox), $endpoint,
             [...$options, 'stream' => true, 'http_errors' => false, 'decode_content' => false, 'headers' => [...$headers, 'Accept-Encoding' => 'identity']], $mailbox,
             fn (#[\SensitiveParameter] ResponseInterface $response, ?int $deadline): array|\stdClass => $this->decodeBoundedResponse($response, $budget, $endpoint, $mailbox, $associative, $deadline),
-            $budget, $budget->remaining());
+            $budget, $budget->remaining(), waitForSlot: ! $queueManagedRetry);
     }
 
     /** @return array<string, mixed>|\stdClass */
@@ -242,11 +245,7 @@ trait PerformsApiRequests
             throw new ApiRequestException($message, status: $status, endpoint: $endpoint, providerCode: 'syncStateNotFound');
         }
 
-        $request = new Request('GET', $endpoint);
-        $failure = new RequestException($message, $request, $response);
-        throw new RequestException($message, $request, new Response($status, [
-            'Retry-After' => (string) $this->retryAfterSeconds($failure),
-        ]));
+        throw new RequestException($message, new Request('GET', $endpoint), new Response($status, $this->retryAfterHeader($response)));
     }
 
     private function graphSyncResetCode(#[\SensitiveParameter] string $body): ?string
@@ -667,7 +666,7 @@ trait PerformsApiRequests
      * @param  Closure(ResponseInterface, ?int):T  $consume
      * @return T
      */
-    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false): mixed
+    private function consumeBoundedResponse(string $method, #[\SensitiveParameter] string $target, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] array $options, ?string $mailbox, #[\SensitiveParameter] Closure $consume, ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $waitForSlot = true): mixed
     {
         if ($this->driverKey() !== 'ms-graph') {
             return $consume($this->requestResolvedTarget($method, $target, $endpoint, $options, $mailbox, retry: false), null);
@@ -678,7 +677,7 @@ trait PerformsApiRequests
 
         return $this->consumeGraphResponse($mailboxKey, $options,
             fn (#[\SensitiveParameter] array $requestOptions): ResponseInterface => $this->sendResolvedRequest($method, $target, $endpoint, $requestOptions, $mailbox, $mailboxKey, retry: false),
-            $consume, $budget, $maxBytes, $mimeHeadersOnly);
+            $consume, $budget, $maxBytes, $mimeHeadersOnly, waitForSlot: $waitForSlot);
     }
 
     /**
@@ -689,7 +688,7 @@ trait PerformsApiRequests
      * @param  Closure(ResponseInterface, ?int):T  $consume
      * @return T
      */
-    private function consumeGraphResponse(string $mailboxKey, #[\SensitiveParameter] array $options, #[\SensitiveParameter] Closure $request, #[\SensitiveParameter] Closure $consume, ?ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $allowTruncated = false, ?int $maxSuccessBytes = null): mixed
+    private function consumeGraphResponse(string $mailboxKey, #[\SensitiveParameter] array $options, #[\SensitiveParameter] Closure $request, #[\SensitiveParameter] Closure $consume, ?ResponseBudget $budget, int $maxBytes, bool $mimeHeadersOnly = false, bool $allowTruncated = false, ?int $maxSuccessBytes = null, bool $waitForSlot = true): mixed
     {
         $timeout = $options['timeout'] ?? $this->requestTimeoutSeconds;
         $timeout = is_int($timeout) ? max(1, $timeout) : $this->requestTimeoutSeconds;
@@ -707,7 +706,7 @@ trait PerformsApiRequests
                 $result = ['response' => $response, 'value' => $consume($response, $deadline)];
 
                 return $response;
-            }));
+            }, $waitForSlot));
 
         return $result !== null && $response->getBody() === $result['response']->getBody()
             ? $result['value']
@@ -785,7 +784,7 @@ trait PerformsApiRequests
                 $e = new RequestException(
                     $this->providerLabel().' request failed'.($status === null ? '.' : ' with HTTP '.$status.'.'),
                     new Request($method, $endpoint),
-                    $response === null ? null : new Response($response->getStatusCode(), ['Retry-After' => (string) $this->retryAfterSeconds($e)]),
+                    $response === null ? null : new Response($response->getStatusCode(), $this->retryAfterHeader($response)),
                 );
                 $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
 
@@ -987,11 +986,30 @@ trait PerformsApiRequests
     {
         $header = $e->getResponse()?->getHeaderLine('Retry-After');
 
-        if (is_string($header) && ctype_digit($header)) {
+        return is_string($header) && ctype_digit($header) ? max(1, (int) $header) : 1;
+    }
+
+    protected function providerRetryAfterSeconds(?ResponseInterface $response): ?int
+    {
+        $header = trim($response?->getHeaderLine('Retry-After') ?? '');
+        if (ctype_digit($header)) {
             return max(1, (int) $header);
         }
+        if ($this->driverKey() !== 'ms-graph' || ! preg_match('/^[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$/D', $header)) {
+            return null;
+        }
 
-        return 1;
+        $date = DateTimeImmutable::createFromFormat(DATE_RFC7231, $header, new DateTimeZone('GMT'));
+
+        return $date !== false && $date->format(DATE_RFC7231) === $header ? max(1, $date->getTimestamp() - time()) : null;
+    }
+
+    /** @return array<string, string> */
+    private function retryAfterHeader(ResponseInterface $response): array
+    {
+        $delay = $this->providerRetryAfterSeconds($response);
+
+        return $delay === null ? [] : ['Retry-After' => trim($response->getHeaderLine('Retry-After'))];
     }
 
     protected function backoffSeconds(int $attempt): int

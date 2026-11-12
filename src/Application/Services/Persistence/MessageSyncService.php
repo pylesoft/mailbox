@@ -6,18 +6,23 @@ namespace Pyle\Mailbox\Services\Persistence;
 
 use Carbon\Carbon;
 use Closure;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Crypt;
+use JsonException;
 use Pyle\Mailbox\Contracts\MailboxResource;
 use Pyle\Mailbox\Contracts\MessageQueryBuilder;
 use Pyle\Mailbox\Contracts\SupportsExactMessageRead;
 use Pyle\Mailbox\Contracts\SupportsMessageQueryResults;
 use Pyle\Mailbox\Drivers\MsGraph\FolderIdResolver;
+use Pyle\Mailbox\Drivers\MsGraph\MsGraphMessageQuery;
 use Pyle\Mailbox\DTOs\MessageDto;
 use Pyle\Mailbox\DTOs\MessageQueryResult;
 use Pyle\Mailbox\DTOs\MessageSyncResult;
 use Pyle\Mailbox\Enums\FilterableField;
 use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
+use Pyle\Mailbox\Exceptions\InvalidRecoveryContinuationException;
 use Pyle\Mailbox\Exceptions\MailboxException;
 use Pyle\Mailbox\Exceptions\UnsupportedCapabilityException;
 use Pyle\Mailbox\Facades\Mailbox as MailboxFacade;
@@ -50,6 +55,63 @@ class MessageSyncService
     public function syncMailboxResult(Mailbox $mailbox, array $options = [], ?Closure $guardedWrite = null): MessageSyncResult
     {
         return $this->sync($mailbox, $options, true, $guardedWrite);
+    }
+
+    /**
+     * Synchronize one complete Graph page within explicit, fixed received date bounds.
+     *
+     * @param  array<string, mixed>  $options
+     * @param  Closure(Closure(): mixed): mixed|null  $guardedWrite
+     */
+    public function syncMailboxRecoveryPage(Mailbox $mailbox, array $options, #[\SensitiveParameter] ?string $continuation, ?Closure $guardedWrite = null): MessageSyncResult
+    {
+        $request = MessageSyncRequest::from($options, $this->ruleTree);
+        $filters = $request->filters();
+        foreach (['received_after', 'received_before'] as $bound) {
+            $date = $filters[$bound] ?? null;
+            if (! is_string($date) || trim($date) === '' || Carbon::hasRelativeKeywords($date)) {
+                throw new \InvalidArgumentException('Recovery requires explicit lower and upper received date bounds.');
+            }
+        }
+
+        $this->ensureMailboxHasDriver($mailbox);
+        $context = hash('sha256', serialize([
+            $mailbox->id,
+            $mailbox->email_address,
+            $mailbox->mailbox_connection_id,
+            $mailbox->connection->getAttribute('selected_grant_id'),
+            $mailbox->connection->getAttribute('lifecycle_generation'),
+            $this->pollRequestKey($options, 'ms-graph'),
+        ]));
+        $link = $continuation === null ? null : $this->recoveryLink($continuation, $context);
+        $plan = $this->buildPlan($request, Carbon::now('UTC'));
+        $resource = MailboxFacade::forMailbox($mailbox);
+        $query = $this->messageQuery($resource, $plan);
+        if (! $query instanceof MsGraphMessageQuery) {
+            throw new UnsupportedCapabilityException('Recovery paging requires Microsoft Graph.');
+        }
+
+        $outcome = $query->getRecoveryPage($link);
+        $next = $outcome->nextContinuation === null
+            ? null
+            : Crypt::encryptString(json_encode([$context, $outcome->nextContinuation], JSON_THROW_ON_ERROR));
+
+        return $this->persistResult($mailbox, $resource, $plan, $outcome, $guardedWrite, markSynced: false, nextContinuation: $next);
+    }
+
+    private function recoveryLink(#[\SensitiveParameter] string $continuation, string $context): string
+    {
+        try {
+            $decoded = json_decode(Crypt::decryptString($continuation), true, flags: JSON_THROW_ON_ERROR);
+        } catch (DecryptException|JsonException) {
+            throw new InvalidRecoveryContinuationException('The recovery continuation could not be decoded.');
+        }
+
+        if (! is_array($decoded) || ($decoded[0] ?? null) !== $context || ! is_string($decoded[1] ?? null) || $decoded[1] === '') {
+            throw new InvalidRecoveryContinuationException('The recovery continuation does not match the mailbox and query.');
+        }
+
+        return $decoded[1];
     }
 
     /**
@@ -101,10 +163,29 @@ class MessageSyncService
         $this->ensureMailboxHasDriver($mailbox);
         $plan = $this->buildPlan($request, Carbon::now('UTC'));
         $mailboxResource = MailboxFacade::forMailbox($mailbox);
-        $outcome = $this->fetchMessages($mailboxResource, $plan, $isolateHeaders);
+        $query = $this->messageQuery($mailboxResource, $plan);
+        $outcome = match (true) {
+            $isolateHeaders && $query instanceof MsGraphMessageQuery && ($options['queue_managed_retry'] ?? false) === true => $query->getQueueManagedResult(),
+            $isolateHeaders && $query instanceof SupportsMessageQueryResults => $query->getResult(),
+            default => new MessageQueryResult($query->get(), collect(), false),
+        };
+
+        return $this->persistResult($mailbox, $mailboxResource, $plan, $outcome, $guardedWrite, markSynced: true);
+    }
+
+    /** @param Closure(Closure(): mixed): mixed|null $guardedWrite */
+    private function persistResult(
+        Mailbox $mailbox,
+        MailboxResource $mailboxResource,
+        MessageSyncPlan $plan,
+        MessageQueryResult $outcome,
+        ?Closure $guardedWrite,
+        bool $markSynced,
+        #[\SensitiveParameter] ?string $nextContinuation = null,
+    ): MessageSyncResult {
         $messages = $outcome->messages->sortBy(fn (MessageDto $message): int => $message->receivedAt?->getTimestamp() ?? 0)->values();
         $persisted = $this->persistMessages($mailboxResource, $mailbox->id, $messages, $plan, $guardedWrite);
-        if ($outcome->rejections->isEmpty()) {
+        if ($markSynced && $outcome->rejections->isEmpty()) {
             $write = fn (): bool => $mailbox->update(['last_synced_at' => now()]);
             $guardedWrite === null ? $write() : $guardedWrite($write);
         }
@@ -115,6 +196,8 @@ class MessageSyncService
             rejections: $outcome->rejections,
             excludedProviderMessageIds: $messages->pluck('id')->diff($persisted->pluck('providerMessageId'))->values(),
             exhausted: $outcome->exhausted,
+            nextContinuation: $nextContinuation,
+            continuationFingerprint: $outcome->nextContinuation === null ? null : hash('sha256', $outcome->nextContinuation),
         );
     }
 
@@ -278,17 +361,13 @@ class MessageSyncService
         return ! empty($filters['lookback_hours']) && is_numeric($filters['lookback_hours']) ? (int) $filters['lookback_hours'] : 6;
     }
 
-    private function fetchMessages(MailboxResource $mailbox, MessageSyncPlan $plan, bool $isolateHeaders): MessageQueryResult
+    private function messageQuery(MailboxResource $mailbox, MessageSyncPlan $plan): MessageQueryBuilder
     {
         $folder = $plan->folderReference();
         $query = $folder === null ? $mailbox->messages()->allFolders() : $mailbox->messages()->inFolder($folder);
         $this->applyFilters($query, $plan);
 
-        if ($isolateHeaders && $query instanceof SupportsMessageQueryResults) {
-            return $query->getResult();
-        }
-
-        return new MessageQueryResult($query->get(), collect(), false);
+        return $query;
     }
 
     private function applyFilters(MessageQueryBuilder $query, MessageSyncPlan $plan): void

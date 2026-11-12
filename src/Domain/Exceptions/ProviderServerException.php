@@ -12,6 +12,7 @@ final class ProviderServerException extends MailboxException
         string $message,
         int $code = 0,
         ?\Throwable $previous = null,
+        public readonly ?int $retryAfter = null,
     ) {
         parent::__construct($message, $code, $previous);
     }

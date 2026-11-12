@@ -26,13 +26,14 @@ class RateLimiter
         $maxSlots = max(1, (int) ($this->config['max_concurrent_per_mailbox'] ?? config('mailbox.max_concurrent_per_mailbox', 4)));
         $timeout = (int) ($this->config['concurrency_lock_timeout'] ?? config('mailbox.concurrency_lock_timeout', 30));
         $lease = $callback instanceof MailboxSlotAttempt ? max($timeout, $callback->leaseSeconds) : $timeout;
+        $wait = $callback instanceof MailboxSlotAttempt && ! $callback->waitForSlot ? 0 : $timeout;
         $pollIntervalMicros = 100_000;
 
         $startedAt = microtime(true);
         $lock = null;
         $slot = null;
 
-        while ($this->elapsedSeconds($startedAt) <= $timeout) {
+        do {
             for ($index = 1; $index <= $maxSlots; $index++) {
                 $candidate = Cache::lock(
                     sprintf('mailbox:lock:%s:%s:slot:%d', $normalizedDriver, $normalizedMailbox, $index),
@@ -54,15 +55,19 @@ class RateLimiter
                 }
             }
 
+            if ($wait <= 0) {
+                break;
+            }
+
             usleep($pollIntervalMicros);
-        }
+        } while ($this->elapsedSeconds($startedAt) <= $wait);
 
         if (! $lock instanceof Lock || ! is_int($slot)) {
             $this->logInfo('Mailbox concurrency slots exhausted', [
                 'driver' => $normalizedDriver,
                 'mailbox' => $normalizedMailbox,
                 'max_slots' => $maxSlots,
-                'timeout_seconds' => $timeout,
+                'timeout_seconds' => $wait,
             ]);
 
             throw new RateLimitException(
@@ -71,8 +76,9 @@ class RateLimiter
                 message: sprintf(
                     "Rate limit exceeded for mailbox '%s'. No concurrency slots available after %d seconds.",
                     $normalizedMailbox,
-                    $timeout,
+                    $wait,
                 ),
+                localContention: true,
             );
         }
 

@@ -65,6 +65,15 @@ class GraphClient
         return 'ms-graph';
     }
 
+    /** @param array<string, mixed> $query */
+    public function getQueueManagedPollObject(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, #[\SensitiveParameter] array $query, string $mailbox): \stdClass
+    {
+        /** @var \stdClass $response */
+        $response = $this->readBounded($endpoint, $budget, $query, $mailbox, retry: false, associative: false, queueManagedRetry: true);
+
+        return $response;
+    }
+
     public function getBoundedDeltaPage(#[\SensitiveParameter] string $endpoint, ResponseBudget $budget, int $pageSize, ?string $mailbox, bool $initial): \stdClass
     {
         if ($pageSize < 1 || $pageSize > 1000) {
@@ -680,7 +689,7 @@ class GraphClient
 
     private function throwRateLimitExceeded(RequestException $e, ?string $mailbox, string $endpoint, int $attempt): never
     {
-        $retryAfter = $this->retryAfterSeconds($e);
+        $retryAfter = $this->providerRetryAfterSeconds($e->getResponse()) ?? 1;
 
         $this->logInfo('Graph request exhausted rate limit retries', [
             'endpoint' => $endpoint,
@@ -712,6 +721,7 @@ class GraphClient
             attemptsExhausted: $attempt,
             message: sprintf('Microsoft Graph returned %d after %d attempts.', $status, $attempt),
             previous: $e,
+            retryAfter: $this->providerRetryAfterSeconds($e->getResponse()),
         );
     }
 }

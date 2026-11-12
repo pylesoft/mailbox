@@ -24,6 +24,8 @@ final readonly class MessageSyncResult implements Arrayable, JsonSerializable
         #[\SensitiveParameter] public Collection $rejections,
         #[\SensitiveParameter] public Collection $excludedProviderMessageIds,
         public bool $exhausted,
+        #[\SensitiveParameter] public ?string $nextContinuation = null,
+        public ?string $continuationFingerprint = null,
     ) {}
 
     /** @return array<string, mixed> */

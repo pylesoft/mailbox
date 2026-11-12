@@ -17,6 +17,7 @@ use Pyle\Mailbox\Enums\MatchOperator;
 use Pyle\Mailbox\Enums\WellKnownFolder;
 use Pyle\Mailbox\Exceptions\ApiRequestException;
 use Pyle\Mailbox\Exceptions\InvalidReceivedHeaderException;
+use Pyle\Mailbox\Exceptions\InvalidRecoveryContinuationException;
 use Pyle\Mailbox\Support\ConversationPayload;
 use Pyle\Mailbox\Support\ProviderMessageId;
 use Pyle\Mailbox\Support\ResponseBudget;
@@ -188,7 +189,19 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
         return $this->execute(true);
     }
 
-    private function execute(bool $isolateHeaders): MessageQueryResult
+    /** @internal */
+    public function getQueueManagedResult(): MessageQueryResult
+    {
+        return $this->execute(true, queueManagedRetry: true);
+    }
+
+    /** @internal */
+    public function getRecoveryPage(#[\SensitiveParameter] ?string $continuation): MessageQueryResult
+    {
+        return $this->execute(true, queueManagedRetry: true, recoveryPage: true, continuation: $continuation);
+    }
+
+    private function execute(bool $isolateHeaders, bool $queueManagedRetry = false, bool $recoveryPage = false, #[\SensitiveParameter] ?string $continuation = null): MessageQueryResult
     {
         $pageSize = $this->pageSizeOverride ?? (int) config('mailbox.default_page_size', 50);
         $applyClientFiltersPerPage = $this->searchQuery !== null
@@ -198,7 +211,7 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
         $query = [
             '$select' => implode(',', $isolateHeaders ? array_unique([...$this->selectFields, 'id']) : $this->selectFields),
             '$orderby' => sprintf('%s %s', $this->toProviderField($this->orderByField), $this->orderDirection),
-            '$top' => $this->limit !== null ? min($this->limit, $pageSize) : $pageSize,
+            '$top' => $recoveryPage ? min($pageSize, 1000) : ($this->limit !== null ? min($this->limit, $pageSize) : $pageSize),
         ];
 
         if ($this->searchQuery !== null && $this->searchQuery !== '') {
@@ -214,6 +227,10 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
             ? sprintf('users/%s/messages', rawurlencode($this->mailbox))
             : sprintf('users/%s/mailFolders/%s/messages', rawurlencode($this->mailbox), rawurlencode($this->folderId));
         $scope = $endpoint;
+        if ($continuation !== null) {
+            $endpoint = $this->client->continuationEndpoint($continuation, $scope, $this->mailbox);
+            $query = [];
+        }
 
         $collected = collect();
         $budget = new ResponseBudget((new BodyReadLimits)->maxResponseBytes);
@@ -238,7 +255,17 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
             $pageCount++;
 
             if ($isolateHeaders) {
-                $payload = $this->client->getBoundedObject($endpoint, $budget, $query, $this->mailbox, retry: true);
+                try {
+                    $payload = $queueManagedRetry
+                        ? $this->client->getQueueManagedPollObject($endpoint, $budget, $query, $this->mailbox)
+                        : $this->client->getBoundedObject($endpoint, $budget, $query, $this->mailbox, retry: true);
+                } catch (ApiRequestException $exception) {
+                    if ($continuation !== null && ($exception->status === 410 || $exception->providerCode === 'syncStateNotFound')) {
+                        throw new InvalidRecoveryContinuationException('Graph no longer accepts the recovery continuation.', previous: $exception);
+                    }
+
+                    throw $exception;
+                }
                 if (! is_array($payload->value ?? null) || ! array_is_list($payload->value)) {
                     throw new ApiRequestException('The provider returned a missing or malformed collection.');
                 }
@@ -305,6 +332,17 @@ class MsGraphMessageQuery implements MessageQueryBuilder, SupportsMessageQueryRe
                 ->values();
 
             $collected = $collected->concat($messages);
+
+            if ($recoveryPage) {
+                $next = array_key_exists('@odata.nextLink', $response)
+                    ? $this->client->continuationEndpoint($response['@odata.nextLink'], $scope, $this->mailbox)
+                    : null;
+                if ($next !== null && isset($seenPageSignatures[$next.'|'])) {
+                    throw new ApiRequestException('The provider returned a cyclic continuation.');
+                }
+
+                return new MessageQueryResult($collected->values(), $rejections, exhausted: $next === null, nextContinuation: $next);
+            }
 
             if ($this->limit !== null && $collected->count() >= $this->limit) {
                 $exhausted = $collected->count() === $this->limit && ! array_key_exists('@odata.nextLink', $response);

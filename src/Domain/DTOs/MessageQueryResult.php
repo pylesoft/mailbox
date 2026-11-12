@@ -19,6 +19,7 @@ final readonly class MessageQueryResult implements Arrayable, JsonSerializable
         #[\SensitiveParameter] public Collection $messages,
         #[\SensitiveParameter] public Collection $rejections,
         public bool $exhausted,
+        #[\SensitiveParameter] public ?string $nextContinuation = null,
     ) {}
 
     /** @return array<string, mixed> */
